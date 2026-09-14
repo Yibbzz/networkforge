@@ -1,0 +1,20 @@
+                     Input
+                       │
+             ┌─────────┴─────────┐
+             │                   │
+          OSM data          Proposed lines
+             │                   │
+             └─────────┬─────────┘
+                       ↓
+               NetworkForge Core
+                       ↓
+                 NetworkResult
+                       │
+          ┌────────────┼────────────┐
+          ↓            ↓            ↓
+       GeoPackage    OSM XML      OSM PBF
+          ↓                         ↓
+        QGIS                 GraphHopper /
+                              Valhalla
+
+

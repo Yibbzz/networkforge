@@ -1,0 +1,16 @@
+{
+    "name": "NetworkForge",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
+    "workspaceFolder": "/workspace",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance"
+            ]
+        }
+    }
+}

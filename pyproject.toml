@@ -1,0 +1,17 @@
+[project]
+name = "networkforge"
+version = "0.1.0"
+description = "Build routable networks from OpenStreetMap and proposed infrastructure"
+requires-python = ">=3.12"
+
+dependencies = [
+    "geopandas",
+    "shapely",
+    "pandas",
+    "osmnx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
