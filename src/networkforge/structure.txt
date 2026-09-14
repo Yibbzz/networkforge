@@ -1,0 +1,11 @@
+src/networkforge/
+│
+├── __init__.py
+│
+├── network.py       # "What is the overall process?"
+│
+├── topology.py      # "How do we connect/split the network?"
+│
+├── osm.py           # "How do we get OSM data?"
+│
+└── export.py        # "How do we write the result?"
