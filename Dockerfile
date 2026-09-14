@@ -15,10 +15,5 @@ COPY pyproject.toml uv.lock ./
 
 RUN uv sync --dev
 
-COPY src ./src
-COPY tests ./tests
-
 ENV PATH="/workspace/.venv/bin:$PATH"
 ENV PYTHONPATH="/workspace/src"
-
-CMD ["pytest", "-v"]
