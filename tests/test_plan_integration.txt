@@ -1,0 +1,35 @@
+                 baseline.osm
+                     │
+                     ▼
+                OSMnx graph
+                     │
+             START ──┴── END
+                     │
+                     ▼
+              baseline route
+                     │
+                     ▼
+                baseline_distance
+
+
+custom_network.geojson
+          │
+          ▼
+     NetworkForge
+          │
+          ▼
+     proposed.osm
+          │
+          ▼
+      OSMnx graph
+          │
+      START ── END
+          │
+          ▼
+      new route
+          │
+          ▼
+       new_distance
+
+assert new_distance < baseline_distance
+assert custom_network_is_used

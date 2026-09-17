@@ -1,0 +1,3 @@
+assert all_edges_have_valid_nodes
+assert no_u_equals_v
+assert all_custom_edges_are_connected

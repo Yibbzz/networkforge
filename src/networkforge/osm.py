@@ -20,7 +20,7 @@ def configure_osmnx_cache():
     # Set the osmnx cache folder
     ox.settings.cache_folder = cache_folder
 
-def get_osm_network(
+def get_osm_data_from_bbox(
     bbox: gpd.GeoDataFrame,
     network_type: str = "all",
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
