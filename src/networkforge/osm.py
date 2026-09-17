@@ -1,6 +1,24 @@
+import os
+os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx as ox
 
+
+def configure_osmnx_cache():
+    """
+    Configures the osmnx cache folder to a persistent folder with non-root permissions
+    """
+    # Get the directory of the current file
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Define the cache folder relative to the current directory
+    cache_folder = os.path.join(current_dir, "../temp/osmnx_cache")
+    
+    # Ensure the cache directory exists
+    os.makedirs(cache_folder, exist_ok=True)
+    
+    # Set the osmnx cache folder
+    ox.settings.cache_folder = cache_folder
 
 def get_osm_network(
     bbox: gpd.GeoDataFrame,
