@@ -80,8 +80,17 @@ def update_gdf_tags(
 def build_network(
     bbox_gdf: gpd.GeoDataFrame,
     custom_data_gdf: gpd.GeoDataFrame,
-    network_tags: dict,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    network_tags: dict[str, str],
+    return_source_osm: bool = False,
+) -> tuple[
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+] | tuple[
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+]:
 
     print("\n========================================")
     print("       NetworkForge Network Build")
@@ -276,4 +285,15 @@ def build_network(
     print(f"CRS:   {final_lines_gdf.crs}")
     print("========================================\n")
 
-    return combined_points_gdf, final_lines_gdf
+    if return_source_osm:
+        return (
+            combined_points_gdf,
+            final_lines_gdf,
+            nodes_gdf,
+            edges_gdf,
+        )
+
+    return (
+        combined_points_gdf,
+        final_lines_gdf,
+    )

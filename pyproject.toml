@@ -9,6 +9,7 @@ dependencies = [
     "shapely",
     "pandas",
     "osmnx",
+    "scikit-learn>=1.9.1",
 ]
 
 [dependency-groups]
