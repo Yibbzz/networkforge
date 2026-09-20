@@ -2,26 +2,27 @@ import os
 os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx as ox
+from pyproj import CRS
+from .projection import get_analysis_crs
 
 
-def configure_osmnx_cache():
+def configure_osmnx_cache() -> None:
     """
-    Configures the osmnx cache folder to a persistent folder with non-root permissions
+    Configure the OSMnx cache directory from the
+    NETWORKFORGE_OSMNX_CACHE environment variable.
     """
-    # Get the directory of the current file
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Define the cache folder relative to the current directory
-    cache_folder = os.path.join(current_dir, "../temp/osmnx_cache")
-    
-    # Ensure the cache directory exists
+    cache_folder = os.getenv(
+        "NETWORKFORGE_OSMNX_CACHE",
+        os.path.expanduser("~/.cache/networkforge/osmnx"),
+    )
+
     os.makedirs(cache_folder, exist_ok=True)
-    
-    # Set the osmnx cache folder
+
     ox.settings.cache_folder = cache_folder
 
 def get_osm_data_from_bbox(
     bbox: gpd.GeoDataFrame,
+    analysis_crs: CRS,
     network_type: str = "all",
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Download an OSM network within a bounding box."""
@@ -37,5 +38,8 @@ def get_osm_data_from_bbox(
     )
 
     nodes, edges = ox.graph_to_gdfs(graph)
+
+    nodes = nodes.to_crs(analysis_crs)
+    edges = edges.to_crs(analysis_crs)
 
     return nodes, edges.reset_index()

@@ -1,5 +1,11 @@
 import geopandas as gpd
 import pandas as pd
+from pyproj import CRS
+
+from .projection import (
+    get_analysis_crs, 
+    convert_to_wgs84_and_add_xy
+    )
 
 from .osm import (
     configure_osmnx_cache,
@@ -17,15 +23,10 @@ from .topology import (
     check_line_node_consistency,
 )
 
-from .osm_conversion import (
-    convert_to_wgs84_and_add_xy,
-    update_gdf_tags,
-)
-
-
 def combine_custom_lines_with_osm_edges(
     custom: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame,
+    crs: str | CRS,
 ) -> gpd.GeoDataFrame:
     """
     Combine the user's custom network lines with OSM network edges.
@@ -33,10 +34,6 @@ def combine_custom_lines_with_osm_edges(
 
     # Split MultiLineStrings into individual LineStrings.
     custom = custom.explode(index_parts=True)
-
-    # Ensure custom data uses WGS84.
-    if custom.crs.to_string() != "EPSG:4326":
-        custom = custom.to_crs("EPSG:4326")
 
     # Reset the OSM edge index before combining.
     edges_gdf_reset = edges_gdf.reset_index(drop=True)
@@ -50,192 +47,233 @@ def combine_custom_lines_with_osm_edges(
             [edges_gdf_reset, custom],
             ignore_index=True,
         ),
-        crs="EPSG:4326",
+        crs=crs,
     )
-
     return combined_gdf
 
+def update_gdf_tags(
+    gdf: gpd.GeoDataFrame,
+    custom_column: str,
+    tags_to_update: dict,
+) -> gpd.GeoDataFrame:
+    """
+    Update OSM tags for custom network features.
+
+    Args:
+        gdf: GeoDataFrame containing network lines.
+        custom_column: Column used to identify custom features.
+        tags_to_update: Dictionary of tags and values to apply.
+
+    Returns:
+        GeoDataFrame with updated tags.
+    """
+
+    # Identify custom network features.
+    mask = gdf[custom_column] == "yes"
+
+    # Apply each requested tag to custom features.
+    for tag, value in tags_to_update.items():
+        gdf.loc[mask, tag] = value
+
+    return gdf
 
 def build_network(
     bbox_gdf: gpd.GeoDataFrame,
     custom_data_gdf: gpd.GeoDataFrame,
     network_tags: dict,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """
-    Build a connected network from OSM data and user-provided
-    custom network features.
 
-    This function builds the network but does not export it.
-
-    Returns:
-        Tuple containing:
-
-        nodes_gdf:
-            Final network nodes.
-
-        lines_gdf:
-            Final network edges.
-    """
+    print("\n========================================")
+    print("       NetworkForge Network Build")
+    print("========================================")
 
     # =========================================================
     # 1. Configure OSMnx
     # =========================================================
-    # Set up the persistent OSMnx cache so downloaded OSM data
-    # can be reused.
+
+    print("\n[1/14] Configuring OSMnx...")
+
     configure_osmnx_cache()
 
+    analysis_crs = get_analysis_crs(bbox_gdf)
+
+    print(f"      Analysis CRS: {analysis_crs}")
+
+    # Project custom data into the analysis CRS.
+    custom_data_gdf = custom_data_gdf.to_crs(analysis_crs)
+
+    print(f"      Custom features: {len(custom_data_gdf):,}")
 
     # =========================================================
     # 2. Get the existing OSM network
     # =========================================================
-    # Download the OSM network within the supplied bounding box.
-    #
-    # We get two datasets:
-    #   - nodes: existing OSM network nodes
-    #   - edges: existing OSM network lines
+
+    print("\n[2/14] Downloading OSM network...")
+
     nodes_gdf, edges_gdf = get_osm_data_from_bbox(
-        bbox_gdf
+        bbox_gdf,
+        analysis_crs,
     )
 
+    print(f"      OSM nodes: {len(nodes_gdf):,}")
+    print(f"      OSM edges: {len(edges_gdf):,}")
+    print(f"      CRS: {edges_gdf.crs}")
 
     # =========================================================
     # 3. Combine OSM and custom network
     # =========================================================
-    # Add the user's proposed network lines to the existing
-    # OSM network.
-    #
-    # Custom features are marked with custom="yes" so that
-    # they can be identified later in the pipeline.
+
+    print("\n[3/14] Combining OSM and custom network...")
+
     combined_gdf = combine_custom_lines_with_osm_edges(
         custom_data_gdf,
         edges_gdf,
+        analysis_crs,
     )
 
+    print(f"      Combined lines: {len(combined_gdf):,}")
 
     # =========================================================
     # 4. Validate the custom network
     # =========================================================
-    # Check that the user's proposed network actually
-    # intersects the existing OSM network.
-    #
-    # If there is no valid intersection, the pipeline stops.
+
+    print("\n[4/14] Validating custom network intersections...")
+
     validate_user_osm_intersection(
-        combined_gdf,
+        edges_gdf,
         custom_data_gdf,
     )
 
+    print("      ✓ Custom network intersects existing OSM network")
 
     # =========================================================
     # 5. Find network topology points
     # =========================================================
-    # Find intersections and vertices in the combined network
-    # that need to become network nodes.
+
+    print("\n[5/14] Finding network topology points...")
+
     custom_points_gdf = create_points_from_gdf(
         combined_gdf
     )
 
+    print(f"      Topology points: {len(custom_points_gdf):,}")
 
     # =========================================================
     # 6. Split lines at topology points
     # =========================================================
-    # Split network lines wherever a topology point occurs.
-    #
-    # This creates individual edges between network nodes.
+
+    print("\n[6/14] Splitting lines at topology points...")
+
     split_lines_gdf = split_lines_with_buffered_points(
         combined_gdf,
         custom_points_gdf,
     )
 
+    print(f"      Split lines: {len(split_lines_gdf):,}")
 
     # =========================================================
     # 7. Combine OSM nodes and custom nodes
     # =========================================================
-    # Combine the newly-created custom topology points with
-    # the original OSM nodes.
-    #
-    # Points which already correspond to an OSM node are
-    # removed to avoid duplicate nodes.
+
+    print("\n[7/14] Combining OSM and custom nodes...")
+
     combined_points_gdf = remove_duplicates_and_combine_nodes(
         custom_points_gdf,
         nodes_gdf,
     )
 
+    print(f"      Combined nodes: {len(combined_points_gdf):,}")
 
     # =========================================================
     # 8. Select lines requiring node assignment
     # =========================================================
-    # Identify the lines that need their start and end nodes
-    # assigned.
+
+    print("\n[8/14] Selecting lines requiring node assignment...")
+
     osm_split_lines_gdf = filter_split_lines(
         split_lines_gdf
     )
 
+    print(f"      Lines requiring assignment: {len(osm_split_lines_gdf):,}")
 
     # =========================================================
     # 9. Assign node IDs to line endpoints
     # =========================================================
-    # Match the start and end of every relevant line to the
-    # nearest network node.
-    #
-    # The resulting u/v columns represent:
-    #
-    #       u -------- edge --------> v
-    #
+
+    print("\n[9/14] Assigning node IDs to line endpoints...")
+
     updated_lines = assign_point_ids_to_lines(
         osm_split_lines_gdf,
         combined_points_gdf,
     )
 
+    print(f"      Updated lines: {len(updated_lines):,}")
 
     # =========================================================
     # 10. Finalise the network edges
     # =========================================================
-    # Merge the updated u/v values back into the complete
-    # split-line dataset and assign unique OSM IDs.
+
+    print("\n[10/14] Finalising network edges...")
+
     final_lines_gdf = update_and_finalize_lines_gdf(
         split_lines_gdf,
         updated_lines,
     )
 
+    print(f"       Final edges: {len(final_lines_gdf):,}")
 
     # =========================================================
     # 11. Validate topology
     # =========================================================
-    # Check that every edge references valid nodes and remove
-    # invalid or duplicate u/v relationships.
+
+    print("\n[11/14] Validating network topology...")
+
     final_lines_gdf = check_line_node_consistency(
         final_lines_gdf,
         combined_points_gdf,
     )
 
+    print(f"       Valid edges: {len(final_lines_gdf):,}")
 
     # =========================================================
-    # 12. Prepare nodes for OSM
+    # 12. Validate CRS consistency
     # =========================================================
-    # Convert the node coordinates to WGS84 and add the x/y
-    # longitude/latitude values required by the OSM exporter.
-    combined_points_gdf = convert_to_wgs84_and_add_xy(
-        combined_points_gdf
-    )
 
+    print("\n[12/14] Validating CRS consistency...")
+
+    if combined_points_gdf.crs != final_lines_gdf.crs:
+        raise ValueError(
+            "Nodes and edges must use the same CRS."
+        )
+
+    print(f"       CRS: {final_lines_gdf.crs}")
 
     # =========================================================
     # 13. Apply OSM tags
     # =========================================================
-    # Apply the requested network tags to the user's custom
-    # network features.
+
+    print("\n[13/14] Applying OSM tags...")
+
     final_lines_gdf = update_gdf_tags(
         final_lines_gdf,
         "custom",
         network_tags,
     )
 
+    print(f"       Tags applied: {network_tags}")
 
     # =========================================================
     # 14. Return the finished network
     # =========================================================
-    # The network is now completely built.
-    #
-    # Nothing is written to disk here. The caller decides
-    # which export format to use.
+
+    print("\n[14/14] Network build complete!")
+
+    print("\n========================================")
+    print("              Summary")
+    print("========================================")
+    print(f"Nodes: {len(combined_points_gdf):,}")
+    print(f"Edges: {len(final_lines_gdf):,}")
+    print(f"CRS:   {final_lines_gdf.crs}")
+    print("========================================\n")
+
     return combined_points_gdf, final_lines_gdf
