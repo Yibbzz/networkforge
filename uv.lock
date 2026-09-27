@@ -409,6 +409,7 @@ dependencies = [
     { name = "osmnx" },
     { name = "pandas" },
     { name = "pyproj" },
+    { name = "requests" },
     { name = "scikit-learn" },
     { name = "shapely" },
 ]
@@ -428,6 +429,7 @@ requires-dist = [
     { name = "osmnx" },
     { name = "pandas" },
     { name = "pyproj" },
+    { name = "requests" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "shapely" },
 ]

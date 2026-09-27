@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 import geopandas as gpd
 import pandas as pd
 
+from .errors import InputError
 from .modes import mode_tag_keys
 
 
@@ -37,12 +38,12 @@ def write_osm_xml(
     # ================================================================
 
     if combined_points_gdf.crs is None:
-        raise ValueError(
+        raise InputError(
             "Point GeoDataFrame must have a CRS assigned."
         )
 
     if split_lines_combined_gdf.crs is None:
-        raise ValueError(
+        raise InputError(
             "Line GeoDataFrame must have a CRS assigned."
         )
 
@@ -59,13 +60,13 @@ def write_osm_xml(
 
     for column in required_node_columns:
         if column not in combined_points_gdf.columns:
-            raise ValueError(
+            raise InputError(
                 f"Node GeoDataFrame is missing required column: {column}"
             )
 
     for column in required_edge_columns:
         if column not in split_lines_combined_gdf.columns:
-            raise ValueError(
+            raise InputError(
                 f"Edge GeoDataFrame is missing required column: {column}"
             )
 

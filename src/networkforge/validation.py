@@ -8,7 +8,7 @@ tests/test_plan_structural.txt:
     assert no_u_equals_v
     assert all_custom_edges_are_connected
 
-Each function raises AssertionError with a message identifying the
+Each function raises NetworkIntegrityError with a message identifying the
 offending rows/nodes if the invariant is violated, and returns None
 (no exception) if everything is fine. They're written to be usable
 both as production-time sanity checks (called from build_network)
@@ -20,11 +20,17 @@ this, since the core package otherwise only depends on
 geopandas/pandas/shapely/pyproj.
 """
 
+import collections
+import difflib
+import logging
 import re
 
 import geopandas as gpd
 
-from .modes import allows_mode, usable_modes
+from .errors import InvalidTagsError, NetworkIntegrityError
+from .modes import allows_mode, mode_tag_keys, usable_modes
+
+log = logging.getLogger(__name__)
 
 
 def assert_all_edges_have_valid_nodes(
@@ -46,7 +52,7 @@ def assert_all_edges_have_valid_nodes(
 
     if not bad.empty:
         missing = (set(bad["u"]) | set(bad["v"])) - node_ids
-        raise AssertionError(
+        raise NetworkIntegrityError(
             f"{len(bad)} edge(s) reference node id(s) not present in the "
             f"node table: {sorted(missing, key=str)}"
         )
@@ -61,7 +67,7 @@ def assert_no_u_equals_v(edges_gdf: gpd.GeoDataFrame) -> None:
     bad = edges_gdf[edges_gdf["u"] == edges_gdf["v"]]
 
     if not bad.empty:
-        raise AssertionError(
+        raise NetworkIntegrityError(
             f"{len(bad)} edge(s) have u == v (self-loop) at index(es): "
             f"{list(bad.index)}"
         )
@@ -118,7 +124,7 @@ def assert_all_custom_edges_are_connected(edges_gdf: gpd.GeoDataFrame) -> None:
     stranded = {n for n in custom_nodes if find(n) != largest_root}
 
     if stranded:
-        raise AssertionError(
+        raise NetworkIntegrityError(
             f"{len(stranded)} custom-network node(s) are isolated from the "
             f"main network component and will never be reachable by a "
             f"router: {sorted(stranded, key=str)}. The network has "
@@ -158,7 +164,7 @@ def assert_custom_lines_unbroken(
     pieces = len({find(node) for node in parent})
 
     if pieces > input_line_count:
-        raise AssertionError(
+        raise NetworkIntegrityError(
             f"custom network has {pieces} separate pieces but only "
             f"{input_line_count} input line(s): some custom segments were "
             f"dropped during the build, leaving gaps."
@@ -210,6 +216,13 @@ MAXSPEED_PATTERN = re.compile(
 # feature being treated as custom).
 RESERVED_COLUMNS = {"u", "v", "key", "osmid", "custom", "split", "reversed", "length"}
 
+# Tag keys the pipeline understands (checked, used for routing or
+# exported). Used to spot misspelt or truncated attribute names.
+KNOWN_TAG_KEYS = mode_tag_keys() | {
+    "highway", "maxspeed", "oneway", "lanes", "name", "ref", "bridge",
+    "tunnel", "layer", "junction", "surface", "width",
+}
+
 
 def _tag_value(value) -> str | None:
     if value is None or (isinstance(value, float) and value != value):
@@ -222,10 +235,16 @@ def _tag_value(value) -> str | None:
 def resolve_custom_tags(
     custom_gdf: gpd.GeoDataFrame,
     default_tags: dict[str, str],
+    overwrite: bool = False,
 ) -> gpd.GeoDataFrame:
     """
-    Per-feature tags: a feature's own property (e.g. a 'highway'
-    column in the GeoJSON) wins; `default_tags` fill only the gaps.
+    Combine each feature's own tags (its attributes, e.g. a 'highway'
+    column) with blanket `default_tags` (a preset and/or network_tags).
+
+    overwrite=False: a feature's own value wins; defaults fill gaps.
+    overwrite=True:  defaults replace the feature's value for every key
+                     they set. Other attributes are kept.
+
     All tag values are normalised to strings (50 -> "50").
     """
     custom_gdf = custom_gdf.copy()
@@ -234,7 +253,10 @@ def resolve_custom_tags(
         if key not in custom_gdf.columns:
             custom_gdf[key] = None
         custom_gdf[key] = custom_gdf[key].astype(object)
-        custom_gdf.loc[custom_gdf[key].isna(), key] = value
+        if overwrite:
+            custom_gdf[key] = value
+        else:
+            custom_gdf.loc[custom_gdf[key].isna(), key] = value
 
     tag_columns = [c for c in custom_gdf.columns if c != custom_gdf.geometry.name]
     for column in tag_columns:
@@ -252,11 +274,12 @@ def check_custom_tags(
     Check every custom feature's (already resolved) tags follow OSM
     rules and are usable within the network being built.
 
-    Prints one line per feature with the modes it supports. Problems
-    raise ValueError when strict, otherwise print as warnings.
+    Logs which modes the features support. Problems raise
+    InvalidTagsError when strict, otherwise are logged as warnings.
     """
     problems = []
     notes = set()
+    mode_counts = collections.Counter()
 
     reserved = RESERVED_COLUMNS & set(custom_gdf.columns)
     if reserved:
@@ -265,6 +288,15 @@ def check_custom_tags(
         )
 
     tag_columns = [c for c in custom_gdf.columns if c != custom_gdf.geometry.name]
+
+    for column in tag_columns:
+        suggestion = _suggest_tag_key(column)
+        if suggestion:
+            log.warning(
+                "Attribute %r is not a tag NetworkForge uses - did you mean %r? "
+                "(Shapefiles cut names to 10 characters; use GeoPackage.)",
+                column, suggestion,
+            )
 
     for index, row in custom_gdf.iterrows():
         # _tag_value turns missing values (None/NaN, e.g. a property only
@@ -300,9 +332,14 @@ def check_custom_tags(
             if value is not None and value not in ACCESS_VALUES:
                 problems.append(f"{label}: {key}={value!r} is not a valid OSM access value")
 
+        layer = tags.get("layer")
+        if layer is not None and not re.fullmatch(r"-?\d+", layer):
+            problems.append(f"{label}: layer={layer!r} must be a whole number, e.g. 1 or -1")
+
         modes = usable_modes(tags)
-        print(f"      {label}: highway={highway} maxspeed={maxspeed} "
-              f"-> usable by: {', '.join(modes) or 'NOTHING'}")
+        mode_counts[", ".join(modes) or "NOTHING"] += 1
+        log.debug("%s: highway=%s maxspeed=%s -> usable by: %s",
+                  label, highway, maxspeed, ", ".join(modes) or "NOTHING")
 
         if highway in KNOWN_HIGHWAYS:
             if not modes:
@@ -313,13 +350,24 @@ def check_custom_tags(
                     f"(usable by: {', '.join(modes)})"
                 )
 
+    for modes, count in mode_counts.most_common():
+        log.info("%d custom feature(s) usable by: %s", count, modes)
     for note in sorted(notes):
-        print(f"      note: {note}")
+        log.info("Note: %s", note)
 
     if problems:
-        message = (
-            f"{len(problems)} custom tag problem(s):\n  - " + "\n  - ".join(problems)
-        )
+        error = InvalidTagsError(problems)
         if strict:
-            raise ValueError(message)
-        print(f"      WARNING (strict=False, continuing anyway): {message}")
+            raise error
+        log.warning("strict=False, continuing anyway: %s", error)
+
+
+def _suggest_tag_key(column: str) -> str | None:
+    """A known tag key `column` is probably a misspelling/truncation of."""
+    if column in KNOWN_TAG_KEYS:
+        return None
+    truncated = [key for key in KNOWN_TAG_KEYS if len(column) >= 5 and key.startswith(column)]
+    if truncated:
+        return truncated[0]
+    close = difflib.get_close_matches(column, KNOWN_TAG_KEYS, n=1, cutoff=0.85)
+    return close[0] if close else None

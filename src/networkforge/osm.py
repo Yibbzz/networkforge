@@ -1,10 +1,12 @@
 import os
 
-os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx as ox
+import requests
+from osmnx._errors import InsufficientResponseError, ResponseStatusCodeError
 from pyproj import CRS
 
+from .errors import InputError, OSMDownloadError
 from .modes import keep_mode_tags
 
 # OSMnx's built-in network filters, applied in the Overpass query.
@@ -37,7 +39,7 @@ def get_osm_data_from_bbox(
     """Download an OSM network within a bounding box."""
 
     if network_type not in NETWORK_TYPES:
-        raise ValueError(
+        raise InputError(
             f"Unknown network_type {network_type!r}. "
             f"Choose one of: {', '.join(NETWORK_TYPES)}"
         )
@@ -50,11 +52,23 @@ def get_osm_data_from_bbox(
 
     west, south, east, north = bbox_wgs84.total_bounds
 
-    graph = ox.graph_from_bbox(
-        (west, south, east, north),
-        network_type=network_type,
-        simplify=False,
-    )
+    try:
+        graph = ox.graph_from_bbox(
+            (west, south, east, north),
+            network_type=network_type,
+            simplify=False,
+        )
+    except (InsufficientResponseError, ValueError) as exc:
+        raise OSMDownloadError(
+            f"OpenStreetMap has no {network_type!r} ways in this bounding box "
+            f"({exc}). Check the box covers an area with streets."
+        ) from exc
+    except (requests.RequestException, ResponseStatusCodeError) as exc:
+        raise OSMDownloadError(
+            f"Couldn't download OpenStreetMap data from the Overpass API ({exc}). "
+            "Check your internet connection, or try again later - Overpass "
+            "rate-limits heavy use."
+        ) from exc
 
     nodes, edges = ox.graph_to_gdfs(graph)
 

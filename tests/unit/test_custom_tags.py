@@ -62,9 +62,10 @@ def test_cycleway_rejected_in_drive_network():
         check(custom(highway="cycleway"), {}, network_type="drive")
 
 
-def test_strict_false_only_warns(capsys):
+def test_strict_false_only_warns(caplog):
     check(custom(highway="cycleway"), {}, network_type="drive", strict=False)
-    assert "WARNING" in capsys.readouterr().out
+    assert "not usable in network_type='drive'" in caplog.text
+    assert caplog.records[-1].levelname == "WARNING"
 
 
 @pytest.mark.parametrize("tags, message", [
@@ -96,3 +97,57 @@ def test_features_with_different_properties():
         crs="EPSG:32630",
     )
     check(gdf, {})
+
+
+def test_blanket_fills_gaps_by_default():
+    gdf = resolve_custom_tags(
+        custom(highway="primary", name="Bypass"), {"highway": "cycleway", "maxspeed": "20"}
+    )
+    assert gdf.loc[0, "highway"] == "primary"
+    assert gdf.loc[0, "maxspeed"] == "20"
+
+
+def test_overwrite_replaces_only_the_keys_the_blanket_sets():
+    gdf = resolve_custom_tags(
+        custom(highway="primary", maxspeed="40 mph", name="Bypass"),
+        {"highway": "cycleway"},
+        overwrite=True,
+    )
+    assert gdf.loc[0, "highway"] == "cycleway"
+    assert gdf.loc[0, "maxspeed"] == "40 mph"
+    assert gdf.loc[0, "name"] == "Bypass"
+
+
+@pytest.mark.parametrize("column, suggestion", [
+    ("motor_vehi", "motor_vehicle"),  # Shapefile 10-character cut
+    ("maxspeeed", "maxspeed"),
+    ("higway", "highway"),
+    ("notes", None),
+    ("id", None),
+    ("highway", None),
+])
+def test_suggests_tag_names_for_misspelt_attributes(column, suggestion):
+    from networkforge.validation import _suggest_tag_key
+    assert _suggest_tag_key(column) == suggestion
+
+
+def test_warns_about_truncated_attribute_names(caplog):
+    check(custom(highway="primary", motor_vehi="no"), {})
+    assert "did you mean 'motor_vehicle'" in caplog.text
+
+
+def test_tag_errors_are_typed_and_link_the_guide():
+    from networkforge.errors import InvalidTagsError, NetworkForgeError
+
+    with pytest.raises(InvalidTagsError) as info:
+        check(custom(highway="primry", lanes="0"), {})
+
+    error = info.value
+    assert isinstance(error, NetworkForgeError) and isinstance(error, ValueError)
+    assert len(error.problems) == 2
+    assert "tagging-guide.md#fixing-tag-errors" in str(error)
+
+
+def test_invalid_layer_rejected():
+    with pytest.raises(ValueError, match="layer='up'"):
+        check(custom(highway="primary", layer="up"), {})

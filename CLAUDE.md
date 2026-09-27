@@ -12,9 +12,15 @@ Lint: `uv run ruff check .`. Coverage: `uv run pytest --cov`.
 The package is installed editable by `uv sync` (hatchling build-system), no PYTHONPATH needed.
 
 ## Source (`src/networkforge/`)
-- `network.py` - `build_network()`: the 14-step pipeline (download OSM -> combine with custom
-  lines -> find intersection/vertex points -> split lines -> merge nodes -> assign u/v -> validate
-  -> apply `network_tags` to custom edges). Prints per-step counts, incl. how many custom rows survive.
+- `network.py` - `build_network()`: the 13-step pipeline (check inputs/tags -> download OSM -> snap
+  custom lines -> find junctions -> split -> merge nodes -> assign u/v -> validate). Logs via
+  `logging` (never print in src/) and calls optional `progress(step, total, text)`.
+  Tags: feature attributes + blanket (`preset` then `network_tags`), `overwrite_tags` flips priority.
+- `presets.py` - named tag sets (`PRESETS`); no maxspeed on purpose. Every preset must appear in
+  the docs/tagging-guide.md table with correct tags and Car/Bike/Walk ticks (test_presets.py checks).
+- `inputs.py` - pre-build checks: bbox/custom GeoDataFrames, CRS, lines only, inside bbox, 2D.
+- `errors.py` - exception hierarchy (NetworkForgeError; InputError is also a ValueError). Raise these,
+  not bare ValueError/AssertionError; pass `guide=` anchor into docs/tagging-guide.md where useful.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - OSMnx cache config (`NETWORKFORGE_OSMNX_CACHE`) and `get_osm_data_from_bbox`
@@ -23,8 +29,8 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   truth): `usable_modes(tags)`, `filter_graph_by_mode`, `load_graph(osm_file, mode)` for routing,
   `keep_mode_tags()` so access tags (motor_vehicle, foot, bicycle, ...) survive download/load.
 - `projection.py` - picks a projected UTM analysis CRS from the bbox; WGS84 helpers.
-- `validation.py` - pre-build `resolve_custom_tags` (per-feature GeoJSON properties override
-  `network_tags` defaults) + `check_custom_tags` (valid OSM tag values, usable by >= 1 mode / by the
+- `validation.py` - pre-build `resolve_custom_tags` (feature attributes vs blanket tags, `overwrite`)
+  + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
   self-loops, custom edges connected, custom lines unbroken.
 - `export.py` - `write_osm_xml()`: every edge becomes a 2-node OSM way; custom edges get `nf:custom=yes`.
@@ -44,6 +50,9 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   `diagnose_custom_network.py` (offline report on an exported .osm). Run from the repo root.
 - CI: `.github/workflows/tests.yml` - ruff + offline tests with coverage (`fail_under` in
   pyproject) on push/PR; live tests + thorough Hypothesis nightly.
+
+Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes, recipes, errors).
+Keep it in sync with presets.py/validation.py when tags or messages change.
 
 ## Gotchas
 - OSMnx drops way tags not in `ox.settings.useful_tags_way`; add `nf:custom` before `graph_from_xml`.

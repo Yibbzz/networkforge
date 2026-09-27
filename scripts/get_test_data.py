@@ -1,3 +1,5 @@
+import logging
+
 import geopandas as gpd
 import osmnx as ox
 
@@ -9,26 +11,22 @@ def build_test_network(
     bbox_gdf: gpd.GeoDataFrame,
     custom_data_gdf: gpd.GeoDataFrame,
 ):
-    """Build a simple drivable test network."""
-
-    test_tags = {
-        "highway": "primary",
-        "maxspeed": "70",
-        "lanes": "4",
-        "oneway": "no",
-        "access": "yes",
-    }
+    """Build the demo network: every custom line becomes a primary road."""
 
     return build_network(
         bbox_gdf,
         custom_data_gdf,
-        test_tags,
+        preset="primary_road",
+        network_tags={"maxspeed": "70", "lanes": "4", "access": "yes"},
         network_type="all",
         return_source_osm=True,
     )
 
 
 def main():
+    # networkforge reports progress through logging; show it on screen.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     # ------------------------------------------------------------------
     # Load test data
     # ------------------------------------------------------------------

@@ -1,12 +1,27 @@
+"""
+The NetworkForge pipeline: merge custom lines into the OSM network.
+
+Progress is reported through the `logging` module (logger names start
+with "networkforge") and, optionally, a progress callback. The library
+never configures logging itself - call logging.basicConfig(level=
+logging.INFO) in your script to see the build steps.
+"""
+
+import logging
+from collections.abc import Callable
+
 import geopandas as gpd
 import pandas as pd
 from pyproj import CRS
 
+from .errors import InputError, NetworkIntegrityError
+from .inputs import check_bbox, clean_custom_data
 from .osm import (
     NETWORK_TYPES,
     configure_osmnx_cache,
     get_osm_data_from_bbox,
 )
+from .presets import preset_tags
 from .projection import get_analysis_crs
 from .topology import (
     assign_point_ids_to_lines,
@@ -28,6 +43,13 @@ from .validation import (
     check_custom_tags,
     resolve_custom_tags,
 )
+
+log = logging.getLogger(__name__)
+
+# progress(step, total_steps, description) - called as each step starts.
+ProgressCallback = Callable[[int, int, str], None]
+
+TOTAL_STEPS = 13
 
 
 def combine_custom_lines_with_osm_edges(
@@ -58,51 +80,25 @@ def combine_custom_lines_with_osm_edges(
     )
     return combined_gdf
 
-def update_gdf_tags(
-    gdf: gpd.GeoDataFrame,
-    custom_column: str,
-    tags_to_update: dict,
-) -> gpd.GeoDataFrame:
-    """
-    Fill in default OSM tags for custom network features.
-
-    Only missing values are filled, so tags a feature brought with
-    it (per-feature properties in the custom data) are kept.
-
-    Args:
-        gdf: GeoDataFrame containing network lines.
-        custom_column: Column used to identify custom features.
-        tags_to_update: Dictionary of default tags and values.
-
-    Returns:
-        GeoDataFrame with updated tags.
-    """
-
-    # Identify custom network features.
-    mask = gdf[custom_column] == "yes"
-
-    # Fill each default tag where a custom feature has no value.
-    for tag, value in tags_to_update.items():
-        if tag not in gdf.columns:
-            gdf[tag] = None
-        gdf.loc[mask & gdf[tag].isna(), tag] = value
-
-    return gdf
-
 def _count_custom(gdf: gpd.GeoDataFrame) -> int:
-    """How many rows are tagged as custom, for debug logging."""
+    """How many rows are tagged as custom, for logging."""
     if "custom" not in gdf.columns:
         return 0
     return int((gdf["custom"] == "yes").sum())
 
+
 def build_network(
     bbox_gdf: gpd.GeoDataFrame,
     custom_data_gdf: gpd.GeoDataFrame,
-    network_tags: dict[str, str],
+    network_tags: dict[str, str] | None = None,
     network_type: str = "all",
     return_source_osm: bool = False,
     snap_tolerance: float = 1.0,
     strict: bool = True,
+    *,
+    preset: str | None = None,
+    overwrite_tags: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> tuple[
     gpd.GeoDataFrame,
     gpd.GeoDataFrame,
@@ -112,64 +108,96 @@ def build_network(
     gpd.GeoDataFrame,
     gpd.GeoDataFrame,
 ]:
+    """
+    Download the OSM network in `bbox_gdf` and merge the custom lines
+    into it, following OSM access and grade-separation rules.
 
-    print("\n========================================")
-    print("       NetworkForge Network Build")
-    print("========================================")
+    Tags (see docs/tagging-guide.md):
+        Each custom feature's own attributes (highway, maxspeed, ...)
+        are its tags. The blanket options add to them:
+          preset         name of a ready-made tag set (presets.PRESETS)
+          network_tags   extra tags; these win over the preset
+          overwrite_tags False: the feature's own values win, the
+                         blanket only fills gaps. True: the blanket
+                         replaces feature values for every key it sets.
+
+    Args:
+        bbox_gdf: area to download; any CRS.
+        custom_data_gdf: custom LineString/MultiLineString features; any CRS.
+        network_type: OSMnx download filter. Keep "all" to route any mode later.
+        return_source_osm: also return the untouched OSM nodes and edges
+            (the baseline network for before/after comparisons).
+        snap_tolerance: metres within which custom lines join the network.
+        strict: raise on bad tags, unusable features or structural problems.
+            False logs warnings and drops what can't be used instead.
+        progress: optional callback(step, total_steps, description).
+
+    Returns:
+        (nodes, edges), or (nodes, edges, osm_nodes, osm_edges) with
+        return_source_osm. All in the projected analysis CRS.
+
+    Raises:
+        InputError (incl. InvalidTagsError, NoIntersectionError),
+        OSMDownloadError, NetworkIntegrityError - see errors.py.
+    """
+
+    def step(number: int, description: str) -> None:
+        log.info("[%d/%d] %s", number, TOTAL_STEPS, description)
+        if progress is not None:
+            progress(number, TOTAL_STEPS, description)
 
     # =========================================================
-    # 1. Configure OSMnx
+    # 1. Check inputs and tags (before the slow download)
     # =========================================================
 
-    print("\n[1/14] Configuring OSMnx...")
+    step(1, "Checking inputs and tags")
 
     if network_type not in NETWORK_TYPES:
-        raise ValueError(
+        raise InputError(
             f"Unknown network_type {network_type!r}. "
             f"Choose one of: {', '.join(NETWORK_TYPES)}"
         )
+    if not snap_tolerance > 0:
+        raise InputError(f"snap_tolerance must be positive, got {snap_tolerance!r}")
 
-    configure_osmnx_cache()
+    check_bbox(bbox_gdf)
+    custom_data_gdf = clean_custom_data(custom_data_gdf, bbox_gdf, strict=strict)
 
     analysis_crs = get_analysis_crs(bbox_gdf)
-
-    print(f"      Analysis CRS: {analysis_crs}")
-    print(f"      Network type: {network_type}")
-    print(f"      Snap tolerance: {snap_tolerance} (CRS units, normally metres)")
-
-    # Project custom data into the analysis CRS.
     custom_data_gdf = custom_data_gdf.to_crs(analysis_crs)
 
-    print(f"      Custom features: {len(custom_data_gdf):,}")
-
-    # Per-feature tags win; network_tags fill the gaps. Checked here,
-    # before the slow download, so bad tags fail fast.
-    print("      Checking custom feature tags...")
-
-    custom_data_gdf = resolve_custom_tags(custom_data_gdf, network_tags)
+    blanket_tags = {**(preset_tags(preset) if preset else {}), **(network_tags or {})}
+    custom_data_gdf = resolve_custom_tags(custom_data_gdf, blanket_tags, overwrite=overwrite_tags)
     check_custom_tags(custom_data_gdf, network_type, strict=strict)
+
+    log.info("Custom features: %d | analysis CRS: %s | network type: %s | "
+             "snap tolerance: %s m", len(custom_data_gdf), analysis_crs.to_string(),
+             network_type, snap_tolerance)
+    if blanket_tags:
+        log.info("Blanket tags (%s): %s",
+                 "replacing feature values" if overwrite_tags else "filling gaps",
+                 blanket_tags)
 
     # =========================================================
     # 2. Get the existing OSM network
     # =========================================================
 
-    print("\n[2/14] Downloading OSM network...")
+    step(2, "Downloading OSM network")
 
+    configure_osmnx_cache()
     nodes_gdf, edges_gdf = get_osm_data_from_bbox(
         bbox_gdf,
         analysis_crs,
         network_type=network_type,
     )
 
-    print(f"      OSM nodes: {len(nodes_gdf):,}")
-    print(f"      OSM edges: {len(edges_gdf):,}")
-    print(f"      CRS: {edges_gdf.crs}")
+    log.info("OSM network: %d nodes, %d edges", len(nodes_gdf), len(edges_gdf))
 
     # =========================================================
     # 3. Combine OSM and custom network
     # =========================================================
 
-    print("\n[3/14] Combining OSM and custom network...")
+    step(3, "Snapping custom lines and combining with the OSM network")
 
     # Custom vertices within snap_tolerance of the OSM network are moved
     # exactly onto it (nearest node, else nearest edge), so the line
@@ -182,7 +210,7 @@ def build_network(
     )
 
     if custom_data_gdf.empty:
-        raise ValueError(
+        raise InputError(
             f"Every custom line is shorter than snap_tolerance ({snap_tolerance}) "
             "and collapsed onto a single existing node - nothing to add."
         )
@@ -193,14 +221,11 @@ def build_network(
         analysis_crs,
     )
 
-    print(f"      Combined lines: {len(combined_gdf):,} "
-          f"({_count_custom(combined_gdf):,} custom)")
-
     # =========================================================
-    # 4. Validate the custom network
+    # 4. Check the custom network reaches the OSM network
     # =========================================================
 
-    print("\n[4/14] Validating custom network intersections...")
+    step(4, "Checking custom lines reach the OSM network")
 
     validate_user_osm_intersection(
         edges_gdf,
@@ -208,13 +233,11 @@ def build_network(
         buffer_distance=snap_tolerance,
     )
 
-    print("      \u2713 Custom network intersects existing OSM network")
-
     # =========================================================
     # 5. Find network topology points
     # =========================================================
 
-    print("\n[5/14] Finding network topology points...")
+    step(5, "Finding junctions")
 
     custom_points_gdf = create_points_from_gdf(
         combined_gdf
@@ -229,13 +252,13 @@ def build_network(
         snap_tolerance,
     )
 
-    print(f"      Topology points: {len(custom_points_gdf):,}")
+    log.debug("Topology points: %d", len(custom_points_gdf))
 
     # =========================================================
     # 6. Split lines at topology points
     # =========================================================
 
-    print("\n[6/14] Splitting lines at topology points...")
+    step(6, "Splitting lines at junctions")
 
     split_lines_gdf = split_lines_with_buffered_points(
         combined_gdf,
@@ -243,14 +266,13 @@ def build_network(
         buffer_distance=snap_tolerance,
     )
 
-    print(f"      Split lines: {len(split_lines_gdf):,} "
-          f"({_count_custom(split_lines_gdf):,} custom)")
+    log.debug("Split lines: %d (%d custom)", len(split_lines_gdf), _count_custom(split_lines_gdf))
 
     # =========================================================
     # 7. Combine OSM nodes and custom nodes
     # =========================================================
 
-    print("\n[7/14] Combining OSM and custom nodes...")
+    step(7, "Combining OSM and new nodes")
 
     combined_points_gdf = remove_duplicates_and_combine_nodes(
         custom_points_gdf,
@@ -258,28 +280,24 @@ def build_network(
         buffer_distance=snap_tolerance,
     )
 
-    print(f"      Combined nodes: {len(combined_points_gdf):,} "
-          f"({len(combined_points_gdf) - len(nodes_gdf):,} new, "
-          f"vs {len(custom_points_gdf):,} candidate custom points before dedup)")
+    log.debug("Combined nodes: %d (%d new)",
+              len(combined_points_gdf), len(combined_points_gdf) - len(nodes_gdf))
 
     # =========================================================
     # 8. Select lines requiring node assignment
     # =========================================================
 
-    print("\n[8/14] Selecting lines requiring node assignment...")
+    step(8, "Selecting lines that need node ids")
 
     osm_split_lines_gdf = filter_split_lines(
         split_lines_gdf
     )
 
-    print(f"      Lines requiring assignment: {len(osm_split_lines_gdf):,} "
-          f"({_count_custom(osm_split_lines_gdf):,} custom)")
-
     # =========================================================
     # 9. Assign node IDs to line endpoints
     # =========================================================
 
-    print("\n[9/14] Assigning node IDs to line endpoints...")
+    step(9, "Assigning node ids to line ends")
 
     # Must match the dedup tolerance in step 7: a custom point removed
     # there (within snap_tolerance of an OSM node) is replaced by that
@@ -291,30 +309,25 @@ def build_network(
         buffer_distance=snap_tolerance,
     )
 
-    dropped = len(osm_split_lines_gdf) - len(updated_lines)
-    print(f"      Updated lines: {len(updated_lines):,} "
-          f"({_count_custom(updated_lines):,} custom, "
-          f"{dropped:,} dropped as self-loops or unmatched)")
+    log.debug("Updated lines: %d (%d dropped as self-loops or unmatched)",
+              len(updated_lines), len(osm_split_lines_gdf) - len(updated_lines))
 
     # =========================================================
     # 10. Finalise the network edges
     # =========================================================
 
-    print("\n[10/14] Finalising network edges...")
+    step(10, "Finalising edges")
 
     final_lines_gdf = update_and_finalize_lines_gdf(
         split_lines_gdf,
         updated_lines,
     )
 
-    print(f"       Final edges: {len(final_lines_gdf):,} "
-          f"({_count_custom(final_lines_gdf):,} custom)")
-
     # =========================================================
     # 11. Validate topology
     # =========================================================
 
-    print("\n[11/14] Validating network topology...")
+    step(11, "Checking every edge references real nodes")
 
     final_lines_gdf = check_line_node_consistency(
         final_lines_gdf,
@@ -322,41 +335,22 @@ def build_network(
         strict=strict,
     )
 
-    print(f"       Valid edges: {len(final_lines_gdf):,} "
-          f"({_count_custom(final_lines_gdf):,} custom)")
-
     # =========================================================
     # 12. Validate CRS consistency
     # =========================================================
 
-    print("\n[12/14] Validating CRS consistency...")
+    step(12, "Checking CRS consistency")
 
     if combined_points_gdf.crs != final_lines_gdf.crs:
-        raise ValueError(
+        raise NetworkIntegrityError(
             "Nodes and edges must use the same CRS."
         )
 
-    print(f"       CRS: {final_lines_gdf.crs}")
-
     # =========================================================
-    # 13. Apply OSM tags
+    # 13. Final structural validation
     # =========================================================
 
-    print("\n[13/14] Applying default OSM tags...")
-
-    final_lines_gdf = update_gdf_tags(
-        final_lines_gdf,
-        "custom",
-        network_tags,
-    )
-
-    print(f"       Defaults (per-feature tags take priority): {network_tags}")
-
-    # =========================================================
-    # 14. Final structural validation
-    # =========================================================
-
-    print("\n[14/14] Running structural validation...")
+    step(13, "Running structural checks")
 
     try:
         assert_all_edges_have_valid_nodes(final_lines_gdf, combined_points_gdf)
@@ -366,25 +360,13 @@ def build_network(
             final_lines_gdf,
             len(custom_data_gdf.explode(index_parts=True)),
         )
-        print("      \u2713 all_edges_have_valid_nodes")
-        print("      \u2713 no_u_equals_v")
-        print("      \u2713 all_custom_edges_are_connected")
-        print("      \u2713 custom_lines_unbroken")
-    except AssertionError as exc:
+    except NetworkIntegrityError as exc:
         if strict:
             raise
-        print(f"      WARNING (strict=False, continuing anyway): {exc}")
+        log.warning("strict=False, continuing anyway: %s", exc)
 
-    print("\nNetwork build complete!")
-
-    print("\n========================================")
-    print("              Summary")
-    print("========================================")
-    print(f"Nodes: {len(combined_points_gdf):,}")
-    print(f"Edges: {len(final_lines_gdf):,} "
-          f"({_count_custom(final_lines_gdf):,} custom)")
-    print(f"CRS:   {final_lines_gdf.crs}")
-    print("========================================\n")
+    log.info("Network built: %d nodes, %d edges (%d custom)",
+             len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))
 
     if return_source_osm:
         return (

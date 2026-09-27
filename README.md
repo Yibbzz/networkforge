@@ -16,26 +16,43 @@ uv sync
 ## Usage
 
 ```python
+import logging
 import geopandas as gpd
-from networkforge.network import build_network
-from networkforge.export import write_osm_xml
+from networkforge import build_network, write_osm_xml
 
-bbox = gpd.read_file("extent.geojson")
-custom = gpd.read_file("proposed.geojson")  # per-feature tags: highway, maxspeed, ...
+logging.basicConfig(level=logging.INFO)  # show build progress
 
-nodes, edges = build_network(bbox, custom, network_tags={"highway": "primary"})
+bbox = gpd.read_file("extent.gpkg")
+custom = gpd.read_file("proposed.gpkg")
+
+# Blanket: every custom line is a 40 mph primary road
+nodes, edges = build_network(bbox, custom, preset="primary_road",
+                             network_tags={"maxspeed": "40 mph"})
+
+# Per feature: each line's own attributes (highway, maxspeed, bridge, ...)
+nodes, edges = build_network(bbox, custom)
+
 write_osm_xml(nodes, edges, "network.osm")
 ```
 
-Tags on each custom feature override `network_tags`. Invalid or
-unusable tags stop the build before anything is downloaded
-(`strict=False` turns that into warnings).
+A feature's own attributes win over a preset unless you pass
+`overwrite_tags=True`. Custom lines join every street they cross,
+except motorways, bridges, tunnels and other layers, which they pass
+over or under. Tags are checked against OSM rules before anything is
+downloaded.
 
-Custom lines join every street they cross, except where either side
-is grade-separated: motorways, motorway slip roads, bridges, tunnels,
-or a different `layer`. Tag a custom feature `bridge=yes` (or give it
-a `layer`) to take it over the streets below. A line that *ends* on a
-motorway still joins it, so new slip roads work.
+**[Tagging guide](docs/tagging-guide.md)**: presets, every supported
+attribute, recipes (bypass, cycle route, bus gate, bridge, slip road),
+and what each error message means.
+
+Errors are subclasses of `networkforge.NetworkForgeError` (`InputError`,
+`InvalidTagsError`, `NoIntersectionError`, `OSMDownloadError`,
+`NetworkIntegrityError`). Progress goes to the `networkforge` logger,
+and to an optional `progress(step, total, description)` callback.
+
+The exported network contains OpenStreetMap data, © OpenStreetMap
+contributors, available under the
+[Open Database License](https://www.openstreetmap.org/copyright).
 
 ## Tests
 

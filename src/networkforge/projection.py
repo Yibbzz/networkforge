@@ -1,6 +1,8 @@
 import geopandas as gpd
 from pyproj import CRS
 
+from .errors import InputError
+
 
 def get_analysis_crs(
     bbox: gpd.GeoDataFrame,
@@ -8,7 +10,7 @@ def get_analysis_crs(
     """Determine the CRS to use for spatial analysis."""
 
     if bbox.crs is None:
-        raise ValueError(
+        raise InputError(
             "Bounding box must have a CRS assigned."
         )
 

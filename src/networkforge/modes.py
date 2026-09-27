@@ -23,6 +23,8 @@ import networkx as nx
 import osmnx as ox
 from osmnx._overpass import _get_network_filter
 
+from .errors import InputError
+
 # Routing modes a network can be filtered to. "all" / "all_public"
 # are download scopes rather than travel modes, so they're left out.
 MODES = ("drive", "drive_service", "walk", "bike")
@@ -109,7 +111,7 @@ def filter_graph_by_mode(graph: nx.MultiDiGraph, mode: str) -> nx.MultiDiGraph:
     The graph must have been loaded after keep_mode_tags().
     """
     if mode not in MODES:
-        raise ValueError(f"Unknown mode {mode!r}. Choose one of: {', '.join(MODES)}")
+        raise InputError(f"Unknown mode {mode!r}. Choose one of: {', '.join(MODES)}")
 
     keep = [edge for edge, data in graph.edges.items() if allows_mode(data, mode)]
     return graph.edge_subgraph(keep).copy()

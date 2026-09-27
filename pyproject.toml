@@ -11,6 +11,9 @@ dependencies = [
     "osmnx",
     "networkx",
     "pyproj",
+    "requests",
+    # Not imported directly: OSMnx needs it for nearest_nodes() on
+    # unprojected (lat/lon) graphs, used when routing between points.
     "scikit-learn>=1.9.1",
 ]
 
@@ -52,4 +55,4 @@ branch = true
 show_missing = true
 skip_covered = false
 # CI fails if offline coverage drops below this. Raise it as tests grow.
-fail_under = 85
+fail_under = 88

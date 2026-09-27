@@ -1,10 +1,13 @@
-import os
+import logging
 
-os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import pandas as pd
 from pyproj import CRS
 from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
+
+from .errors import InputError, NetworkIntegrityError, NoIntersectionError
+
+log = logging.getLogger(__name__)
 
 # A point this close to a line (projected CRS units) counts as on it -
 # covers floating point error after projecting a point onto a line.
@@ -78,14 +81,14 @@ def validate_projected_crs(gdf: gpd.GeoDataFrame) -> None:
     """
 
     if gdf.crs is None:
-        raise ValueError(
+        raise InputError(
             "GeoDataFrame must have a CRS assigned."
         )
 
     crs = CRS.from_user_input(gdf.crs)
 
     if not crs.is_projected:
-        raise ValueError(
+        raise InputError(
             f"GeoDataFrame must use a projected CRS for topology operations. "
             f"Received: {crs}"
         )
@@ -116,9 +119,11 @@ def validate_user_osm_intersection(
     )
 
     if sjoin_result.empty:
-        raise ValueError(
-            "User data does not intersect OSM network "
-            "in the selected bounding box."
+        raise NoIntersectionError(
+            f"None of the custom lines touch (or come within {buffer_distance} m of) "
+            "the OSM network in the bounding box, so they can't be joined to it. "
+            "Check the lines are in the right place and CRS.",
+            guide="preparing-your-data",
         )
 
 def snap_points_to_nodes(
@@ -268,13 +273,12 @@ def snap_line_vertices_to_network(
     lines["geometry"] = new_geometries
     collapsed = lines.geometry.isna()
     if collapsed.any():
-        print(f"      WARNING: {int(collapsed.sum())} custom line(s) shorter than the "
-              f"snap tolerance collapsed onto a single node and were dropped")
+        log.warning("%d custom line(s) shorter than the snap tolerance collapsed onto "
+                    "a single node and were dropped", int(collapsed.sum()))
 
     return lines[~collapsed]
 
 
-#@log_time
 def create_points_from_gdf(
     lines_gdf: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
@@ -337,7 +341,6 @@ def create_points_from_gdf(
     return points_gdf.drop_duplicates().reset_index(drop=True)
 
 
-#@log_time
 def snap_crossings_to_network(
     points_gdf: gpd.GeoDataFrame,
     custom_lines_gdf: gpd.GeoDataFrame,
@@ -364,7 +367,6 @@ def snap_crossings_to_network(
     return pd.concat([points[is_vertex], crossings]).drop_duplicates().reset_index(drop=True)
 
 
-#@log_time
 def split_lines_with_buffered_points(
     lines_gdf: gpd.GeoDataFrame,
     points_gdf: gpd.GeoDataFrame,
@@ -455,7 +457,6 @@ def split_lines_with_buffered_points(
     )
 
 
-#@log_time
 def remove_duplicates_and_combine_nodes(
     custom_points_gdf: gpd.GeoDataFrame,
     nodes_gdf: gpd.GeoDataFrame,
@@ -528,7 +529,6 @@ def remove_duplicates_and_combine_nodes(
 
     return combined_points_gdf
 
-#@log_time
 def filter_split_lines(split_lines_combined_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Filter the combined OSM and custom lines GeoDataFrame to retain relevant lines.
@@ -583,7 +583,6 @@ def find_nearest_point_index(
 
     return possible_matches.distance(point).idxmin()
 
-#@log_time
 def assign_point_ids_to_lines(
     lines_gdf: gpd.GeoDataFrame,
     points_gdf: gpd.GeoDataFrame,
@@ -631,7 +630,6 @@ def assign_point_ids_to_lines(
 
     return updated_lines_gdf
 
-#@log_time
 def update_and_finalize_lines_gdf(
     original_gdf: gpd.GeoDataFrame,
     updated_gdf: gpd.GeoDataFrame,
@@ -655,7 +653,6 @@ def update_and_finalize_lines_gdf(
 
     return original_gdf
 
-#@log_time
 def check_line_node_consistency(
     split_lines_combined_gdf: gpd.GeoDataFrame,
     combined_points_gdf: gpd.GeoDataFrame,
@@ -724,16 +721,14 @@ def check_line_node_consistency(
             message += " Some of these are your custom-tagged edges."
 
         if strict:
-            raise ValueError(message)
+            raise NetworkIntegrityError(message)
 
-        print("WARNING:", message)
+        log.warning("strict=False, dropping them: %s", message)
         split_lines_combined_gdf = split_lines_combined_gdf.loc[valid_mask]
-    else:
-        print('      All u and v values are in the node index')
 
     after = len(split_lines_combined_gdf)
     if after != before:
-        print(f"      check_line_node_consistency: {before} -> {after} edges "
-              f"({before - after} dropped)")
+        log.debug("check_line_node_consistency: %d -> %d edges (%d dropped)",
+                  before, after, before - after)
 
     return split_lines_combined_gdf
