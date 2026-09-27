@@ -1,9 +1,7 @@
 # NetworkForge
 
 [![tests](https://github.com/Yibbzz/networkforge/actions/workflows/tests.yml/badge.svg)](https://github.com/Yibbzz/networkforge/actions/workflows/tests.yml)
-<!-- Coverage badge: add a CODECOV_TOKEN repo secret (codecov.io), then uncomment:
 [![coverage](https://codecov.io/gh/Yibbzz/networkforge/graph/badge.svg)](https://codecov.io/gh/Yibbzz/networkforge)
--->
 
 Integrate custom (proposed) roads, cycleways and paths into an existing
 OpenStreetMap network, following OSM access rules, so the result can be
