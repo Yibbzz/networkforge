@@ -2,3 +2,7 @@
 __pycache__/
 .pytest_cache/
 .env
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/

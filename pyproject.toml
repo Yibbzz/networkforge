@@ -9,10 +9,47 @@ dependencies = [
     "shapely",
     "pandas",
     "osmnx",
+    "networkx",
+    "pyproj",
     "scikit-learn>=1.9.1",
 ]
 
+# Makes `uv sync` install networkforge itself (editable), so imports work
+# anywhere - CI included - without PYTHONPATH=src.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [dependency-groups]
 dev = [
+    "hypothesis>=6.168.2",
     "pytest",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.9",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "network: downloads live OSM data (run with: uv run pytest -m network)",
+]
+# Offline by default; `-m network` on the command line overrides this.
+addopts = "-m 'not network'"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes (unused/undefined names), I: import order,
+# B: bugbear (likely bugs), UP: modern syntax for the target Python.
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.coverage.run]
+source = ["networkforge"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# CI fails if offline coverage drops below this. Raise it as tests grow.
+fail_under = 85

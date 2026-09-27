@@ -1,7 +1,10 @@
-import os
+import xml.etree.ElementTree as ET
+
 import geopandas as gpd
 import pandas as pd
-import xml.etree.ElementTree as ET
+
+from .modes import mode_tag_keys
+
 
 def write_osm_xml(
     combined_points_gdf: gpd.GeoDataFrame,
@@ -126,24 +129,38 @@ def write_osm_xml(
     # 7. Write ways
     # ================================================================
 
-    standard_tags = [
-        "highway",
-        "name",
-        "ref",
-        "lanes",
-        "maxspeed",
-        "oneway",
-        "access",
-        "service",
-        "bridge",
-        "tunnel",
-        "junction",
-        "surface",
-        "width",
-    ]
+    tag_columns = {
+        "highway": "highway",
+        "name": "name",
+        "ref": "ref",
+        "lanes": "lanes",
+        "maxspeed": "maxspeed",
+        "oneway": "oneway",
+        "access": "access",
+        "service": "service",
+        "bridge": "bridge",
+        "tunnel": "tunnel",
+        "junction": "junction",
+        "surface": "surface",
+        "width": "width",
+        "custom": "nf:custom",
+    }
 
-    for way_id, row in enumerate(
-        edges_wgs84.itertuples(),
+    # Access tags every routing mode depends on (motor_vehicle, foot,
+    # bicycle, ...). Dropping them would silently lift restrictions.
+    tag_columns.update({key: key for key in mode_tag_keys()})
+
+    # Only columns that exist. Plain column lookups rather than
+    # itertuples, which can't handle keys like "sidewalk:left".
+    present_tags = [
+        (column, osm_key)
+        for column, osm_key in tag_columns.items()
+        if column in edges_wgs84.columns
+    ]
+    tag_values = [edges_wgs84[column].tolist() for column, _ in present_tags]
+
+    for way_id, (u, v, *values) in enumerate(
+        zip(edges_wgs84["u"], edges_wgs84["v"], *tag_values, strict=True),
         start=1,
     ):
 
@@ -165,35 +182,33 @@ def write_osm_xml(
         ET.SubElement(
             way,
             "nd",
-            ref=str(int(row.u)),
+            ref=str(int(u)),
         )
 
         # End node
         ET.SubElement(
             way,
             "nd",
-            ref=str(int(row.v)),
+            ref=str(int(v)),
         )
 
         # ------------------------------------------------------------
-        # Preserve routing-relevant OSM tags
+        # Preserve routing-relevant OSM tags (plus custom provenance)
         # ------------------------------------------------------------
 
-        for tag in standard_tags:
-
-            value = getattr(row, tag, None)
-
-            if pd.isna(value):
-                continue
+        for (_, osm_key), value in zip(present_tags, values, strict=True):
 
             # OSMnx can represent some values as lists.
             if isinstance(value, list):
                 value = ";".join(map(str, value))
 
+            if value is None or pd.isna(value):
+                continue
+
             ET.SubElement(
                 way,
                 "tag",
-                k=tag,
+                k=osm_key,
                 v=str(value),
             )
 

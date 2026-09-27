@@ -1,0 +1,1388 @@
+==================== src/networkforge/__init__.py ====================
+
+==================== src/networkforge/export.py ====================
+import os
+import geopandas as gpd
+import pandas as pd
+import xml.etree.ElementTree as ET
+
+def write_osm_xml(
+    combined_points_gdf: gpd.GeoDataFrame,
+    split_lines_combined_gdf: gpd.GeoDataFrame,
+    output_file_path: str,
+):
+    """
+    Write a NetworkForge network to standard OSM 0.6 XML.
+
+    Input GeoDataFrames should use the analysis CRS. Both are
+    converted to WGS84 (EPSG:4326) for OSM export.
+
+    Each graph edge is exported as a separate OSM way connecting
+    its `u` and `v` nodes.
+
+    Args:
+        combined_points_gdf:
+            Network nodes.
+
+        split_lines_combined_gdf:
+            Network edges. Must contain `u`, `v` and `osmid`
+            columns.
+
+        output_file_path:
+            Path to the output OSM XML file.
+    """
+
+    # ================================================================
+    # 1. Validate CRS
+    # ================================================================
+
+    if combined_points_gdf.crs is None:
+        raise ValueError(
+            "Point GeoDataFrame must have a CRS assigned."
+        )
+
+    if split_lines_combined_gdf.crs is None:
+        raise ValueError(
+            "Line GeoDataFrame must have a CRS assigned."
+        )
+
+    # ================================================================
+    # 2. Validate required network columns
+    # ================================================================
+
+    required_node_columns = ["geometry"]
+
+    required_edge_columns = [
+        "u",
+        "v",
+    ]
+
+    for column in required_node_columns:
+        if column not in combined_points_gdf.columns:
+            raise ValueError(
+                f"Node GeoDataFrame is missing required column: {column}"
+            )
+
+    for column in required_edge_columns:
+        if column not in split_lines_combined_gdf.columns:
+            raise ValueError(
+                f"Edge GeoDataFrame is missing required column: {column}"
+            )
+
+    # ================================================================
+    # 3. Convert to WGS84
+    # ================================================================
+
+    nodes_wgs84 = combined_points_gdf.to_crs("EPSG:4326")
+    edges_wgs84 = split_lines_combined_gdf.to_crs("EPSG:4326")
+
+    # ================================================================
+    # 4. Calculate bounds
+    # ================================================================
+
+    points_bounds = nodes_wgs84.total_bounds
+    lines_bounds = edges_wgs84.total_bounds
+
+    total_bounds = [
+        round(min(points_bounds[0], lines_bounds[0]), 7),
+        round(min(points_bounds[1], lines_bounds[1]), 7),
+        round(max(points_bounds[2], lines_bounds[2]), 7),
+        round(max(points_bounds[3], lines_bounds[3]), 7),
+    ]
+
+    # ================================================================
+    # 5. Create OSM document
+    # ================================================================
+
+    root = ET.Element(
+        "osm",
+        version="0.6",
+        generator="NetworkForge",
+    )
+
+    ET.SubElement(
+        root,
+        "bounds",
+        minlat=str(total_bounds[1]),
+        minlon=str(total_bounds[0]),
+        maxlat=str(total_bounds[3]),
+        maxlon=str(total_bounds[2]),
+    )
+
+    # ================================================================
+    # 6. Write nodes
+    # ================================================================
+
+    for row in nodes_wgs84.itertuples():
+
+        geometry = row.geometry
+
+        ET.SubElement(
+            root,
+            "node",
+            id=str(row.Index),
+            lat=str(round(geometry.y, 7)),
+            lon=str(round(geometry.x, 7)),
+        )
+
+    # ================================================================
+    # 7. Write ways
+    # ================================================================
+
+    standard_tags = [
+        "highway",
+        "name",
+        "ref",
+        "lanes",
+        "maxspeed",
+        "oneway",
+        "access",
+        "service",
+        "bridge",
+        "tunnel",
+        "junction",
+        "surface",
+        "width",
+    ]
+
+    for way_id, row in enumerate(
+        edges_wgs84.itertuples(),
+        start=1,
+    ):
+
+        # ------------------------------------------------------------
+        # Each graph edge becomes its own OSM way.
+        #
+        # We deliberately generate a new unique ID rather than using
+        # the original OSM `osmid`, because multiple graph edges can
+        # originate from the same original OSM way.
+        # ------------------------------------------------------------
+
+        way = ET.SubElement(
+            root,
+            "way",
+            id=str(way_id),
+        )
+
+        # Start node
+        ET.SubElement(
+            way,
+            "nd",
+            ref=str(int(row.u)),
+        )
+
+        # End node
+        ET.SubElement(
+            way,
+            "nd",
+            ref=str(int(row.v)),
+        )
+
+        # ------------------------------------------------------------
+        # Preserve routing-relevant OSM tags
+        # ------------------------------------------------------------
+
+        for tag in standard_tags:
+
+            value = getattr(row, tag, None)
+
+            if pd.isna(value):
+                continue
+
+            # OSMnx can represent some values as lists.
+            if isinstance(value, list):
+                value = ";".join(map(str, value))
+
+            ET.SubElement(
+                way,
+                "tag",
+                k=tag,
+                v=str(value),
+            )
+
+    # ================================================================
+    # 8. Write XML
+    # ================================================================
+
+    tree = ET.ElementTree(root)
+
+    tree.write(
+        output_file_path,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+==================== src/networkforge/network.py ====================
+import geopandas as gpd
+import pandas as pd
+from pyproj import CRS
+
+from .projection import (
+    get_analysis_crs, 
+    convert_to_wgs84_and_add_xy
+    )
+
+from .osm import (
+    configure_osmnx_cache,
+    get_osm_data_from_bbox,
+)
+
+from .topology import (
+    validate_user_osm_intersection,
+    create_points_from_gdf,
+    split_lines_with_buffered_points,
+    remove_duplicates_and_combine_nodes,
+    filter_split_lines,
+    assign_point_ids_to_lines,
+    update_and_finalize_lines_gdf,
+    check_line_node_consistency,
+)
+
+def combine_custom_lines_with_osm_edges(
+    custom: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+    crs: str | CRS,
+) -> gpd.GeoDataFrame:
+    """
+    Combine the user's custom network lines with OSM network edges.
+    """
+
+    # Split MultiLineStrings into individual LineStrings.
+    custom = custom.explode(index_parts=True)
+
+    # Reset the OSM edge index before combining.
+    edges_gdf_reset = edges_gdf.reset_index(drop=True)
+
+    # Mark custom features so they can be identified later.
+    custom["custom"] = "yes"
+
+    # Combine OSM and custom network lines.
+    combined_gdf = gpd.GeoDataFrame(
+        pd.concat(
+            [edges_gdf_reset, custom],
+            ignore_index=True,
+        ),
+        crs=crs,
+    )
+    return combined_gdf
+
+def update_gdf_tags(
+    gdf: gpd.GeoDataFrame,
+    custom_column: str,
+    tags_to_update: dict,
+) -> gpd.GeoDataFrame:
+    """
+    Update OSM tags for custom network features.
+
+    Args:
+        gdf: GeoDataFrame containing network lines.
+        custom_column: Column used to identify custom features.
+        tags_to_update: Dictionary of tags and values to apply.
+
+    Returns:
+        GeoDataFrame with updated tags.
+    """
+
+    # Identify custom network features.
+    mask = gdf[custom_column] == "yes"
+
+    # Apply each requested tag to custom features.
+    for tag, value in tags_to_update.items():
+        gdf.loc[mask, tag] = value
+
+    return gdf
+
+def build_network(
+    bbox_gdf: gpd.GeoDataFrame,
+    custom_data_gdf: gpd.GeoDataFrame,
+    network_tags: dict[str, str],
+    return_source_osm: bool = False,
+) -> tuple[
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+] | tuple[
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+    gpd.GeoDataFrame,
+]:
+
+    print("\n========================================")
+    print("       NetworkForge Network Build")
+    print("========================================")
+
+    # =========================================================
+    # 1. Configure OSMnx
+    # =========================================================
+
+    print("\n[1/14] Configuring OSMnx...")
+
+    configure_osmnx_cache()
+
+    analysis_crs = get_analysis_crs(bbox_gdf)
+
+    print(f"      Analysis CRS: {analysis_crs}")
+
+    # Project custom data into the analysis CRS.
+    custom_data_gdf = custom_data_gdf.to_crs(analysis_crs)
+
+    print(f"      Custom features: {len(custom_data_gdf):,}")
+
+    # =========================================================
+    # 2. Get the existing OSM network
+    # =========================================================
+
+    print("\n[2/14] Downloading OSM network...")
+
+    nodes_gdf, edges_gdf = get_osm_data_from_bbox(
+        bbox_gdf,
+        analysis_crs,
+    )
+
+    print(f"      OSM nodes: {len(nodes_gdf):,}")
+    print(f"      OSM edges: {len(edges_gdf):,}")
+    print(f"      CRS: {edges_gdf.crs}")
+
+    # =========================================================
+    # 3. Combine OSM and custom network
+    # =========================================================
+
+    print("\n[3/14] Combining OSM and custom network...")
+
+    combined_gdf = combine_custom_lines_with_osm_edges(
+        custom_data_gdf,
+        edges_gdf,
+        analysis_crs,
+    )
+
+    print(f"      Combined lines: {len(combined_gdf):,}")
+
+    # =========================================================
+    # 4. Validate the custom network
+    # =========================================================
+
+    print("\n[4/14] Validating custom network intersections...")
+
+    validate_user_osm_intersection(
+        edges_gdf,
+        custom_data_gdf,
+    )
+
+    print("      ✓ Custom network intersects existing OSM network")
+
+    # =========================================================
+    # 5. Find network topology points
+    # =========================================================
+
+    print("\n[5/14] Finding network topology points...")
+
+    custom_points_gdf = create_points_from_gdf(
+        combined_gdf
+    )
+
+    print(f"      Topology points: {len(custom_points_gdf):,}")
+
+    # =========================================================
+    # 6. Split lines at topology points
+    # =========================================================
+
+    print("\n[6/14] Splitting lines at topology points...")
+
+    split_lines_gdf = split_lines_with_buffered_points(
+        combined_gdf,
+        custom_points_gdf,
+    )
+
+    print(f"      Split lines: {len(split_lines_gdf):,}")
+
+    # =========================================================
+    # 7. Combine OSM nodes and custom nodes
+    # =========================================================
+
+    print("\n[7/14] Combining OSM and custom nodes...")
+
+    combined_points_gdf = remove_duplicates_and_combine_nodes(
+        custom_points_gdf,
+        nodes_gdf,
+    )
+
+    print(f"      Combined nodes: {len(combined_points_gdf):,}")
+
+    # =========================================================
+    # 8. Select lines requiring node assignment
+    # =========================================================
+
+    print("\n[8/14] Selecting lines requiring node assignment...")
+
+    osm_split_lines_gdf = filter_split_lines(
+        split_lines_gdf
+    )
+
+    print(f"      Lines requiring assignment: {len(osm_split_lines_gdf):,}")
+
+    # =========================================================
+    # 9. Assign node IDs to line endpoints
+    # =========================================================
+
+    print("\n[9/14] Assigning node IDs to line endpoints...")
+
+    updated_lines = assign_point_ids_to_lines(
+        osm_split_lines_gdf,
+        combined_points_gdf,
+    )
+
+    print(f"      Updated lines: {len(updated_lines):,}")
+
+    # =========================================================
+    # 10. Finalise the network edges
+    # =========================================================
+
+    print("\n[10/14] Finalising network edges...")
+
+    final_lines_gdf = update_and_finalize_lines_gdf(
+        split_lines_gdf,
+        updated_lines,
+    )
+
+    print(f"       Final edges: {len(final_lines_gdf):,}")
+
+    # =========================================================
+    # 11. Validate topology
+    # =========================================================
+
+    print("\n[11/14] Validating network topology...")
+
+    final_lines_gdf = check_line_node_consistency(
+        final_lines_gdf,
+        combined_points_gdf,
+    )
+
+    print(f"       Valid edges: {len(final_lines_gdf):,}")
+
+    # =========================================================
+    # 12. Validate CRS consistency
+    # =========================================================
+
+    print("\n[12/14] Validating CRS consistency...")
+
+    if combined_points_gdf.crs != final_lines_gdf.crs:
+        raise ValueError(
+            "Nodes and edges must use the same CRS."
+        )
+
+    print(f"       CRS: {final_lines_gdf.crs}")
+
+    # =========================================================
+    # 13. Apply OSM tags
+    # =========================================================
+
+    print("\n[13/14] Applying OSM tags...")
+
+    final_lines_gdf = update_gdf_tags(
+        final_lines_gdf,
+        "custom",
+        network_tags,
+    )
+
+    print(f"       Tags applied: {network_tags}")
+
+    # =========================================================
+    # 14. Return the finished network
+    # =========================================================
+
+    print("\n[14/14] Network build complete!")
+
+    print("\n========================================")
+    print("              Summary")
+    print("========================================")
+    print(f"Nodes: {len(combined_points_gdf):,}")
+    print(f"Edges: {len(final_lines_gdf):,}")
+    print(f"CRS:   {final_lines_gdf.crs}")
+    print("========================================\n")
+
+    if return_source_osm:
+        return (
+            combined_points_gdf,
+            final_lines_gdf,
+            nodes_gdf,
+            edges_gdf,
+        )
+
+    return (
+        combined_points_gdf,
+        final_lines_gdf,
+    )
+==================== src/networkforge/osm.py ====================
+import os
+os.environ['USE_PYGEOS'] = '0'
+import geopandas as gpd
+import osmnx as ox
+from pyproj import CRS
+from .projection import get_analysis_crs
+
+
+def configure_osmnx_cache() -> None:
+    """
+    Configure the OSMnx cache directory from the
+    NETWORKFORGE_OSMNX_CACHE environment variable.
+    """
+    cache_folder = os.getenv(
+        "NETWORKFORGE_OSMNX_CACHE",
+        os.path.expanduser("~/.cache/networkforge/osmnx"),
+    )
+
+    os.makedirs(cache_folder, exist_ok=True)
+
+    ox.settings.cache_folder = cache_folder
+
+def get_osm_data_from_bbox(
+    bbox: gpd.GeoDataFrame,
+    analysis_crs: CRS,
+    network_type: str = "all",
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Download an OSM network within a bounding box."""
+
+    bbox_wgs84 = bbox.to_crs("EPSG:4326")
+
+    west, south, east, north = bbox_wgs84.total_bounds
+
+    graph = ox.graph_from_bbox(
+        (west, south, east, north),
+        network_type=network_type,
+        simplify=False,
+    )
+
+    nodes, edges = ox.graph_to_gdfs(graph)
+
+    nodes = nodes.to_crs(analysis_crs)
+    edges = edges.to_crs(analysis_crs)
+
+    return nodes, edges.reset_index()
+==================== src/networkforge/projection.py ====================
+import geopandas as gpd
+from pyproj import CRS
+
+
+def get_analysis_crs(
+    bbox: gpd.GeoDataFrame,
+) -> CRS:
+    """Determine the CRS to use for spatial analysis."""
+
+    if bbox.crs is None:
+        raise ValueError(
+            "Bounding box must have a CRS assigned."
+        )
+
+    bbox_crs = CRS.from_user_input(bbox.crs)
+
+    if bbox_crs.is_projected:
+        return bbox_crs
+
+    bbox_wgs84 = bbox.to_crs("EPSG:4326")
+
+    centroid = bbox_wgs84.geometry.union_all().centroid
+
+    longitude = centroid.x
+    latitude = centroid.y
+
+    zone = int((longitude + 180) // 6) + 1
+
+    epsg = (
+        32600 + zone
+        if latitude >= 0
+        else 32700 + zone
+    )
+
+    return CRS.from_epsg(epsg)
+
+def convert_to_wgs84_and_add_xy(
+    gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Convert a GeoDataFrame to WGS84 (EPSG:4326) and add
+    x/y coordinate columns.
+
+    Args:
+        gdf: GeoDataFrame to convert.
+
+    Returns:
+        GeoDataFrame in EPSG:4326 with x and y columns.
+    """
+
+    # OSM uses WGS84 coordinates.
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+
+    elif gdf.crs.to_string() != "EPSG:4326":
+        gdf = gdf.to_crs("EPSG:4326")
+
+    # Add longitude (x) and latitude (y) columns.
+    gdf["x"] = gdf.geometry.x.round(7)
+    gdf["y"] = gdf.geometry.y.round(7)
+
+    return gdf
+==================== src/networkforge/topology.py ====================
+import os
+os.environ['USE_PYGEOS'] = '0'
+import geopandas as gpd
+import pandas as pd
+from shapely.geometry import Point, MultiPoint, LineString, MultiLineString
+from pyproj import CRS
+
+def validate_projected_crs(gdf: gpd.GeoDataFrame) -> None:
+    """
+    Ensure a GeoDataFrame has a projected CRS suitable for
+    distance and buffer operations.
+    """
+
+    if gdf.crs is None:
+        raise ValueError(
+            "GeoDataFrame must have a CRS assigned."
+        )
+
+    crs = CRS.from_user_input(gdf.crs)
+
+    if not crs.is_projected:
+        raise ValueError(
+            f"GeoDataFrame must use a projected CRS for topology operations. "
+            f"Received: {crs}"
+        )
+
+def validate_user_osm_intersection(
+    lines_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    buffer_distance: float = 1.0,
+) -> None:
+    """
+    Ensure that user data intersects the OSM network.
+
+    buffer_distance is measured in the units of the projected
+    analysis CRS, normally metres.
+    """
+
+    validate_projected_crs(lines_gdf)
+    validate_projected_crs(points_gdf)
+
+    buffered = points_gdf.copy()
+    buffered["geometry"] = buffered.geometry.buffer(buffer_distance)
+
+    sjoin_result = gpd.sjoin(
+        lines_gdf,
+        buffered,
+        how="inner",
+        predicate="intersects",
+    )
+
+    if sjoin_result.empty:
+        raise ValueError(
+            "User data does not intersect OSM network "
+            "in the selected bounding box."
+        )
+
+#@log_time
+def create_points_from_gdf(
+    lines_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Create points from intersections and vertices of custom lines.
+    """
+
+    validate_projected_crs(lines_gdf)
+
+    intersection_points = []
+
+    sindex = lines_gdf.sindex
+
+    lines_with_nan = lines_gdf[lines_gdf["u"].isna()]
+
+    for i, line1 in lines_with_nan.iterrows():
+        possible_matches_index = list(
+            sindex.intersection(line1.geometry.bounds)
+        )
+
+        possible_matches = lines_gdf.iloc[possible_matches_index]
+
+        precise_matches = possible_matches[
+            possible_matches.intersects(line1.geometry)
+        ]
+
+        for j, line2 in precise_matches.iterrows():
+            if i != j:
+                intersection = line1.geometry.intersection(
+                    line2.geometry
+                )
+
+                if isinstance(intersection, Point):
+                    intersection_points.append(intersection)
+
+                elif isinstance(intersection, MultiPoint):
+                    intersection_points.extend(intersection.geoms)
+
+    for line in lines_with_nan.geometry:
+        if isinstance(line, LineString):
+            intersection_points.extend(
+                Point(coord) for coord in line.coords
+            )
+
+        elif isinstance(line, MultiLineString):
+            for part in line.geoms:
+                intersection_points.extend(
+                    Point(coord) for coord in part.coords
+                )
+
+    points_gdf = gpd.GeoDataFrame(
+        geometry=intersection_points,
+        crs=lines_gdf.crs,
+    )
+
+    return points_gdf.drop_duplicates().reset_index(drop=True)
+
+
+#@log_time
+def split_lines_with_buffered_points(
+    lines_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    buffer_distance: float = 1.0,
+) -> gpd.GeoDataFrame:
+    """
+    Split lines at points within a specified distance.
+
+    buffer_distance is measured in the units of the projected
+    analysis CRS, normally metres.
+    """
+
+    validate_projected_crs(lines_gdf)
+    validate_projected_crs(points_gdf)
+
+    buffered_points_gdf = points_gdf.copy()
+    buffered_points_gdf["geometry"] = (
+        buffered_points_gdf.geometry.buffer(buffer_distance)
+    )
+
+    sjoin_lines = gpd.sjoin(
+        lines_gdf,
+        buffered_points_gdf,
+        how="inner",
+        predicate="intersects",
+    )
+
+    sjoin_lines["id"] = sjoin_lines.index
+
+    split_lines_result = []
+    split_ids = []
+
+    for line_id, group in sjoin_lines.groupby("id"):
+        line = lines_gdf.loc[line_id, "geometry"]
+
+        attributes = lines_gdf.loc[line_id].drop("geometry")
+
+        split_points = [
+            points_gdf.loc[idx, "geometry"]
+            for idx in group["index_right"]
+        ]
+
+        split_points.sort(
+            key=lambda point: line.project(point)
+        )
+
+        segments = (
+            [line.coords[0]]
+            + [(point.x, point.y) for point in split_points]
+            + [line.coords[-1]]
+        )
+
+        for i in range(len(segments) - 1):
+            new_line = LineString(
+                [segments[i], segments[i + 1]]
+            )
+
+            new_line_attributes = attributes.copy()
+            new_line_attributes["geometry"] = new_line
+            new_line_attributes["split"] = "yes"
+
+            split_lines_result.append(
+                new_line_attributes
+            )
+
+        split_ids.append(line_id)
+
+    split_lines_gdf = gpd.GeoDataFrame(
+        split_lines_result,
+        geometry="geometry",
+        crs=lines_gdf.crs,
+    )
+
+    non_split_lines_gdf = lines_gdf.drop(split_ids)
+
+    return pd.concat(
+        [non_split_lines_gdf, split_lines_gdf],
+        ignore_index=True,
+    )
+
+    
+#@log_time
+def remove_duplicates_and_combine_nodes(custom_points_gdf: gpd.GeoDataFrame, nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Remove duplicate points from custom points and combine with nodes.
+
+    Args:
+        custom_points_gdf (gpd.GeoDataFrame): GeoDataFrame containing custom point geometries.
+        nodes_gdf (gpd.GeoDataFrame): GeoDataFrame containing node geometries.
+
+    Returns:
+        gpd.GeoDataFrame: Combined GeoDataFrame of unique nodes and custom points.
+    """
+
+    validate_projected_crs(custom_points_gdf)
+    validate_projected_crs(nodes_gdf)
+
+    # Spatial join to see if any points intersect
+    duplicates = gpd.sjoin(
+        custom_points_gdf,
+        nodes_gdf,
+        how="inner",
+        predicate="intersects",
+    )
+
+    # Check if 'index_left' exists in the result of the spatial join
+    if 'index_left' in duplicates.columns:
+        # Remove duplicates from custom_points
+        custom_points_gdf_cleaned = custom_points_gdf.drop(duplicates['index_left'].unique())
+    else:
+        # If 'index_left' is not in columns, it means no duplicates were found
+        # In this case, use custom_points_gdf as is
+        custom_points_gdf_cleaned = custom_points_gdf
+
+    # Concatenate the two GeoDataFrames, making sure the nodes_gdf index is not overwritten
+    combined_points_gdf = pd.concat([nodes_gdf, custom_points_gdf_cleaned.reset_index(drop=True)])
+    combined_points_gdf = combined_points_gdf.rename_axis("osmid", axis='index')
+
+    return combined_points_gdf
+
+#@log_time
+def filter_split_lines(split_lines_combined_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Filter the combined OSM and custom lines GeoDataFrame to retain relevant lines.
+
+    Args:
+        split_lines_combined_gdf (gpd.GeoDataFrame): GeoDataFrame containing line geometries and attributes.
+
+    Returns:
+        gpd.GeoDataFrame: Filtered GeoDataFrame.
+    """
+
+    lines_list = []
+
+    for i, row in split_lines_combined_gdf.iterrows():
+        if (row['split'] == 'yes' and pd.notna(row['u'])) or pd.isna(row['u']) or (row['split'] == 'yes' and pd.notna(row['v'])) or pd.isna(row['v']):
+            lines_list.append((i, row))
+
+    # Creating a DataFrame from the list of tuples
+    osm_split_lines_gdf = gpd.GeoDataFrame([row for index, row in lines_list], 
+                                           index=[index for index, row in lines_list], 
+                                           crs=split_lines_combined_gdf.crs)
+
+    return osm_split_lines_gdf
+
+def find_nearest_point_index(
+    point: Point,
+    points_gdf: gpd.GeoDataFrame,
+    buffer_distance: float,
+) -> int | None:
+    """
+    Find the nearest point within buffer_distance.
+
+    buffer_distance is measured in the units of the projected
+    analysis CRS, normally metres.
+    """
+
+    sindex = points_gdf.sindex
+
+    possible_matches_index = list(
+        sindex.intersection(
+            point.buffer(buffer_distance).bounds
+        )
+    )
+
+    possible_matches = points_gdf.iloc[
+        possible_matches_index
+    ]
+
+    if possible_matches.empty:
+        return None
+
+    return possible_matches.distance(point).idxmin()
+
+#@log_time
+def assign_point_ids_to_lines(
+    lines_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    buffer_distance: float = 0.1,
+) -> gpd.GeoDataFrame:
+
+    validate_projected_crs(lines_gdf)
+    validate_projected_crs(points_gdf)
+
+    lines_gdf = lines_gdf.copy()
+
+    lines_gdf["start_point"] = lines_gdf.geometry.apply(
+        lambda x: Point(x.coords[0])
+    )
+
+    lines_gdf["end_point"] = lines_gdf.geometry.apply(
+        lambda x: Point(x.coords[-1])
+    )
+
+    lines_gdf["u"] = lines_gdf["start_point"].apply(
+        lambda x: find_nearest_point_index(
+            x,
+            points_gdf,
+            buffer_distance,
+        )
+    )
+
+    lines_gdf["v"] = lines_gdf["end_point"].apply(
+        lambda x: find_nearest_point_index(
+            x,
+            points_gdf,
+            buffer_distance,
+        )
+    )
+
+    updated_lines_gdf = lines_gdf.drop(
+        columns=["start_point", "end_point"]
+    )
+
+    updated_lines_gdf = updated_lines_gdf[
+        (updated_lines_gdf["u"] != updated_lines_gdf["v"])
+        & updated_lines_gdf["u"].notna()
+        & updated_lines_gdf["v"].notna()
+    ]
+
+    return updated_lines_gdf
+
+#@log_time
+def update_and_finalize_lines_gdf(
+    original_gdf: gpd.GeoDataFrame,
+    updated_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Update and finalize the lines GeoDataFrame.
+
+    The GeoDataFrame remains in the projected analysis CRS.
+    """
+
+    validate_projected_crs(original_gdf)
+    validate_projected_crs(updated_gdf)
+
+    original_gdf = original_gdf.copy()
+
+    original_gdf.update(updated_gdf)
+
+    original_gdf = original_gdf.set_geometry("geometry")
+
+    original_gdf["osmid"] = original_gdf.index + 1
+
+    return original_gdf
+
+#@log_time
+def check_line_node_consistency(split_lines_combined_gdf: gpd.GeoDataFrame, combined_points_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Check for missing or duplicate node values in 'u' and 'v' columns and verify consistency.
+
+    Args:
+        split_lines_combined_gdf (gpd.GeoDataFrame): GeoDataFrame with line geometries ('u' and 'v' columns).
+        combined_points_gdf (gpd.GeoDataFrame): GeoDataFrame with point geometries (index to be checked against).
+
+    Returns:
+        gpd.GeoDataFrame: Cleaned GeoDataFrame with line geometries.
+    """
+
+    # Drop rows with NaNs in 'u' or 'v'
+    split_lines_combined_gdf = split_lines_combined_gdf.dropna(subset=['u', 'v'])
+
+    # Drop rows with duplicate 'u' and 'v' values
+    split_lines_combined_gdf = split_lines_combined_gdf[split_lines_combined_gdf['u'] != split_lines_combined_gdf['v']]
+
+    # Convert 'u' and 'v' columns and the index to sets
+    u_values = set(split_lines_combined_gdf['u'])
+    v_values = set(split_lines_combined_gdf['v'])
+    index_values = set(combined_points_gdf.index)
+
+    # Find values in 'u' and 'v' that are not in the index
+    not_in_index_u = u_values - index_values
+    not_in_index_v = v_values - index_values
+
+    if not_in_index_u:
+        print("Values in 'u' not in index:", not_in_index_u)
+    if not_in_index_v:
+        print("Values in 'v' not in index:", not_in_index_v)
+    if not not_in_index_u and not not_in_index_v:
+        print('All u and v values are in the node index')
+
+    return split_lines_combined_gdf
+==================== src/networkforge/structure.txt ====================
+src/networkforge/
+│
+├── __init__.py
+│
+├── network.py       # "What is the overall process?"
+│
+├── topology.py      # "How do we connect/split the network?"
+│
+├── osm.py           # "How do we get OSM data?"
+│
+└── export.py        # "How do we write the result?"
+==================== tests/get_test_data.py ====================
+import geopandas as gpd
+import osmnx as ox
+
+from networkforge.network import build_network
+from networkforge.export import write_osm_xml
+
+
+def build_test_network(
+    bbox_gdf: gpd.GeoDataFrame,
+    custom_data_gdf: gpd.GeoDataFrame,
+):
+    """Build a simple drivable test network."""
+
+    test_tags = {
+        "highway": "residential",
+        "maxspeed": "30",
+        "lanes": "2",
+        "oneway": "no",
+        "access": "yes",
+    }
+
+    return build_network(
+        bbox_gdf,
+        custom_data_gdf,
+        test_tags,
+        return_source_osm=True,
+    )
+
+
+def main():
+    # ------------------------------------------------------------------
+    # Load test data
+    # ------------------------------------------------------------------
+
+    bbox_gdf = gpd.read_file(
+        "tests/data/extent.geojson"
+    )
+
+    custom_data_gdf = gpd.read_file(
+        "tests/data/custom_road_test.geojson"
+    )
+
+    print("Loaded test data:")
+    print(f"  Bounding box: {len(bbox_gdf)} feature(s)")
+    print(f"  Custom roads: {len(custom_data_gdf)} feature(s)")
+    print(f"  Bbox CRS:     {bbox_gdf.crs}")
+    print(f"  Custom CRS:   {custom_data_gdf.crs}")
+
+    # ------------------------------------------------------------------
+    # Build network
+    # ------------------------------------------------------------------
+
+    print("\nBuilding network...")
+
+    nodes, edges, osm_nodes, osm_edges = build_test_network(
+        bbox_gdf,
+        custom_data_gdf,
+    )
+
+    # ------------------------------------------------------------------
+    # Inspect result
+    # ------------------------------------------------------------------
+
+    print("\nNetwork built successfully!")
+
+    print(f"  OSM nodes:       {len(osm_nodes)}")
+    print(f"  OSM edges:       {len(osm_edges)}")
+    print(f"  Final nodes:     {len(nodes)}")
+    print(f"  Final edges:     {len(edges)}")
+    print(f"  Node CRS:        {nodes.crs}")
+    print(f"  Edge CRS:        {edges.crs}")
+
+    # ------------------------------------------------------------------
+    # Save GeoPackage outputs for inspection in QGIS
+    # ------------------------------------------------------------------
+
+    nodes.to_file(
+        "tests/data/test_output_nodes.gpkg",
+        layer="nodes",
+        driver="GPKG",
+    )
+
+    edges.to_file(
+        "tests/data/test_output_edges.gpkg",
+        layer="edges",
+        driver="GPKG",
+    )
+
+    # ------------------------------------------------------------------
+    # Export baseline OSM network
+    # ------------------------------------------------------------------
+
+    print("\nExporting baseline OSM network...")
+
+    write_osm_xml(
+        osm_nodes,
+        osm_edges,
+        "tests/data/baseline.osm",
+    )
+
+    # ------------------------------------------------------------------
+    # Export NetworkForge network
+    # ------------------------------------------------------------------
+
+    print("Exporting NetworkForge network...")
+
+    write_osm_xml(
+        nodes,
+        edges,
+        "tests/data/custom_network.osm",
+    )
+
+    # ------------------------------------------------------------------
+    # Validate OSM exports
+    # ------------------------------------------------------------------
+
+    print("\nValidating OSM exports...")
+
+    baseline_graph = ox.graph_from_xml(
+        "tests/data/baseline.osm",
+        simplify=False,
+    )
+
+    custom_graph = ox.graph_from_xml(
+        "tests/data/custom_network.osm",
+        simplify=False,
+    )
+
+    print(f"  Baseline graph nodes: {len(baseline_graph.nodes)}")
+    print(f"  Baseline graph edges: {len(baseline_graph.edges)}")
+    print(f"  Custom graph nodes:   {len(custom_graph.nodes)}")
+    print(f"  Custom graph edges:   {len(custom_graph.edges)}")
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
+    print("\nOutput written:")
+    print("  tests/data/test_output_nodes.gpkg")
+    print("  tests/data/test_output_edges.gpkg")
+    print("  tests/data/baseline.osm")
+    print("  tests/data/custom_network.osm")
+
+
+if __name__ == "__main__":
+    main()
+==================== tests/route_test.py ====================
+import geopandas as gpd
+import networkx as nx
+import osmnx as ox
+
+
+def load_points():
+    start_gdf = gpd.read_file(
+        "tests/data/start_point.geojson"
+    )
+
+    end_gdf = gpd.read_file(
+        "tests/data/end_point.geojson"
+    )
+
+    if start_gdf.crs is None:
+        raise ValueError("Start point has no CRS.")
+
+    if end_gdf.crs is None:
+        raise ValueError("End point has no CRS.")
+
+    start_gdf = start_gdf.to_crs("EPSG:4326")
+    end_gdf = end_gdf.to_crs("EPSG:4326")
+
+    return start_gdf, end_gdf
+
+
+def add_travel_times(graph):
+    graph = ox.add_edge_speeds(graph)
+    graph = ox.add_edge_travel_times(graph)
+
+    return graph
+
+
+def calculate_route(
+    graph,
+    start_point,
+    end_point,
+):
+    start_node = ox.distance.nearest_nodes(
+        graph,
+        start_point.x,
+        start_point.y,
+    )
+
+    end_node = ox.distance.nearest_nodes(
+        graph,
+        end_point.x,
+        end_point.y,
+    )
+
+    route = nx.shortest_path(
+        graph,
+        start_node,
+        end_node,
+        weight="travel_time",
+    )
+
+    travel_time = nx.path_weight(
+        graph,
+        route,
+        weight="travel_time",
+    )
+
+    return route, travel_time
+
+
+def main():
+    # --------------------------------------------------------------
+    # Load start/end points
+    # --------------------------------------------------------------
+
+    start_gdf, end_gdf = load_points()
+
+    start_point = start_gdf.geometry.iloc[0]
+    end_point = end_gdf.geometry.iloc[0]
+
+    print("Start/end points:")
+    print(f"  Start: {start_point}")
+    print(f"  End:   {end_point}")
+
+    # --------------------------------------------------------------
+    # Load graphs
+    # --------------------------------------------------------------
+
+    print("\nLoading baseline graph...")
+
+    baseline_graph = ox.graph_from_xml(
+        "tests/data/baseline.osm",
+        simplify=False,
+    )
+
+    print(f"  Nodes: {len(baseline_graph.nodes):,}")
+    print(f"  Edges: {len(baseline_graph.edges):,}")
+
+    print("\nLoading custom graph...")
+
+    custom_graph = ox.graph_from_xml(
+        "tests/data/custom_network.osm",
+        simplify=False,
+    )
+
+    print(f"  Nodes: {len(custom_graph.nodes):,}")
+    print(f"  Edges: {len(custom_graph.edges):,}")
+
+    # --------------------------------------------------------------
+    # Add speeds and travel times
+    # --------------------------------------------------------------
+
+    print("\nCalculating edge speeds/travel times...")
+
+    baseline_graph = add_travel_times(
+        baseline_graph
+    )
+
+    custom_graph = add_travel_times(
+        custom_graph
+    )
+
+    # --------------------------------------------------------------
+    # Calculate routes
+    # --------------------------------------------------------------
+
+    print("\nCalculating baseline route...")
+
+    baseline_route, baseline_time = calculate_route(
+        baseline_graph,
+        start_point,
+        end_point,
+    )
+
+    print("\nCalculating custom route...")
+
+    custom_route, custom_time = calculate_route(
+        custom_graph,
+        start_point,
+        end_point,
+    )
+
+    # --------------------------------------------------------------
+    # Results
+    # --------------------------------------------------------------
+
+    print("\n========================================")
+    print("           ROUTING COMPARISON")
+    print("========================================")
+
+    print(
+        f"Baseline route: "
+        f"{baseline_time:.1f} seconds "
+        f"({baseline_time / 60:.1f} minutes)"
+    )
+
+    print(
+        f"Custom route:   "
+        f"{custom_time:.1f} seconds "
+        f"({custom_time / 60:.1f} minutes)"
+    )
+
+    print(f"\nBaseline nodes: {len(baseline_route)}")
+    print(f"Custom nodes:   {len(custom_route)}")
+
+    print("========================================")
+
+
+if __name__ == "__main__":
+    main()
+==================== tests/test_plan_integration.txt ====================
+                 baseline.osm
+                     │
+                     ▼
+                OSMnx graph
+                     │
+             START ──┴── END
+                     │
+                     ▼
+              baseline route
+                     │
+                     ▼
+                baseline_distance
+
+
+custom_network.geojson
+          │
+          ▼
+     NetworkForge
+          │
+          ▼
+     proposed.osm
+          │
+          ▼
+      OSMnx graph
+          │
+      START ── END
+          │
+          ▼
+      new route
+          │
+          ▼
+       new_distance
+
+assert new_distance < baseline_distance
+assert custom_network_is_used
+==================== tests/test_plan_structural.txt ====================
+assert all_edges_have_valid_nodes
+assert no_u_equals_v
+assert all_custom_edges_are_connected

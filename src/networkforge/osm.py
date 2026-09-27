@@ -1,9 +1,18 @@
 import os
+
 os.environ['USE_PYGEOS'] = '0'
 import geopandas as gpd
 import osmnx as ox
 from pyproj import CRS
-from .projection import get_analysis_crs
+
+from .modes import keep_mode_tags
+
+# OSMnx's built-in network filters, applied in the Overpass query.
+# "all" (the default) keeps every mode's ways plus their access tags,
+# so one build can be routed for any mode later (see modes.py).
+# Narrower types drop ways at download, and custom lines can then
+# only be joined to what's left.
+NETWORK_TYPES = ("all", "all_public", "bike", "drive", "drive_service", "walk")
 
 
 def configure_osmnx_cache() -> None:
@@ -26,6 +35,16 @@ def get_osm_data_from_bbox(
     network_type: str = "all",
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Download an OSM network within a bounding box."""
+
+    if network_type not in NETWORK_TYPES:
+        raise ValueError(
+            f"Unknown network_type {network_type!r}. "
+            f"Choose one of: {', '.join(NETWORK_TYPES)}"
+        )
+
+    # Keep motor_vehicle / foot / bicycle etc., which OSMnx drops by
+    # default, so access restrictions survive into the export.
+    keep_mode_tags()
 
     bbox_wgs84 = bbox.to_crs("EPSG:4326")
 

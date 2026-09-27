@@ -1,0 +1,220 @@
+"""
+Offline integration tests on a hand-built OSM network (see grid.py).
+
+Run with: uv run pytest tests/integration/test_synthetic_grid.py -v
+
+Every integration rule is checked exactly: junctions, snapping, node
+ids, access tags, mode isolation and before/after routing.
+"""
+
+import pytest
+
+from networkforge.modes import usable_modes
+from tests.helpers import (
+    ROUTING_MODES,
+    assert_valid_osm_xml,
+    custom_pairs,
+    read_osm_xml,
+    route_cost,
+)
+from tests.integration.grid import (
+    BUS_GATE,
+    DIAGONAL,
+    FOOTWAY,
+    ROAD_ACROSS,
+    ROAD_TAGS,
+    ROAD_TO_MOTORWAY,
+    X0,
+    Y0,
+    N,
+    all_pair_costs,
+    node_id,
+)
+
+
+def osm_edge_nodes(edges, highway):
+    rows = edges[(edges["highway"] == highway) & (edges["custom"] != "yes")]
+    return set(rows["u"]) | set(rows["v"])
+
+
+def custom_edge_nodes(edges):
+    rows = edges[edges["custom"] == "yes"]
+    return set(rows["u"]) | set(rows["v"])
+
+
+# ---------------------------------------------------------------------
+# Topology: how custom lines join the network
+# ---------------------------------------------------------------------
+
+def test_node_ids_are_unique_and_export_is_valid(build):
+    result = build([(ROAD_ACROSS, ROAD_TAGS)])
+
+    assert result.nodes.index.is_unique, (
+        "custom node ids collide with OSM node ids: "
+        f"{sorted(result.nodes.index[result.nodes.index.duplicated()])}"
+    )
+    assert_valid_osm_xml(result.baseline_path)
+    assert_valid_osm_xml(result.custom_path)
+
+
+def test_custom_road_joins_every_street_it_crosses(build):
+    edges = build([(ROAD_ACROSS, ROAD_TAGS)]).edges
+
+    osm_rows = edges[edges["custom"] != "yes"]
+    osm_nodes = set(osm_rows["u"]) | set(osm_rows["v"])
+    junctions = custom_edge_nodes(edges) & osm_nodes
+
+    assert len(junctions) == N, f"expected {N} crossings, got {len(junctions)}"
+
+
+def test_crossing_a_footway_splits_it_at_a_shared_node(build):
+    edges = build([(ROAD_ACROSS, ROAD_TAGS)]).edges
+
+    footway_nodes = osm_edge_nodes(edges, "footway")
+    crossing = footway_nodes - FOOTWAY
+
+    assert len(crossing) == 1, f"footway should gain one node, got {footway_nodes}"
+    assert crossing <= custom_edge_nodes(edges)
+
+
+def test_line_ending_near_a_node_snaps_to_it_without_a_gap(build):
+    edges = build([(DIAGONAL, {"highway": "cycleway"})]).edges
+
+    custom = edges[edges["custom"] == "yes"]
+    assert [set(pair) for pair in zip(custom["u"], custom["v"], strict=True)] == [
+        {node_id(2, 2), node_id(3, 3)}
+    ]
+
+
+@pytest.mark.xfail(strict=True, reason="grade separation not implemented yet")
+def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
+    edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
+
+    shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
+    assert not shared, f"at-grade junction(s) with motorway at node(s) {shared}"
+
+
+# ---------------------------------------------------------------------
+# Access rules: which modes may use what
+# ---------------------------------------------------------------------
+
+def test_access_restrictions_survive_export(build):
+    result = build([(ROAD_ACROSS, ROAD_TAGS)])
+    bus_gate = tuple(sorted(BUS_GATE))
+
+    for which, path in (("baseline", result.baseline_path),
+                        ("custom", result.custom_path)):
+        _, ways = read_osm_xml(path)
+        assert any(tags.get("motor_vehicle") == "no" for _, tags in ways), (
+            f"{which}: motor_vehicle=no was lost on export"
+        )
+        assert not result.graph(which, "drive").has_edge(*bus_gate)
+        assert result.graph(which, "walk").has_edge(*bus_gate)
+
+
+@pytest.mark.parametrize("features, allowed", [
+    ([(ROAD_ACROSS, ROAD_TAGS)], {"drive", "bike", "walk"}),
+    ([(DIAGONAL, {"highway": "cycleway"})], {"bike"}),
+    ([(DIAGONAL, {"highway": "footway"})], {"walk"}),
+    ([(ROAD_ACROSS, {**ROAD_TAGS, "motor_vehicle": "no"})], {"bike", "walk"}),
+], ids=["road", "cycleway", "footway", "road-no-cars"])
+def test_custom_edges_only_routable_by_allowed_modes(build, features, allowed):
+    result = build(features)
+
+    for mode in ROUTING_MODES:
+        present = bool(custom_pairs(result.graph("custom", mode)))
+        assert present == (mode in allowed), (
+            f"{mode}: custom edges {'present' if present else 'missing'}"
+        )
+
+
+def test_per_feature_tags_override_defaults(build):
+    result = build(
+        [(ROAD_ACROSS, {}), (DIAGONAL, {"highway": "footway"})],
+        network_tags=ROAD_TAGS,
+    )
+
+    custom = result.edges[result.edges["custom"] == "yes"]
+    assert set(custom["highway"]) == {"primary", "footway"}
+
+
+def test_bad_tags_fail_before_downloading(build, fake_osm):
+    with pytest.raises(ValueError, match="not usable in network_type='drive'"):
+        build([(DIAGONAL, {"highway": "cycleway"})], network_type="drive")
+
+    assert fake_osm == [], "the OSM download ran despite invalid custom tags"
+
+
+# ---------------------------------------------------------------------
+# Routing: before vs after
+# ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("mode", ROUTING_MODES)
+def test_adding_a_road_never_makes_any_route_worse(build, mode):
+    result = build([(ROAD_ACROSS, ROAD_TAGS)])
+
+    before = all_pair_costs(result.graph("baseline", mode), mode)
+    after = all_pair_costs(result.graph("custom", mode), mode)
+
+    worse = {pair: (before[pair], after[pair])
+             for pair in before if after[pair] > before[pair] + 1e-6}
+    assert not worse, f"{mode}: {len(worse)} route(s) got worse, e.g. {list(worse.items())[:3]}"
+
+
+@pytest.mark.parametrize("mode", ["drive", "walk"])
+def test_cycleway_leaves_other_modes_unchanged(build, mode):
+    result = build([(DIAGONAL, {"highway": "cycleway"})])
+
+    before = all_pair_costs(result.graph("baseline", mode), mode)
+    after = all_pair_costs(result.graph("custom", mode), mode)
+
+    changed = {pair: (before[pair], after[pair])
+               for pair in before if after[pair] != pytest.approx(before[pair])}
+    assert not changed, f"{mode}: {len(changed)} route(s) changed, e.g. {list(changed.items())[:3]}"
+
+
+def test_cycleway_shortcut_shortens_bike_route(build):
+    result = build([(DIAGONAL, {"highway": "cycleway"})])
+    a, b = node_id(2, 2), node_id(3, 3)
+
+    before = route_cost(result.graph("baseline", "bike"), a, b, "bike")
+    after = route_cost(result.graph("custom", "bike"), a, b, "bike")
+
+    assert before == pytest.approx(200, abs=1)
+    assert after == pytest.approx(141.4, abs=1)
+
+
+# Found by Hypothesis (tests/integration/test_properties.py) and kept as
+# fixed regression cases. Each once bent or rewired an existing street.
+NEAR_MISS_CASES = {
+    # Bend 0.95 m from node 2; the crossing of street 1-2 lands 0.94 m
+    # from the bend, and street 2-3 got re-attached to it (+3.6 m).
+    "bend-near-node": ([(X0, Y0), (X0 + 99.1, Y0 + 0.3), (X0 - 50, Y0 - 50)], ROAD_TAGS),
+    # Ends 0.9 m from streets 1-2 and 1-6 (1.27 m from node 1): both
+    # streets bent to the end point, a shortcut past node 1 for walkers.
+    "end-near-corner": ([(X0 + 100, Y0), (X0 + 0.9, Y0 + 0.9)], {"highway": "cycleway"}),
+    # Ends 0.9 m beside street 2-7: the street bent out to meet it.
+    "end-beside-street": ([(X0, Y0), (X0 + 100.9, Y0 + 1.5)], ROAD_TAGS),
+}
+
+
+@pytest.mark.parametrize("case", NEAR_MISS_CASES)
+@pytest.mark.parametrize("mode", ROUTING_MODES)
+def test_near_miss_never_bends_existing_streets(build, case, mode):
+    coords, tags = NEAR_MISS_CASES[case]
+    result = build([(coords, tags)])
+
+    before = all_pair_costs(result.graph("baseline", mode), mode)
+    after = all_pair_costs(result.graph("custom", mode), mode)
+
+    if mode in usable_modes(tags):
+        bad = {p: (before[p], after[p]) for p in before if after[p] > before[p] + 1e-6}
+    else:
+        bad = {p: (before[p], after[p]) for p in before
+               if after[p] != pytest.approx(before[p], abs=1e-6)}
+    assert not bad, f"{mode}: {list(bad.items())[:3]}"
+
+
+def test_line_shorter_than_snap_tolerance_is_rejected(build):
+    with pytest.raises(ValueError, match="shorter than snap_tolerance"):
+        build([([(X0, Y0), (X0, Y0 + 0.3)], ROAD_TAGS)])
