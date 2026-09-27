@@ -11,6 +11,66 @@ from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
 ON_LINE_TOLERANCE = 1e-6
 
 
+# Highway types that never have at-grade junctions. Trunk roads are left
+# out on purpose: many (e.g. UK A roads) have ordinary junctions.
+GRADE_SEPARATED_HIGHWAYS = {"motorway", "motorway_link"}
+
+
+def _tag_present(value) -> bool:
+    """True for a real tag value other than 'no' (None/NaN = absent)."""
+    if value is None or (isinstance(value, float) and value != value):
+        return False
+    return str(value) != "no"
+
+
+def _layer(tags) -> int:
+    try:
+        return int(float(tags.get("layer")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_grade_separated(tags) -> bool:
+    """
+    A way that other ways cross over/under rather than join: motorways
+    and their slip roads, bridges and tunnels. `tags` is a dict or a
+    row (Series) of tag values.
+    """
+    return (
+        tags.get("highway") in GRADE_SEPARATED_HIGHWAYS
+        or _tag_present(tags.get("bridge"))
+        or _tag_present(tags.get("tunnel"))
+    )
+
+
+def crosses_at_grade(tags_a, tags_b) -> bool:
+    """True if two ways that cross should get a junction at the crossing."""
+    return (
+        not is_grade_separated(tags_a)
+        and not is_grade_separated(tags_b)
+        and _layer(tags_a) == _layer(tags_b)
+    )
+
+
+def joinable_network(
+    nodes_gdf: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """
+    The part of the OSM network a custom line may join mid-way:
+    edges that aren't grade-separated, and the nodes on them. (A custom
+    line may still END on a grade-separated way - e.g. a new slip road.)
+    """
+    separated = edges_gdf["highway"].astype(str).isin(GRADE_SEPARATED_HIGHWAYS)
+    for key in ("bridge", "tunnel"):
+        if key in edges_gdf.columns:
+            separated |= edges_gdf[key].map(_tag_present).astype(bool)
+
+    edges = edges_gdf[~separated]
+    nodes = nodes_gdf[nodes_gdf.index.isin(set(edges["u"]) | set(edges["v"]))]
+    return nodes, edges
+
+
 def validate_projected_crs(gdf: gpd.GeoDataFrame) -> None:
     """
     Ensure a GeoDataFrame has a projected CRS suitable for
@@ -160,20 +220,42 @@ def snap_line_vertices_to_network(
 ) -> gpd.GeoDataFrame:
     """
     Snap each vertex of each (single-part) line onto the existing
-    network (see snap_points_to_network). Repeated vertices this
-    creates are removed; a line that collapses to one point is dropped.
+    network (see snap_points_to_network). A line's two end points may
+    snap to anything; its middle vertices only to ways it can join
+    at-grade (see joinable_network), and not at all if the line is
+    itself grade-separated (e.g. tagged bridge=yes).
+
+    Repeated vertices this creates are removed; a line that collapses
+    to one point is dropped.
     """
 
     lines = lines_gdf.reset_index(drop=True)
 
-    line_numbers, vertices = [], []
-    for number, line in enumerate(lines.geometry):
-        for coord in line.coords:
+    line_numbers, vertices, is_end, line_separated = [], [], [], []
+    for number, (line, (_, row)) in enumerate(zip(lines.geometry, lines.iterrows(), strict=True)):
+        coords = list(line.coords)
+        for position, coord in enumerate(coords):
             line_numbers.append(number)
             vertices.append(Point(coord))
+            is_end.append(position in (0, len(coords) - 1))
+            line_separated.append(is_grade_separated(row))
 
-    points = gpd.GeoDataFrame({"line": line_numbers}, geometry=vertices, crs=lines.crs)
-    points = snap_points_to_network(points, nodes_gdf, edges_gdf, tolerance)
+    points = gpd.GeoDataFrame(
+        {"line": line_numbers, "is_end": is_end, "separated": line_separated},
+        geometry=vertices,
+        crs=lines.crs,
+    )
+
+    joinable_nodes, joinable_edges = joinable_network(nodes_gdf, edges_gdf)
+    ends = points["is_end"]
+    middles = ~points["is_end"] & ~points["separated"]
+
+    points.loc[ends, "geometry"] = snap_points_to_network(
+        points[ends], nodes_gdf, edges_gdf, tolerance
+    ).geometry.values
+    points.loc[middles, "geometry"] = snap_points_to_network(
+        points[middles], joinable_nodes, joinable_edges, tolerance
+    ).geometry.values
 
     new_geometries = []
     for number in range(len(lines)):
@@ -198,6 +280,10 @@ def create_points_from_gdf(
 ) -> gpd.GeoDataFrame:
     """
     Create points from intersections and vertices of custom lines.
+
+    Only at-grade crossings become points (see crosses_at_grade): a
+    custom line crossing a motorway, bridge or tunnel - or tagged as a
+    bridge/tunnel itself - passes over/under without a junction.
     """
 
     validate_projected_crs(lines_gdf)
@@ -220,7 +306,7 @@ def create_points_from_gdf(
         ]
 
         for j, line2 in precise_matches.iterrows():
-            if i != j:
+            if i != j and crosses_at_grade(line1, line2):
                 intersection = line1.geometry.intersection(
                     line2.geometry
                 )
@@ -249,6 +335,33 @@ def create_points_from_gdf(
     )
 
     return points_gdf.drop_duplicates().reset_index(drop=True)
+
+
+#@log_time
+def snap_crossings_to_network(
+    points_gdf: gpd.GeoDataFrame,
+    custom_lines_gdf: gpd.GeoDataFrame,
+    nodes_gdf: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+    tolerance: float,
+) -> gpd.GeoDataFrame:
+    """
+    Snap crossing points onto the joinable OSM network (a crossing
+    within tolerance of a node moves onto the node). Custom line
+    vertices are left alone: snap_line_vertices_to_network already put
+    them where they belong.
+    """
+
+    vertices = {coord for line in custom_lines_gdf.geometry for coord in line.coords}
+    points = points_gdf.reset_index(drop=True)
+    is_vertex = points.geometry.map(lambda p: (p.x, p.y) in vertices).astype(bool)
+
+    joinable_nodes, joinable_edges = joinable_network(nodes_gdf, edges_gdf)
+    crossings = snap_points_to_network(
+        points[~is_vertex], joinable_nodes, joinable_edges, tolerance
+    )
+
+    return pd.concat([points[is_vertex], crossings]).drop_duplicates().reset_index(drop=True)
 
 
 #@log_time

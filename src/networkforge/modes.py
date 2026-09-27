@@ -61,13 +61,13 @@ def mode_tag_keys() -> set[str]:
 
 def keep_mode_tags() -> None:
     """
-    Make OSMnx keep every access-relevant tag on ways. By default it
-    discards e.g. motor_vehicle, foot and bicycle, which silently
-    removes restrictions from the network. Must be called before any
+    Make OSMnx keep every access-relevant tag on ways, plus layer (for
+    grade separation). By default it discards e.g. motor_vehicle, foot
+    and bicycle, which silently removes restrictions from the network. Must be called before any
     graph is downloaded or loaded from XML.
     """
     ox.settings.useful_tags_way = sorted(
-        set(ox.settings.useful_tags_way) | mode_tag_keys() | {"nf:custom"}
+        set(ox.settings.useful_tags_way) | mode_tag_keys() | {"nf:custom", "layer"}
     )
 
 

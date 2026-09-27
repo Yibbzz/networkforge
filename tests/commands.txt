@@ -1,0 +1,13 @@
+Running tests locally
+
+  uv run pytest                          # offline suite: unit + synthetic grid + property tests (~30 s)
+  uv run pytest -m network               # live OSM tests in real cities (~4 min, needs internet)
+  uv run pytest -m ""                    # everything
+  uv run pytest --cov                    # offline suite + coverage report (fails under 85%)
+  uv run ruff check .                    # lint
+
+  uv run pytest tests/unit               # just one folder
+  uv run pytest -k snap                  # only tests with "snap" in the name
+  uv run pytest -x --lf                  # re-run last failures, stop at the first
+  HYPOTHESIS_PROFILE=thorough uv run pytest tests/integration/test_properties.py   # 500 random lines
+  NF_TEST_SEED=7 uv run pytest -m network tests/live/test_cities.py                # different random lines

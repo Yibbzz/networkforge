@@ -14,8 +14,8 @@ from .topology import (
     create_points_from_gdf,
     filter_split_lines,
     remove_duplicates_and_combine_nodes,
+    snap_crossings_to_network,
     snap_line_vertices_to_network,
-    snap_points_to_network,
     split_lines_with_buffered_points,
     update_and_finalize_lines_gdf,
     validate_user_osm_intersection,
@@ -220,14 +220,14 @@ def build_network(
         combined_gdf
     )
 
-    # Junction points near the OSM network are moved onto it before
-    # splitting (see snap_points_to_network).
-    custom_points_gdf = snap_points_to_network(
+    # Crossings near an OSM node are moved onto it before splitting.
+    custom_points_gdf = snap_crossings_to_network(
         custom_points_gdf,
+        custom_data_gdf,
         nodes_gdf,
         edges_gdf,
         snap_tolerance,
-    ).drop_duplicates().reset_index(drop=True)
+    )
 
     print(f"      Topology points: {len(custom_points_gdf):,}")
 

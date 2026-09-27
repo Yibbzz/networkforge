@@ -86,12 +86,48 @@ def test_line_ending_near_a_node_snaps_to_it_without_a_gap(build):
     ]
 
 
-@pytest.mark.xfail(strict=True, reason="grade separation not implemented yet")
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
     edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
 
     shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
     assert not shared, f"at-grade junction(s) with motorway at node(s) {shared}"
+
+
+def test_custom_road_ending_on_a_motorway_joins_it(build):
+    """A line drawn to END on a motorway is deliberate, e.g. a new slip road."""
+    slip_road = [(X0 + 400, Y0 + 100), (X0 + 500, Y0 + 200)]  # node 10 -> motorway
+    edges = build([(slip_road, ROAD_TAGS)]).edges
+
+    shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
+    assert len(shared) == 1
+
+
+def test_middle_vertex_near_a_motorway_does_not_snap_onto_it(build):
+    """Only a line's END points may snap onto a grade-separated way."""
+    bend_near_motorway = [(X0 + 400, Y0 + 100), (X0 + 499.5, Y0 + 150), (X0 + 400, Y0 + 200)]
+    edges = build([(bend_near_motorway, ROAD_TAGS)]).edges
+
+    shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
+    assert not shared
+
+
+def test_custom_bridge_crosses_streets_without_joining_them(build):
+    """Diagonal from node 1 to node 25 passes over nodes 7, 13 and 19."""
+    bridge = [(X0, Y0), (X0 + 400, Y0 + 400)]
+    edges = build([(bridge, {**ROAD_TAGS, "bridge": "yes", "layer": "1"})]).edges
+
+    custom = edges[edges["custom"] == "yes"]
+    assert [set(pair) for pair in zip(custom["u"], custom["v"], strict=True)] == [
+        {node_id(0, 0), node_id(4, 4)}
+    ]
+
+
+def test_custom_road_on_a_different_layer_does_not_join(build):
+    edges = build([(ROAD_ACROSS, {**ROAD_TAGS, "layer": "-1"})], strict=False).edges
+
+    osm_rows = edges[edges["custom"] != "yes"]
+    junctions = custom_edge_nodes(edges) & (set(osm_rows["u"]) | set(osm_rows["v"]))
+    assert not junctions
 
 
 # ---------------------------------------------------------------------

@@ -35,8 +35,7 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   motorway, small node ids); `conftest.py` monkeypatches `ox.graph_from_bbox` to return it
   (`fake_osm`, `build` fixtures). `test_synthetic_grid.py` = exact rule checks + regression cases
   Hypothesis found; `test_properties.py` = Hypothesis random custom lines, checks invariants.
-  Motorway grade separation is an xfail(strict).
-- `live/` - `network` marker: `test_cities.py` (3 cities x road/cycleway/footway, seeded via
+  - `live/` - `network` marker: `test_cities.py` (3 cities x road/cycleway/footway, seeded via
   `NF_TEST_SEED`, invariants only) and `test_structural_invariants.py` (full demo extent).
 - `helpers.py` - build/export/load/route helpers shared by integration and live tests.
 - `conftest.py` - Hypothesis profiles via `HYPOTHESIS_PROFILE`: dev (20), ci (50), thorough (500).
@@ -59,5 +58,7 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   within `snap_tolerance`, onto the nearest OSM node, else onto the nearest OSM edge. OSM lines are
   only split at points exactly on them; only custom lines bend to meet a junction. Splitting OSM
   streets at nearby-but-off-line points bent them and created shortcuts (found by Hypothesis).
-- Custom lines join every OSM way they cross at-grade. Fine for footways (a crossing), wrong for
-  motorways/trunks/bridges/tunnels - not handled yet; diagnose_custom_network.py flags them.
+- Grade separation (topology.py): crossings only become junctions if `crosses_at_grade` - neither
+  way is motorway/motorway_link/bridge/tunnel and `layer` matches (applies to custom features too, e.g.
+  bridge=yes). A custom line's END points may still join a grade-separated way (slip roads); middle
+  vertices only snap to `joinable_network`. Trunk is deliberately treated as at-grade.

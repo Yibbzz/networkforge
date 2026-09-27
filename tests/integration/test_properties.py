@@ -16,11 +16,11 @@ import math
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from networkforge.modes import usable_modes
 from tests.helpers import ROUTING_MODES, assert_valid_osm_xml, custom_pairs
-from tests.integration.grid import ROAD_TAGS, SPACING, X0, Y0, N, all_pair_costs
+from tests.integration.grid import MOTORWAY_NODES, ROAD_TAGS, SPACING, X0, Y0, N, all_pair_costs
 
 # Snapping moves a join by < 1 m (snap_tolerance), which can change a
 # route by a few centimetres (or ~0 s) - never more than this.
@@ -31,6 +31,7 @@ NEAR_NODE_OFFSETS = [0.0, 0.3, -0.3, 0.9, -0.9, 1.5, -1.5]
 SNAPPING_OFFSETS = [0.0, 0.3, -0.3, 0.9, -0.9]
 
 MIN_LINE_LENGTH = 2.0
+SNAP_TOLERANCE = 1.0  # build_network default
 
 TAG_SETS = [
     ROAD_TAGS,
@@ -39,6 +40,7 @@ TAG_SETS = [
     {"highway": "footway"},
     {"highway": "path"},
     {"highway": "primary", "motor_vehicle": "no"},
+    {**ROAD_TAGS, "bridge": "yes", "layer": "1"},
 ]
 
 
@@ -51,8 +53,9 @@ def near_node(offsets):
     )
 
 
+# x reaches past the motorway at X0 + 500.
 anywhere = st.tuples(
-    st.floats(X0 - 50, X0 + 450, allow_nan=False),
+    st.floats(X0 - 50, X0 + 550, allow_nan=False),
     st.floats(Y0 - 50, Y0 + 450, allow_nan=False),
 )
 
@@ -111,3 +114,18 @@ def test_integration_rules_hold_for_any_custom_lines(build, features):
 
     allowed = {mode for _, tags in features for mode in usable_modes(tags)}
     assert_routes(result, allowed)
+    assert_motorway_only_joined_at_line_ends(result, features)
+
+
+def assert_motorway_only_joined_at_line_ends(result, features):
+    """Grade separation: crossing a motorway never creates a junction."""
+    edges = result.edges
+    motorway = edges[(edges["highway"] == "motorway") & (edges["custom"] != "yes")]
+    new_nodes = (set(motorway["u"]) | set(motorway["v"])) - set(MOTORWAY_NODES)
+
+    ends = [Point(coords[i]) for coords, _ in features for i in (0, -1)]
+    for node in new_nodes:
+        position = result.nodes.geometry.loc[node]
+        assert min(position.distance(end) for end in ends) <= SNAP_TOLERANCE, (
+            f"motorway joined at {position}, which is not a custom line end"
+        )

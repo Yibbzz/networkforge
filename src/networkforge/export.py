@@ -140,6 +140,7 @@ def write_osm_xml(
         "service": "service",
         "bridge": "bridge",
         "tunnel": "tunnel",
+        "layer": "layer",
         "junction": "junction",
         "surface": "surface",
         "width": "width",

@@ -33,6 +33,12 @@ Tags on each custom feature override `network_tags`. Invalid or
 unusable tags stop the build before anything is downloaded
 (`strict=False` turns that into warnings).
 
+Custom lines join every street they cross, except where either side
+is grade-separated: motorways, motorway slip roads, bridges, tunnels,
+or a different `layer`. Tag a custom feature `bridge=yes` (or give it
+a `layer`) to take it over the streets below. A line that *ends* on a
+motorway still joins it, so new slip roads work.
+
 ## Tests
 
 ```bash

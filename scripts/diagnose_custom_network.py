@@ -17,8 +17,8 @@ needed) and prints a report covering:
                           custom ways, and the speed OSMnx assigns.
   4. Connectivity       - custom edges sit in the main strongly
                           connected component; junctions with OSM
-                          ways, flagging at-grade joins with
-                          motorways / trunks / bridges / tunnels.
+                          ways, flagging any join with a motorway /
+                          bridge / tunnel part-way along a custom line.
   5. Routing            - fastest route start->end with no mode
                           filter vs per mode, and a "what speed
                           would the custom road need to win" estimate.
@@ -37,15 +37,11 @@ from networkforge.modes import (
     keep_mode_tags,
     usable_modes,
 )
+from networkforge.topology import is_grade_separated
 
 OSM_FILE = "tests/data/custom_network.osm"
 START_FILE = "tests/data/start_point.geojson"
 END_FILE = "tests/data/end_point.geojson"
-
-# Roads that are normally grade-separated: an at-grade junction with
-# one of these is almost always a modelling error.
-GRADE_SEPARATED_HIGHWAYS = {"motorway", "motorway_link", "trunk", "trunk_link"}
-
 
 def header(title):
     print(f"\n=== {title} " + "=" * max(0, 56 - len(title)))
@@ -146,21 +142,34 @@ def check_connectivity(graph, custom_edges):
     ]
     print(f"  {len(junctions)} of {len(custom_nodes)} custom nodes are junctions with OSM ways")
 
+    # A custom node with one custom neighbour is the end of a custom line.
+    custom_neighbours = collections.defaultdict(set)
+    for u, v in custom_pairs:
+        custom_neighbours[u].add(v)
+        custom_neighbours[v].add(u)
+
     junction_types = collections.Counter()
-    grade_separated = set()
+    separated_at_end, separated_mid_line = set(), set()
     for n in junctions:
-        for nb in graph.successors(n):
-            if (n, nb) not in custom_pairs:
-                for d in graph[n][nb].values():
-                    junction_types[str(d.get("highway"))] += 1
-                    if (d.get("highway") in GRADE_SEPARATED_HIGHWAYS
-                            or d.get("bridge") not in (None, "no")
-                            or d.get("tunnel") not in (None, "no")):
-                        grade_separated.add(n)
+        osm_ways = [
+            d for nb in graph.successors(n) if (n, nb) not in custom_pairs
+            for d in graph[n][nb].values()
+        ]
+        junction_types.update(str(d.get("highway")) for d in osm_ways)
+        # Only a problem if EVERY OSM way here is grade-separated: a node
+        # where e.g. an ordinary street meets a tunnel portal is a real,
+        # at-grade junction with the street.
+        if all(is_grade_separated(d) for d in osm_ways):
+            if len(custom_neighbours[n]) == 1:
+                separated_at_end.add(n)
+            else:
+                separated_mid_line.add(n)
     print(f"  joined to highway types: {dict(junction_types.most_common(8))}")
-    (warn if grade_separated else ok)(
-        f"{len(grade_separated)} at-grade junctions with motorways/trunks/bridges/tunnels "
-        "(each lets traffic switch roads where it physically can't)"
+    print(f"  {len(separated_at_end)} custom line end(s) join a motorway/bridge/tunnel "
+          "(deliberate, e.g. a slip road)")
+    (fail if separated_mid_line else ok)(
+        f"{len(separated_mid_line)} junctions with motorways/bridges/tunnels part-way "
+        "along a custom line (crossings should pass over/under)"
     )
 
 
