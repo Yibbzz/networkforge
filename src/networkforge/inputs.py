@@ -18,15 +18,25 @@ log = logging.getLogger(__name__)
 
 LINE_TYPES = {"LineString", "MultiLineString"}
 
-# Above this, Overpass downloads get slow and may be refused.
-LARGE_AREA_KM2 = 1000
+# Largest bounding box downloaded from the Overpass API. Overpass is a
+# free shared service (roughly 10,000 queries or 1 GB a day per user);
+# bigger areas must come from a local extract (osm_source=...), which
+# is also faster and gives the same data every run.
+MAX_OVERPASS_AREA_KM2 = 1000
+
+# With a local extract there's no limit, but warn: memory and time grow.
+LARGE_LOCAL_AREA_KM2 = 10_000
 
 # How many offending feature ids to list in a message.
 MAX_LISTED = 10
 
 
-def check_bbox(bbox_gdf) -> None:
-    """The bounding box must be a GeoDataFrame with geometry and a CRS."""
+def check_bbox(bbox_gdf, local_source: bool = False) -> None:
+    """
+    The bounding box must be a GeoDataFrame with geometry and a CRS,
+    and no bigger than MAX_OVERPASS_AREA_KM2 unless the OSM data comes
+    from a local file (local_source=True).
+    """
 
     if not isinstance(bbox_gdf, gpd.GeoDataFrame):
         raise InputError(
@@ -45,10 +55,27 @@ def check_bbox(bbox_gdf) -> None:
 
     projected = bbox_gdf.to_crs(bbox_gdf.estimate_utm_crs())
     area_km2 = box(*projected.total_bounds).area / 1e6
-    if area_km2 > LARGE_AREA_KM2:
-        log.warning(
-            "The bounding box covers %.0f km2. Downloads over ~%d km2 are slow "
-            "and may be refused by the Overpass API.", area_km2, LARGE_AREA_KM2,
+
+    if local_source:
+        if area_km2 > LARGE_LOCAL_AREA_KM2:
+            log.warning("The bounding box covers %.0f km2; expect a long build and "
+                        "high memory use.", area_km2)
+        return
+
+    if area_km2 > MAX_OVERPASS_AREA_KM2:
+        west, south, east, north = bbox_gdf.to_crs("EPSG:4326").total_bounds
+        raise InputError(
+            f"The bounding box covers {area_km2:,.0f} km2, more than the "
+            f"{MAX_OVERPASS_AREA_KM2:,} km2 NetworkForge will download from the shared "
+            "Overpass API. Use a local OSM extract instead:\n"
+            "  1. Download one covering the area, e.g. from "
+            "https://download.geofabrik.de (countries and regions, updated daily)\n"
+            "     or https://extract.bbbike.org (draw your own area).\n"
+            "  2. Optionally crop it to your box (faster builds):\n"
+            f"     osmium extract -b {west:.4f},{south:.4f},{east:.4f},{north:.4f} "
+            "region.osm.pbf -o area.osm.pbf\n"
+            "  3. Pass it in: build_network(..., osm_source='area.osm.pbf')",
+            guide="osm-data.md",
         )
 
 

@@ -9,6 +9,7 @@ logging.INFO) in your script to see the build steps.
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
@@ -18,8 +19,8 @@ from .errors import InputError, NetworkIntegrityError
 from .inputs import check_bbox, clean_custom_data
 from .osm import (
     NETWORK_TYPES,
-    configure_osmnx_cache,
     get_osm_data_from_bbox,
+    get_osm_data_from_file,
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
@@ -98,6 +99,7 @@ def build_network(
     *,
     preset: str | None = None,
     overwrite_tags: bool = False,
+    osm_source: str | Path | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[
     gpd.GeoDataFrame,
@@ -130,6 +132,10 @@ def build_network(
         snap_tolerance: metres within which custom lines join the network.
         strict: raise on bad tags, unusable features or structural problems.
             False logs warnings and drops what can't be used instead.
+        osm_source: a local OSM file (.osm.pbf, .osm, ...), e.g. a Geofabrik
+            extract, to read the existing network from instead of the
+            Overpass API. Required for boxes over MAX_OVERPASS_AREA_KM2
+            (see docs/osm-data.md).
         progress: optional callback(step, total_steps, description).
 
     Returns:
@@ -160,7 +166,7 @@ def build_network(
     if not snap_tolerance > 0:
         raise InputError(f"snap_tolerance must be positive, got {snap_tolerance!r}")
 
-    check_bbox(bbox_gdf)
+    check_bbox(bbox_gdf, local_source=osm_source is not None)
     custom_data_gdf = clean_custom_data(custom_data_gdf, bbox_gdf, strict=strict)
 
     analysis_crs = get_analysis_crs(bbox_gdf)
@@ -182,14 +188,21 @@ def build_network(
     # 2. Get the existing OSM network
     # =========================================================
 
-    step(2, "Downloading OSM network")
-
-    configure_osmnx_cache()
-    nodes_gdf, edges_gdf = get_osm_data_from_bbox(
-        bbox_gdf,
-        analysis_crs,
-        network_type=network_type,
-    )
+    if osm_source is not None:
+        step(2, f"Reading OSM network from {Path(osm_source).name}")
+        nodes_gdf, edges_gdf = get_osm_data_from_file(
+            osm_source,
+            bbox_gdf,
+            analysis_crs,
+            network_type=network_type,
+        )
+    else:
+        step(2, "Downloading OSM network")
+        nodes_gdf, edges_gdf = get_osm_data_from_bbox(
+            bbox_gdf,
+            analysis_crs,
+            network_type=network_type,
+        )
 
     log.info("OSM network: %d nodes, %d edges", len(nodes_gdf), len(edges_gdf))
 

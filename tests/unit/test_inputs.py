@@ -38,10 +38,31 @@ def test_bbox_needs_a_crs():
         check_bbox(gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)]))
 
 
-def test_large_bbox_warns(caplog):
-    check_bbox(gpd.GeoDataFrame(geometry=[box(0, 0, 50_000, 50_000)], crs=CRS))
-    area = int(re.search(r"covers (\d+) km2", caplog.text)[1])
-    assert area > 2000
+LARGE_BBOX = gpd.GeoDataFrame(geometry=[box(0, 0, 50_000, 50_000)], crs=CRS)  # ~2,500 km2
+HUGE_BBOX = gpd.GeoDataFrame(geometry=[box(0, 0, 120_000, 120_000)], crs=CRS)  # ~14,000 km2
+
+
+def test_large_bbox_refused_for_overpass():
+    with pytest.raises(InputError, match="more than the 1,000 km2") as info:
+        check_bbox(LARGE_BBOX)
+
+    message = str(info.value)
+    assert "download.geofabrik.de" in message
+    assert "extract.bbbike.org" in message
+    coordinate = r"-?\d+\.\d{4}"
+    assert re.search(rf"osmium extract -b {','.join([coordinate] * 4)} ", message)
+    assert "osm_source=" in message
+    assert "docs/osm-data.md" in message
+
+
+def test_large_bbox_allowed_with_local_source(caplog):
+    check_bbox(LARGE_BBOX, local_source=True)
+    assert caplog.text == ""
+
+
+def test_huge_bbox_with_local_source_warns(caplog):
+    check_bbox(HUGE_BBOX, local_source=True)
+    assert "long build" in caplog.text
 
 
 # ------------------------------------------------------------------ custom data

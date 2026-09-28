@@ -19,12 +19,17 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
 - `presets.py` - named tag sets (`PRESETS`); no maxspeed on purpose. Every preset must appear in
   the docs/tagging-guide.md table with correct tags and Car/Bike/Walk ticks (test_presets.py checks).
 - `inputs.py` - pre-build checks: bbox/custom GeoDataFrames, CRS, lines only, inside bbox, 2D.
+  Boxes over `MAX_OVERPASS_AREA_KM2` (1,000) are refused unless `osm_source` is given.
 - `errors.py` - exception hierarchy (NetworkForgeError; InputError is also a ValueError). Raise these,
   not bare ValueError/AssertionError; pass `guide=` anchor into docs/tagging-guide.md where useful.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
-- `osm.py` - OSMnx cache config (`NETWORKFORGE_OSMNX_CACHE`) and `get_osm_data_from_bbox`
-  (`network_type` = OSMnx download filter; keep `"all"` so one build serves every mode).
+- `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
+  `NETWORKFORGE_OSMNX_CACHE`) or a local extract (`get_osm_data_from_file`, via `osm_source=`):
+  pyosmium copies filtered ways/nodes in the 500 m-buffered bbox to temp XML, then the same steps as
+  ox.graph_from_polygon (truncate, largest component, street_count). Must match Overpass exactly
+  (tests/live/test_local_extract.py). Ways cut at an extract's edge keep their known runs.
+  `network_type` = OSMnx download filter; keep `"all"` so one build serves every mode.
 - `modes.py` - transport-mode access rules: OSMnx's own network filters (by way type) + the OSM access
   hierarchy (`ACCESS_HIERARCHY`, most specific tag wins; `DENIED_ACCESS`; busways closed unless a
   mode tag opens them; `OPENABLE` e.g. footway+bicycle=designated). OSMnx's own access clauses are
@@ -56,7 +61,9 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
 - CI: `.github/workflows/tests.yml` - ruff + offline tests with coverage (`fail_under` in
   pyproject) on push/PR; live tests + thorough Hypothesis nightly.
 
-Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes, recipes, errors).
+Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes, recipes, errors);
+`docs/osm-data.md` covers Overpass vs local extracts. Error `guide=` is a tagging-guide anchor or
+"file.md#anchor" in docs/.
 Keep it in sync with presets.py/validation.py when tags or messages change.
 
 ## Gotchas

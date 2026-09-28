@@ -13,11 +13,17 @@ docs/tagging-guide.md that explains the fix, where there is one.
     └── NetworkIntegrityError                the built network breaks a structural rule
 """
 
-GUIDE = "docs/tagging-guide.md"
+DOCS = "docs"
+GUIDE = f"{DOCS}/tagging-guide.md"
 
 
 class NetworkForgeError(Exception):
-    """Base class for every error NetworkForge raises on purpose."""
+    """
+    Base class for every error NetworkForge raises on purpose.
+
+    `guide` is a section of the tagging guide ("presets") or another
+    doc in docs/ ("osm-data.md#getting-an-extract").
+    """
 
     def __init__(self, message: str, guide: str | None = None):
         super().__init__(message)
@@ -26,7 +32,8 @@ class NetworkForgeError(Exception):
     def __str__(self) -> str:
         message = super().__str__()
         if self.guide:
-            message += f"\n(see {GUIDE}#{self.guide})"
+            where = f"{DOCS}/{self.guide}" if ".md" in self.guide else f"{GUIDE}#{self.guide}"
+            message += f"\n(see {where})"
         return message
 
 

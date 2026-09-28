@@ -35,6 +35,12 @@ nodes, edges = build_network(bbox, custom)
 write_osm(nodes, edges, "network.osm.pbf")  # or .osm, .osm.gz, .osm.bz2
 ```
 
+**Large areas:** the existing network comes from the shared Overpass
+API, limited to boxes of 1,000 km². For bigger areas (or faster,
+repeatable builds) download an extract, e.g. from
+[Geofabrik](https://download.geofabrik.de), and pass
+`osm_source="region.osm.pbf"`. See [docs/osm-data.md](docs/osm-data.md).
+
 `write_osm` picks the format from the file name. PBF is OpenStreetMap's
 compressed binary format (open, [documented on the OSM wiki](https://wiki.openstreetmap.org/wiki/PBF_Format)),
 several times smaller than XML and what routers such as GraphHopper
