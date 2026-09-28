@@ -78,3 +78,9 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   vertices only snap to `joinable_network`. Trunk is deliberately treated as at-grade.
 - OSMnx can't read PBF: tests convert PBF -> XML with pyosmium before `load_graph`.
 - `oneway:bicycle` is exported, but OSMnx-based routing (`load_graph`) doesn't apply it.
+- Performance: no per-row Python loops (iterrows/apply/.loc per row) over the OSM network - vectorise
+  with shapely/numpy/pandas. Split (`_split_at_points`), node assignment (`nearest_point_ids`, STRtree)
+  and export (`_row_tags`, streamed XML) are vectorised; `create_points_from_gdf` (step 5) still loops
+  over custom lines. The OSMnx download/graph build (~35 s for the demo area) dominates.
+- Export writes booleans as yes/no: OSMnx turns oneway into True/False, and "True" is read back as
+  two-way (OSMnx's oneway check is case-sensitive).

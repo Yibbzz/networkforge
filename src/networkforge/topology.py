@@ -1,7 +1,9 @@
 import logging
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import shapely
 from pyproj import CRS
 from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
 
@@ -401,60 +403,66 @@ def split_lines_with_buffered_points(
     distance = sjoin_lines.geometry.distance(
         points_gdf.geometry.loc[sjoin_lines["index_right"]].set_axis(sjoin_lines.index)
     )
-    sjoin_lines = sjoin_lines[~is_osm | (distance <= ON_LINE_TOLERANCE)]
+    pairs = sjoin_lines[~is_osm | (distance <= ON_LINE_TOLERANCE)]
 
-    sjoin_lines["id"] = sjoin_lines.index
-
-    split_lines_result = []
-    split_ids = []
-
-    for line_id, group in sjoin_lines.groupby("id"):
-        line = lines_gdf.loc[line_id, "geometry"]
-
-        attributes = lines_gdf.loc[line_id].drop("geometry")
-
-        split_points = [
-            points_gdf.loc[idx, "geometry"]
-            for idx in group["index_right"]
-        ]
-
-        split_points.sort(
-            key=lambda point: line.project(point)
-        )
-
-        segments = (
-            [line.coords[0]]
-            + [(point.x, point.y) for point in split_points]
-            + [line.coords[-1]]
-        )
-
-        for i in range(len(segments) - 1):
-            new_line = LineString(
-                [segments[i], segments[i + 1]]
-            )
-
-            new_line_attributes = attributes.copy()
-            new_line_attributes["geometry"] = new_line
-            new_line_attributes["split"] = "yes"
-
-            split_lines_result.append(
-                new_line_attributes
-            )
-
-        split_ids.append(line_id)
-
-    split_lines_gdf = gpd.GeoDataFrame(
-        split_lines_result,
-        geometry="geometry",
-        crs=lines_gdf.crs,
+    split_lines_gdf = _split_at_points(
+        lines_gdf,
+        line_ids=pairs.index.to_numpy(),
+        points=points_gdf.geometry.loc[pairs["index_right"]].to_numpy(),
     )
 
-    non_split_lines_gdf = lines_gdf.drop(split_ids)
+    non_split_lines_gdf = lines_gdf.drop(pd.unique(pairs.index))
 
     return pd.concat(
         [non_split_lines_gdf, split_lines_gdf],
         ignore_index=True,
     )
+
+
+def _split_at_points(
+    lines_gdf: gpd.GeoDataFrame,
+    line_ids: np.ndarray,
+    points: np.ndarray,
+) -> gpd.GeoDataFrame:
+    """
+    Cut each line into straight segments: start -> its points in order
+    along the line -> end. line_ids[i] (a lines_gdf label) is cut at
+    points[i]. Segments keep the line's attributes, plus split="yes".
+
+    Vectorised: one table of every line's vertices, sorted once, then
+    all segments built in a single shapely call.
+    """
+    if len(line_ids) == 0:
+        return lines_gdf.iloc[:0].assign(split=pd.Series(dtype=object))
+
+    unique_ids = np.unique(line_ids)  # sorted: matches groupby order
+    lines = lines_gdf.geometry.loc[line_ids].to_numpy()
+    starts = shapely.get_point(lines_gdf.geometry.loc[unique_ids].to_numpy(), 0)
+    ends = shapely.get_point(lines_gdf.geometry.loc[unique_ids].to_numpy(), -1)
+
+    # Every vertex of every cut line: its start (position -inf), the cut
+    # points (by distance along the line), its end (+inf). A stable sort
+    # keeps equal-distance points in their original order.
+    vertices = pd.DataFrame({
+        "line": np.concatenate([unique_ids, line_ids, unique_ids]),
+        "position": np.concatenate([
+            np.full(len(unique_ids), -np.inf),
+            shapely.line_locate_point(lines, points),
+            np.full(len(unique_ids), np.inf),
+        ]),
+        "x": np.concatenate([shapely.get_x(starts), shapely.get_x(points), shapely.get_x(ends)]),
+        "y": np.concatenate([shapely.get_y(starts), shapely.get_y(points), shapely.get_y(ends)]),
+    }).sort_values(["line", "position"], kind="stable", ignore_index=True)
+
+    # A segment joins each vertex to the next one on the same line.
+    same_line = vertices["line"].to_numpy()[:-1] == vertices["line"].to_numpy()[1:]
+    xy = vertices[["x", "y"]].to_numpy()
+    segments = shapely.linestrings(np.stack([xy[:-1][same_line], xy[1:][same_line]], axis=1))
+
+    split = lines_gdf.loc[vertices["line"].to_numpy()[:-1][same_line]].copy()
+    split["geometry"] = segments
+    split["split"] = "yes"
+    return split.set_geometry("geometry", crs=lines_gdf.crs)
 
 
 def remove_duplicates_and_combine_nodes(
@@ -541,85 +549,53 @@ def filter_split_lines(split_lines_combined_gdf: gpd.GeoDataFrame) -> gpd.GeoDat
         gpd.GeoDataFrame: Filtered GeoDataFrame.
     """
 
-    lines_list = []
+    gdf = split_lines_combined_gdf
+    split = gdf["split"] == "yes" if "split" in gdf.columns else False
+    return gdf[split | gdf["u"].isna() | gdf["v"].isna()]
 
-    for i, row in split_lines_combined_gdf.iterrows():
-        if row['split'] == 'yes' or pd.isna(row['u']) or pd.isna(row['v']):
-            lines_list.append((i, row))
-
-    # Creating a DataFrame from the list of tuples
-    osm_split_lines_gdf = gpd.GeoDataFrame([row for index, row in lines_list],
-                                           index=[index for index, row in lines_list],
-                                           crs=split_lines_combined_gdf.crs)
-
-    return osm_split_lines_gdf
-
-def find_nearest_point_index(
-    point: Point,
+def nearest_point_ids(
+    query: np.ndarray,
     points_gdf: gpd.GeoDataFrame,
-    buffer_distance: float,
-) -> int | None:
+    max_distance: float,
+) -> np.ndarray:
     """
-    Find the nearest point within buffer_distance.
-
-    buffer_distance is measured in the units of the projected
-    analysis CRS, normally metres.
+    For each geometry in `query`, the index label of the nearest point
+    in points_gdf within max_distance (NaN if none). Ties go to the
+    smallest label, so the result doesn't depend on tree order.
     """
+    tree = shapely.STRtree(points_gdf.geometry.to_numpy())
+    query_pos, point_pos = tree.query_nearest(query, max_distance=max_distance)
 
-    sindex = points_gdf.sindex
+    labels = points_gdf.index.to_numpy()[point_pos]
+    nearest = pd.Series(labels).groupby(query_pos).min()
 
-    possible_matches_index = list(
-        sindex.intersection(
-            point.buffer(buffer_distance).bounds
-        )
-    )
+    result = np.full(len(query), np.nan)
+    result[nearest.index.to_numpy()] = nearest.to_numpy()
+    return result
 
-    possible_matches = points_gdf.iloc[
-        possible_matches_index
-    ]
-
-    if possible_matches.empty:
-        return None
-
-    return possible_matches.distance(point).idxmin()
 
 def assign_point_ids_to_lines(
     lines_gdf: gpd.GeoDataFrame,
     points_gdf: gpd.GeoDataFrame,
     buffer_distance: float = 0.1,
 ) -> gpd.GeoDataFrame:
+    """
+    Set each line's u / v to the node nearest its start / end point
+    (within buffer_distance), dropping lines left without both ends or
+    with u == v.
+    """
 
     validate_projected_crs(lines_gdf)
     validate_projected_crs(points_gdf)
 
-    lines_gdf = lines_gdf.copy()
+    geometries = lines_gdf.geometry.to_numpy()
 
-    lines_gdf["start_point"] = lines_gdf.geometry.apply(
-        lambda x: Point(x.coords[0])
+    updated_lines_gdf = lines_gdf.copy()
+    updated_lines_gdf["u"] = nearest_point_ids(
+        shapely.get_point(geometries, 0), points_gdf, buffer_distance
     )
-
-    lines_gdf["end_point"] = lines_gdf.geometry.apply(
-        lambda x: Point(x.coords[-1])
-    )
-
-    lines_gdf["u"] = lines_gdf["start_point"].apply(
-        lambda x: find_nearest_point_index(
-            x,
-            points_gdf,
-            buffer_distance,
-        )
-    )
-
-    lines_gdf["v"] = lines_gdf["end_point"].apply(
-        lambda x: find_nearest_point_index(
-            x,
-            points_gdf,
-            buffer_distance,
-        )
-    )
-
-    updated_lines_gdf = lines_gdf.drop(
-        columns=["start_point", "end_point"]
+    updated_lines_gdf["v"] = nearest_point_ids(
+        shapely.get_point(geometries, -1), points_gdf, buffer_distance
     )
 
     updated_lines_gdf = updated_lines_gdf[

@@ -11,3 +11,11 @@ Running tests locally
   uv run pytest -x --lf                  # re-run last failures, stop at the first
   HYPOTHESIS_PROFILE=thorough uv run pytest tests/integration/test_properties.py   # 500 random lines
   NF_TEST_SEED=7 uv run pytest -m network tests/live/test_cities.py                # different random lines
+
+
+
+  use cases -
+
+  - adding new developments like towns 
+  - adding public transport? is that possible i.e. trains, trams etc?
+  - importing pbf files for areas too big to query

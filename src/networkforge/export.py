@@ -19,11 +19,12 @@ every access tag the mode rules use; node tags (barriers, signals,
 crossings) are NODE_TAGS.
 """
 
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 import geopandas as gpd
+import numpy as np
 import osmium
 import pandas as pd
 
@@ -111,32 +112,42 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         round(max(node_bounds[3], edge_bounds[3]), 7),
     )
 
-    # Plain column lookups rather than itertuples, which can't handle
-    # keys like "sidewalk:left".
-    node_tags = [key for key in NODE_TAGS if key in nodes.columns]
-    node_rows = zip(nodes.index, nodes.geometry, *(nodes[k] for k in node_tags), strict=True)
-    osm_nodes = sorted(
-        (int(node_id), round(point.x, 7), round(point.y, 7), _tags(node_tags, values))
-        for node_id, point, *values in node_rows
-    )
+    node_tags = _row_tags(nodes, {key: key for key in NODE_TAGS})
+    osm_nodes = sorted(zip(
+        nodes.index.astype("int64").tolist(),
+        [round(x, 7) for x in nodes.geometry.x.tolist()],
+        [round(y, 7) for y in nodes.geometry.y.tolist()],
+        node_tags,
+        strict=True,
+    ))
 
-    way_tags = [(column, key) for column, key in way_tag_columns().items()
-                if column in edges.columns]
-    way_rows = zip(edges["u"], edges["v"], *(edges[c] for c, _ in way_tags), strict=True)
+    way_tags = _row_tags(edges, way_tag_columns())
+    refs = zip(edges["u"].astype("int64").tolist(), edges["v"].astype("int64").tolist(),
+               strict=True)
     osm_ways = [
-        (way_id, [int(u), int(v)], _tags([key for _, key in way_tags], values))
-        for way_id, (u, v, *values) in enumerate(way_rows, start=1)
+        (way_id, [u, v], tags)
+        for way_id, ((u, v), tags) in enumerate(zip(refs, way_tags, strict=True), start=1)
     ]
 
     return OSMData(bounds, osm_nodes, osm_ways)
 
 
-def _tags(keys: list[str], values) -> dict[str, str]:
-    tags = {}
-    for key, value in zip(keys, values, strict=True):
-        value = _tag_text(value)
-        if value is not None:
-            tags[key] = value
+def _row_tags(gdf: gpd.GeoDataFrame, columns: dict[str, str]) -> list[dict[str, str]]:
+    """
+    One {osm_key: text} dict per row, for the given column -> key map.
+    Goes column by column and only visits cells that have a value: most
+    tag columns are almost entirely empty.
+    """
+    tags = [{} for _ in range(len(gdf))]
+    for column, key in columns.items():
+        if column not in gdf.columns:
+            continue
+        values = gdf[column]
+        present = np.flatnonzero(values.notna().to_numpy())
+        for row, value in zip(present.tolist(), values.iloc[present].tolist(), strict=True):
+            text = _tag_text(value)
+            if text is not None:
+                tags[row][key] = text
     return tags
 
 
@@ -144,6 +155,12 @@ def _tag_text(value) -> str | None:
     """A tag value as OSM text, or None if missing."""
     if isinstance(value, list):  # OSMnx can merge values into lists
         value = ";".join(map(str, value))
+    if isinstance(value, bool | np.bool_):
+        # OSMnx turns oneway into True/False. OSM (and OSMnx when reading
+        # it back) only understands yes/no: "True" made one-way streets
+        # two-way. With simplify=False each edge already runs in the
+        # allowed direction, so True is plain oneway=yes.
+        return "yes" if value else "no"
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
     if isinstance(value, float) and value.is_integer():
@@ -152,25 +169,30 @@ def _tag_text(value) -> str | None:
 
 
 def _write_xml(data: OSMData, path: str | Path) -> None:
-    root = ET.Element("osm", version="0.6", generator=GENERATOR)
+    """Stream OSM XML straight to the file (no in-memory element tree)."""
+
+    def tag_lines(tags: dict[str, str]) -> str:
+        return "".join(f"    <tag k={quoteattr(k)} v={quoteattr(v)}/>\n" for k, v in tags.items())
 
     min_lon, min_lat, max_lon, max_lat = data.bounds
-    ET.SubElement(root, "bounds", minlat=str(min_lat), minlon=str(min_lon),
-                  maxlat=str(max_lat), maxlon=str(max_lon))
+    with open(path, "w", encoding="utf-8") as out:
+        out.write("<?xml version='1.0' encoding='utf-8'?>\n")
+        out.write(f'<osm version="0.6" generator="{GENERATOR}">\n')
+        out.write(f'  <bounds minlat="{min_lat}" minlon="{min_lon}" '
+                  f'maxlat="{max_lat}" maxlon="{max_lon}"/>\n')
 
-    for node_id, lon, lat, tags in data.nodes:
-        node = ET.SubElement(root, "node", id=str(node_id), lat=str(lat), lon=str(lon))
-        for key, value in tags.items():
-            ET.SubElement(node, "tag", k=key, v=value)
+        for node_id, lon, lat, tags in data.nodes:
+            if tags:
+                out.write(f'  <node id="{node_id}" lat="{lat}" lon="{lon}">\n'
+                          f"{tag_lines(tags)}  </node>\n")
+            else:
+                out.write(f'  <node id="{node_id}" lat="{lat}" lon="{lon}"/>\n')
 
-    for way_id, refs, tags in data.ways:
-        way = ET.SubElement(root, "way", id=str(way_id))
-        for ref in refs:
-            ET.SubElement(way, "nd", ref=str(ref))
-        for key, value in tags.items():
-            ET.SubElement(way, "tag", k=key, v=value)
+        for way_id, refs, tags in data.ways:
+            nds = "".join(f'    <nd ref="{ref}"/>\n' for ref in refs)
+            out.write(f'  <way id="{way_id}">\n{nds}{tag_lines(tags)}  </way>\n')
 
-    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+        out.write("</osm>\n")
 
 
 def _write_with_osmium(data: OSMData, path: str | Path) -> None:

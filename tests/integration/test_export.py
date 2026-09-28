@@ -19,6 +19,8 @@ from tests.integration.grid import (
     NO_ACCESS,
     ROAD_ACROSS,
     ROAD_TAGS,
+    X0,
+    Y0,
     all_pair_costs,
 )
 
@@ -93,6 +95,26 @@ def test_custom_ways_are_marked(exported):
     _, ways, _ = read_with_osmium(paths[".osm.pbf"])
     custom = [tags for _, tags in ways.values() if tags.get("nf:custom") == "yes"]
     assert custom and all(tags["highway"] == "primary" for tags in custom)
+
+
+def test_oneway_is_written_as_osm_yes_no(exported):
+    """OSMnx stores oneway as True/False; OSM needs yes/no."""
+    _, paths = exported
+    _, ways, _ = read_with_osmium(paths[".osm.pbf"])
+    values = {tags["oneway"] for _, tags in ways.values() if "oneway" in tags}
+    assert values == {"yes", "no"}
+
+
+def test_one_way_motorway_stays_one_way_after_reload(build):
+    # A slip road joins the (otherwise unconnected) motorway to the grid,
+    # so OSMnx keeps it when loading.
+    slip_road = [(X0 + 400, Y0 + 100), (X0 + 500, Y0 + 200)]
+    drive = build([(slip_road, ROAD_TAGS)]).graph("custom", "drive")
+
+    motorway = [(u, v) for u, v, d in drive.edges(data=True) if d.get("highway") == "motorway"]
+    assert motorway, "motorway missing from the drive graph"
+    for u, v in motorway:
+        assert not drive.has_edge(v, u), f"motorway {u}->{v} became two-way"
 
 
 def test_access_no_street_is_closed_to_cars_open_to_walkers(exported):
