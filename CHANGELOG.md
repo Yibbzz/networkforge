@@ -47,7 +47,7 @@ minor version may include breaking changes).
   signals, crossings).
 - Much faster: splitting, node assignment and export are vectorised
   (demo area: build excluding download 23 s -> 5 s; 800 custom lines
-  191 s -> 52 s).
+  191 s -> 52 s). 
 
 ### Fixed
 - Custom node ids could collide with real OSM node ids, moving streets.
