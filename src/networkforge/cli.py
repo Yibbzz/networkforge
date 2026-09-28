@@ -37,7 +37,7 @@ from .errors import (
     NetworkIntegrityError,
     OSMDownloadError,
 )
-from .export import write_osm
+from .export import write_gpkg, write_osm
 from .inputs import clean_custom_data
 from .modes import usable_modes
 from .network import build_network
@@ -107,7 +107,7 @@ def cmd_build(args, emit) -> int:
         write_osm(result[2], result[3], args.baseline_out)
         outputs["baseline_osm"] = str(args.baseline_out)
     if args.gpkg:
-        _write_gpkg(nodes, edges, args.gpkg)
+        write_gpkg(nodes, edges, args.gpkg)
         outputs["gpkg"] = str(args.gpkg)
 
     custom_edges = int((edges["custom"] == "yes").sum()) if "custom" in edges else 0
@@ -182,7 +182,8 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--baseline-out", type=Path, metavar="FILE",
                        help="also write the untouched OSM network, for before/after comparisons")
     build.add_argument("--gpkg", type=Path, metavar="FILE",
-                       help="GeoPackage output with 'nodes' and 'edges' layers")
+                       help="GeoPackage for QGIS: 'nodes' and 'edges' layers, edges with "
+                            "network-analysis columns (car/bike/walk, speed, times, direction)")
     build.set_defaults(command=cmd_build)
 
     check = commands.add_parser("check", parents=[common],
@@ -266,17 +267,6 @@ def _read_extent(args) -> gpd.GeoDataFrame:
         return gpd.GeoDataFrame(geometry=[box(west, south, east, north)], crs="EPSG:4326")
     extent = _read_layer(args.extent, args.extent_layer, "extent")
     return gpd.GeoDataFrame(geometry=[box(*extent.total_bounds)], crs=extent.crs)
-
-
-def _write_gpkg(nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, path: Path) -> None:
-    """GeoPackage with 'nodes' and 'edges'. List values become ';'-joined text."""
-    for name, gdf in (("nodes", nodes.reset_index()), ("edges", edges)):
-        gdf = gdf.copy()
-        for column in gdf.columns.drop(gdf.geometry.name):
-            if gdf[column].dtype == object:
-                gdf[column] = gdf[column].map(
-                    lambda v: ";".join(map(str, v)) if isinstance(v, list) else v)
-        gdf.to_file(path, layer=name, driver="GPKG")
 
 
 def _configure_logging(verbose: bool, quiet: bool) -> None:

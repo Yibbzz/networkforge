@@ -234,6 +234,34 @@ DEFAULT_SPEEDS_KPH = {
 }
 
 
+_SPEED = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(mph|knots)?\s*$")
+_TO_KPH = {None: 1.0, "mph": 1.609344, "knots": 1.852}
+
+
+def maxspeed_kph(value) -> float | None:
+    """
+    A maxspeed tag in km/h: "50" (km/h), "30 mph", "20 knots", or
+    ";"-separated values (averaged, as OSMnx does). None if there's no
+    number (e.g. "signals", "GB:nsl_single").
+    """
+    text = _as_text(value)
+    if text is None:
+        return None
+    speeds = [float(m[1]) * _TO_KPH[m[2]] for m in map(_SPEED.match, text.split(";")) if m]
+    return sum(speeds) / len(speeds) if speeds else None
+
+
+def car_speed_kph(tags: dict) -> float:
+    """
+    Car speed for a way: its maxspeed, else DEFAULT_SPEEDS_KPH for its
+    highway type (30 km/h if unknown) - the same rule add_travel_times uses.
+    """
+    speed = maxspeed_kph(tags.get("maxspeed"))
+    if speed is None:
+        speed = DEFAULT_SPEEDS_KPH.get(_as_text(tags.get("highway")), 30.0)
+    return float(speed)
+
+
 def add_travel_times(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     """
     Add speed_kph and travel_time (car speeds) to every edge. Edges

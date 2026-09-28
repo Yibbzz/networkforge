@@ -11,7 +11,7 @@ from .errors import (
     NoIntersectionError,
     OSMDownloadError,
 )
-from .export import write_osm, write_osm_xml
+from .export import write_gpkg, write_osm, write_osm_xml
 from .network import build_network
 from .presets import PRESETS
 
@@ -26,6 +26,7 @@ __all__ = [
     "NoIntersectionError",
     "OSMDownloadError",
     "build_network",
+    "write_gpkg",
     "write_osm",
     "write_osm_xml",
 ]

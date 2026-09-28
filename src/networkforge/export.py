@@ -1,5 +1,14 @@
 """
-Write a NetworkForge network as OpenStreetMap data.
+Write a NetworkForge network out.
+
+Two kinds of output, for two audiences:
+
+- write_osm(): OpenStreetMap data (.osm, .osm.pbf, ...) for routing
+  engines such as Valhalla and GraphHopper, which read the tags
+  themselves.
+- write_gpkg(): a GeoPackage for QGIS, with ready-made analysis columns
+  (which modes may use each edge, speed, travel times, direction) for
+  QGIS's network analysis tools. See analysis_edges().
 
 write_osm() picks the format from the file name:
 
@@ -27,12 +36,20 @@ import geopandas as gpd
 import numpy as np
 import osmium
 import pandas as pd
+import shapely
 
 from .errors import InputError
-from .modes import mode_tag_keys
+from .modes import allows_mode, car_speed_kph, mode_tag_keys
 from .tags import BASE_WAY_TAGS, CUSTOM_COLUMN, CUSTOM_TAG, NODE_TAGS, ROUTING_WAY_TAGS
 
 GENERATOR = "NetworkForge"
+
+# Constant speeds for bike and walk travel times in the GeoPackage.
+BIKE_KPH = 15.0
+WALK_KPH = 5.0
+
+# Edge columns that only mean something inside the pipeline.
+INTERNAL_COLUMNS = ["key", "split", "reversed", "length"]
 
 XML_SUFFIXES = (".osm",)
 OSMIUM_SUFFIXES = (".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2")
@@ -77,6 +94,122 @@ def write_osm(
             f"Can't tell the output format from {Path(output_file_path).name!r}. "
             f"Use one of: {', '.join(XML_SUFFIXES + OSMIUM_SUFFIXES)}"
         )
+
+
+def write_gpkg(
+    nodes_gdf: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+    output_file_path: str | Path,
+) -> None:
+    """
+    Write a GeoPackage for QGIS with a 'nodes' and an 'edges' layer.
+    Edges carry the analysis columns from analysis_edges(). An existing
+    file is replaced.
+    """
+    path = Path(output_file_path)
+    path.unlink(missing_ok=True)
+
+    layers = {
+        "nodes": nodes_gdf.reset_index(),
+        "edges": analysis_edges(nodes_gdf, edges_gdf),
+    }
+    for name, gdf in layers.items():
+        gdf = gdf.copy()
+        for column in gdf.columns.drop(gdf.geometry.name):
+            if gdf[column].dtype == object:  # OSMnx can merge values into lists
+                gdf[column] = gdf[column].map(
+                    lambda v: ";".join(map(str, v)) if isinstance(v, list) else v)
+        gdf.to_file(path, layer=name, driver="GPKG")
+
+
+def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Edges ready for QGIS network analysis (Service area, Shortest path,
+    QNEAT3). Compared with the pipeline's edges:
+
+    - one row per street: OSMnx's reverse copy of each two-way street
+      is dropped (the direction columns say which way you can travel);
+    - each geometry runs exactly from its u node to its v node, so QGIS
+      connects edges at shared nodes;
+    - added columns:
+        car, bike, walk        may this mode use the edge (same rules as routing)
+        speed_kph              car speed: maxspeed, else a default per road type
+        length_m               edge length in metres, measured in the (local, metric)
+                               analysis CRS - up to ~0.5% longer than OSMnx's
+                               spherical great-circle lengths, and more accurate
+        car_minutes, bike_minutes, walk_minutes
+                               travel times (bike 15 km/h, walk 5 km/h)
+        car_direction, bike_direction
+                               forward / backward / both, relative to the line's
+                               direction (walking is always both). Bikes follow
+                               oneway:bicycle=no (contraflow).
+    """
+    edges = edges_gdf.copy()
+
+    oneway = edges["oneway"] if "oneway" in edges else pd.Series(None, index=edges.index)
+    car_direction = oneway.map(_direction)
+    if "reversed" in edges:
+        reverse_copy = (edges["reversed"] == True) & (car_direction == "both")  # noqa: E712
+        edges, car_direction = edges[~reverse_copy], car_direction[~reverse_copy]
+
+    nodes = nodes_gdf.geometry
+    edges = edges.set_geometry(
+        shapely.linestrings(np.stack([
+            shapely.get_coordinates(nodes.loc[edges["u"].astype("int64")].to_numpy()),
+            shapely.get_coordinates(nodes.loc[edges["v"].astype("int64")].to_numpy()),
+        ], axis=1)),
+        crs=nodes_gdf.crs,
+    )
+
+    # Access and speed depend only on tags; evaluate each distinct
+    # combination once (a few thousand), not each row.
+    keys = [k for k in sorted(mode_tag_keys() | {"highway", "maxspeed"}) if k in edges.columns]
+    combos = list(zip(*(edges[k].map(_hashable) for k in keys), strict=True)) if keys else [()]
+    results = {}
+    for combo in set(combos):
+        tags = {k: v for k, v in zip(keys, combo, strict=True) if v is not None}
+        results[combo] = (allows_mode(tags, "drive"), allows_mode(tags, "bike"),
+                          allows_mode(tags, "walk"), car_speed_kph(tags))
+    car, bike, walk, speed = (np.array(v) for v in zip(*(results[c] for c in combos), strict=True))
+
+    length = edges.geometry.length.to_numpy()
+    bike_direction = car_direction.copy()
+    if "oneway:bicycle" in edges:
+        bike_direction[edges["oneway:bicycle"].astype(str).eq("no")] = "both"
+
+    analysis = pd.DataFrame({
+        "car": car.astype(bool),
+        "bike": bike.astype(bool),
+        "walk": walk.astype(bool),
+        "speed_kph": speed.round(1),
+        "length_m": length.round(2),
+        "car_minutes": (length / 1000 / speed * 60).round(4),
+        "bike_minutes": (length / 1000 / BIKE_KPH * 60).round(4),
+        "walk_minutes": (length / 1000 / WALK_KPH * 60).round(4),
+        "car_direction": car_direction.to_numpy(),
+        "bike_direction": bike_direction.to_numpy(),
+    }, index=edges.index)
+
+    edges = edges.drop(columns=[c for c in INTERNAL_COLUMNS if c in edges.columns])
+    return pd.concat([edges, analysis], axis=1).reset_index(drop=True)
+
+
+def _direction(oneway) -> str:
+    """QGIS direction value for an oneway tag, relative to the edge's direction."""
+    text = str(oneway).lower() if oneway is not None and oneway == oneway else ""
+    if text in ("true", "yes", "1"):
+        return "forward"
+    if text in ("-1", "reverse"):
+        return "backward"
+    return "both"
+
+
+def _hashable(value):
+    if isinstance(value, list):
+        return ";".join(map(str, value))
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    return value
 
 
 def write_osm_xml(

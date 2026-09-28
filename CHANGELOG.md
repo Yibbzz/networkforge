@@ -7,6 +7,14 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- GeoPackage output for QGIS (`write_gpkg`, `networkforge build --gpkg`):
+  edges carry network-analysis columns (`car`/`bike`/`walk`,
+  `speed_kph`, `length_m`, travel minutes per mode, `car_direction` /
+  `bike_direction` for QGIS's direction field, incl. contraflow cycling).
+  One row per street (OSMnx's reverse copies of two-way streets are
+  dropped) and every edge ends exactly on its nodes.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

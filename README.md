@@ -7,6 +7,25 @@ Integrate custom (proposed) roads, cycleways and paths into an existing
 OpenStreetMap network, following OSM access rules, so the result can be
 routed for any transport mode and compared with the original network.
 
+## What it doesn't do
+
+NetworkForge builds **street networks** (driving, cycling, walking). It
+is not a full transport model:
+
+- **No public transport.** Trains, trams, metro, buses and ferries are
+  not modelled: their travel times depend on timetables, not just the
+  physical network. Railway and tram tracks are not included. The PBF
+  NetworkForge exports can be combined with GTFS timetables in tools
+  such as [r5py](https://r5py.readthedocs.io) or
+  [OpenTripPlanner](https://www.opentripplanner.org) for that.
+- **No traffic simulation.** No congestion, demand or signal timing:
+  travel times come from speed limits (or default speeds per road type).
+- **No turn restrictions yet.** OSM turn restrictions ("no right turn")
+  are relations, which aren't downloaded or exported.
+- **Its own routing checks are simplified.** The OSMnx-based routing in
+  the scripts ignores e.g. `oneway:bicycle`; routers such as GraphHopper
+  and Valhalla read those tags from the exported file.
+
 ## Install
 
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
@@ -40,6 +59,36 @@ Add `--json` to get progress, results and errors as JSON lines on stdout,
 for programs driving the CLI. Exit codes: `0` success, `2` bad usage,
 `3` unusable input, `4` OSM download failed, `5` structural check failed,
 `1` anything else.
+
+## Outputs
+
+| Output | For | What's in it |
+|---|---|---|
+| `.osm.pbf` / `.osm` (`--out`, `write_osm`) | Routing engines: **Valhalla**, **GraphHopper**, OpenTripPlanner | Standard OSM data with every routing tag; the engine applies its own profiles |
+| GeoPackage (`--gpkg`, `write_gpkg`) | **QGIS**: viewing, styling, and its network analysis tools | `nodes` and `edges` layers; edges have ready-made analysis columns |
+
+GeoPackage `edges` columns, besides the OSM tags (`highway`, `maxspeed`, ...):
+
+| Column | Meaning |
+|---|---|
+| `car`, `bike`, `walk` | Whether that mode may use the edge (same access rules as the engine; `car` excludes service roads) |
+| `speed_kph` | Car speed: `maxspeed`, else a default for the road type |
+| `length_m` | Length in metres |
+| `car_minutes`, `bike_minutes`, `walk_minutes` | Travel time (bikes 15 km/h, walking 5 km/h) |
+| `car_direction`, `bike_direction` | `forward`, `backward` or `both`, relative to the line's direction. Bikes follow `oneway:bicycle=no`. Walking is always both ways. |
+| `custom` | `yes` on your custom edges |
+
+Each street is one row, and every edge ends exactly on its nodes, so QGIS
+connects the network correctly. For example, a 10-minute drive area in QGIS:
+
+1. Filter the `edges` layer to `"car"` (layer Properties > Source > Query Builder).
+2. Processing > Network analysis > **Service area (from point)**:
+   path type *Fastest*, travel cost `600` (seconds),
+   *Direction field* `car_direction` with values `forward` / `backward` / `both`,
+   *Speed field* `speed_kph`.
+
+Use `bike` / `bike_direction` (or `walk`, with no direction field) for other
+modes, and `*_minutes` as the cost field in plugins such as QNEAT3.
 
 ## Python
 

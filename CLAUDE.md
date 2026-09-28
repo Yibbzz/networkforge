@@ -49,6 +49,12 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
   self-loops, custom edges connected, custom lines unbroken.
+- Outputs have two audiences: OSM/PBF (`write_osm`) for routers (Valhalla, GraphHopper), which read
+  tags themselves; GeoPackage (`write_gpkg` -> `analysis_edges`) for QGIS network analysis, with
+  car/bike/walk flags (same `allows_mode` rules, car = "drive"), speed_kph (`modes.car_speed_kph`),
+  length_m, *_minutes, car/bike_direction (forward/backward/both). One row per street (drops OSMnx
+  reverse copies where reversed & two-way); geometry rebuilt u->v so QGIS topology is exact.
+  tests/integration/test_gpkg.py routes on the layer "as QGIS does" and must match the engine.
 - `export.py` - `write_osm(nodes, edges, path)`: format from extension (.osm via ElementTree; .osm.pbf,
   .pbf, .osm.gz, .osm.bz2 via pyosmium). Both from `prepare_osm_data()` so content is identical; sorted
   by id. Every edge becomes a 2-node way; custom edges get `nf:custom=yes`. `write_osm_xml` = XML only.
