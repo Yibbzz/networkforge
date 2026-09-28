@@ -22,9 +22,10 @@ is not a full transport model:
   travel times come from speed limits (or default speeds per road type).
 - **No turn restrictions yet.** OSM turn restrictions ("no right turn")
   are relations, which aren't downloaded or exported.
-- **Its own routing checks are simplified.** The OSMnx-based routing in
-  the scripts ignores e.g. `oneway:bicycle`; routers such as GraphHopper
-  and Valhalla read those tags from the exported file.
+- **Its own routing is simplified.** `networkforge.modes.load_graph`
+  (OSMnx-based, used by the tests) ignores e.g. `oneway:bicycle`; routers
+  such as GraphHopper and Valhalla read those tags from the exported file,
+  and the QGIS GeoPackage's `bike_direction` column applies it.
 
 ## Install
 
@@ -182,9 +183,3 @@ QT_QPA_PLATFORM=offscreen python3 tests/qgis/check_with_qgis.py qgis-fixture   #
 The release workflow checks the tag matches the version, runs the tests,
 builds the package and publishes a GitHub Release with the changelog
 notes and the wheel attached.
-
-## Scripts
-
-- `scripts/get_test_data.py`: build the demo network in `tests/data`
-- `scripts/route_test.py`: compare routes with and without the custom network
-- `scripts/diagnose_custom_network.py`: report on how a custom network was integrated

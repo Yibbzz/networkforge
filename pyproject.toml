@@ -50,21 +50,19 @@ build-backend = "hatchling.build"
 # What ships: the package, plus (in the source archive) docs and tests.
 [tool.hatch.build.targets.wheel]
 packages = ["src/networkforge"]
-exclude = ["src/networkforge/structure.txt"]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "src/networkforge",
     "tests",
     "docs",
-    "scripts",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
     "uv.lock",
 ]
-exclude = ["src/networkforge/structure.txt", "tests/commands.txt"]
+exclude = ["tests/commands.txt"]
 
 [dependency-groups]
 dev = [

@@ -8,3 +8,4 @@ coverage.xml
 htmlcov/
 cache/
 .ruff_cache/
+.cache/

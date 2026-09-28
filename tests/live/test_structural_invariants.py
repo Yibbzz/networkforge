@@ -1,9 +1,10 @@
 """
-Turns tests/test_plan_structural.txt into an actual test:
+Structural invariants on a full build of the demo area (tests/data):
 
     assert all_edges_have_valid_nodes
     assert no_u_equals_v
     assert all_custom_edges_are_connected
+    assert custom_lines_unbroken
 
 Run with: uv run pytest -m network tests/live/test_structural_invariants.py -v
 

@@ -17,6 +17,16 @@ minor version may include breaking changes).
 - CI job routing on the GeoPackage with QGIS's own network analysis
   (`qgis_process`, QGIS LTR and latest) and checking the routes.
 
+### Removed
+- `scripts/` (`get_test_data.py`, `route_test.py`,
+  `diagnose_custom_network.py`): replaced by the CLI (`networkforge build`,
+  `networkforge check`) and the test suite.
+
+### Fixed
+- The dev container's Dockerfile installs dependencies only
+  (`uv sync --no-install-project`); installing the package itself failed
+  at image build time because the source isn't in the image.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

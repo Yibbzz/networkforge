@@ -1,23 +1,21 @@
 """
-Structural invariants the finished network must satisfy.
+Checks on custom data and on the finished network.
 
-These implement, literally, the three lines in
-tests/test_plan_structural.txt:
+Before the build: resolve_custom_tags / check_custom_tags (feature tags
+vs OSM rules and the chosen network type).
 
-    assert all_edges_have_valid_nodes
-    assert no_u_equals_v
-    assert all_custom_edges_are_connected
+After the build, structural invariants the network must satisfy:
 
-Each function raises NetworkIntegrityError with a message identifying the
-offending rows/nodes if the invariant is violated, and returns None
-(no exception) if everything is fine. They're written to be usable
-both as production-time sanity checks (called from build_network)
-and as plain pytest assertions (see tests/live/test_structural_invariants.py).
+    assert_all_edges_have_valid_nodes
+    assert_no_u_equals_v
+    assert_all_custom_edges_are_connected
+    assert_custom_lines_unbroken
 
-No new dependency is introduced: connectivity is checked with a
-small in-module union-find rather than pulling in networkx just for
-this, since the core package otherwise only depends on
-geopandas/pandas/shapely/pyproj.
+Each raises NetworkIntegrityError with a message identifying the
+offending rows/nodes, and returns None if everything is fine. They run
+at the end of build_network and are also used directly by the tests
+(see tests/live/test_structural_invariants.py). Connectivity uses a
+small in-module union-find.
 """
 
 import collections
