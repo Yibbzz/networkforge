@@ -27,18 +27,20 @@ from dataclasses import dataclass
 
 import geopandas as gpd
 import networkx as nx
+import osmium
 import osmnx as ox
 import pytest
 from shapely.geometry import LineString, Point, box
 
-from networkforge.modes import mode_tag_keys, usable_modes
+from networkforge.export import way_tag_columns
+from networkforge.modes import usable_modes
+from networkforge.tags import NODE_TAGS
 from tests.helpers import (
     ROUTING_MODES,
     Build,
     assert_valid_osm_xml,
     build_and_export,
     custom_pairs,
-    read_osm_xml,
     route_cost,
 )
 
@@ -144,16 +146,26 @@ def test_export_is_valid(case):
     assert_valid_osm_xml(case.build.custom_path)
 
 
-def test_access_tags_survive_export(case):
-    _, ways = read_osm_xml(case.build.baseline_path)
-    edges = case.build.osm_edges
+def test_routing_tags_survive_export(case):
+    """Every way and node tag export should write is written, as downloaded."""
+    way_tags, node_tags = [], []
+    for obj in osmium.FileProcessor(str(case.build.baseline_path)):
+        (node_tags if obj.is_node() else way_tags).append(dict(obj.tags))
 
-    for key in sorted(mode_tag_keys()):
-        downloaded = int(edges[key].notna().sum()) if key in edges.columns else 0
-        exported = sum(key in tags for _, tags in ways)
-        assert exported == downloaded, (
-            f"{case.label}: {key} on {downloaded} downloaded edges but {exported} exported ways"
-        )
+    checks = [
+        ("edges", case.build.osm_edges, way_tags,
+         [key for column, key in way_tag_columns().items() if column != "custom"]),
+        ("nodes", case.build.osm_nodes, node_tags, NODE_TAGS),
+    ]
+    for label, downloaded_gdf, exported, keys in checks:
+        for key in keys:
+            downloaded = (
+                int(downloaded_gdf[key].notna().sum()) if key in downloaded_gdf.columns else 0
+            )
+            written = sum(key in tags for tags in exported)
+            assert written == downloaded, (
+                f"{case.label}: {key} on {downloaded} downloaded {label} but {written} exported"
+            )
 
 
 @pytest.mark.parametrize("mode", ROUTING_MODES)

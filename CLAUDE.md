@@ -25,15 +25,20 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - OSMnx cache config (`NETWORKFORGE_OSMNX_CACHE`) and `get_osm_data_from_bbox`
   (`network_type` = OSMnx download filter; keep `"all"` so one build serves every mode).
-- `modes.py` - transport-mode access rules, parsed from OSMnx's own network filters (single source of
-  truth): `usable_modes(tags)`, `filter_graph_by_mode`, `load_graph(osm_file, mode)` for routing,
-  `keep_mode_tags()` so access tags (motor_vehicle, foot, bicycle, ...) survive download/load.
+- `modes.py` - transport-mode access rules: OSMnx's own network filters (by way type) + the OSM access
+  hierarchy (`ACCESS_HIERARCHY`, most specific tag wins; `DENIED_ACCESS`; busways closed unless a
+  mode tag opens them; `OPENABLE` e.g. footway+bicycle=designated). OSMnx's own access clauses are
+  skipped for routing modes (the hierarchy replaces them). `usable_modes(tags)`,
+  `filter_graph_by_mode`, `load_graph(osm_file, mode)`, `keep_mode_tags()` (way + node tags to keep).
+- `tags.py` - which way/node tags are kept at download and written on export (single source).
 - `projection.py` - picks a projected UTM analysis CRS from the bbox; WGS84 helpers.
 - `validation.py` - pre-build `resolve_custom_tags` (feature attributes vs blanket tags, `overwrite`)
   + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
   self-loops, custom edges connected, custom lines unbroken.
-- `export.py` - `write_osm_xml()`: every edge becomes a 2-node OSM way; custom edges get `nf:custom=yes`.
+- `export.py` - `write_osm(nodes, edges, path)`: format from extension (.osm via ElementTree; .osm.pbf,
+  .pbf, .osm.gz, .osm.bz2 via pyosmium). Both from `prepare_osm_data()` so content is identical; sorted
+  by id. Every edge becomes a 2-node way; custom edges get `nf:custom=yes`. `write_osm_xml` = XML only.
 
 ## Tests (`tests/`) and scripts (`scripts/`)
 - `unit/` - tag/mode rules (`test_custom_tags.py`), CRS selection (`test_projection.py`).
@@ -71,3 +76,5 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   way is motorway/motorway_link/bridge/tunnel and `layer` matches (applies to custom features too, e.g.
   bridge=yes). A custom line's END points may still join a grade-separated way (slip roads); middle
   vertices only snap to `joinable_network`. Trunk is deliberately treated as at-grade.
+- OSMnx can't read PBF: tests convert PBF -> XML with pyosmium before `load_graph`.
+- `oneway:bicycle` is exported, but OSMnx-based routing (`load_graph`) doesn't apply it.

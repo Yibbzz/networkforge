@@ -1,227 +1,190 @@
+"""
+Write a NetworkForge network as OpenStreetMap data.
+
+write_osm() picks the format from the file name:
+
+    network.osm                 OSM XML
+    network.osm.pbf (or .pbf)   OSM PBF: compressed binary, what routers
+                                such as GraphHopper and Valhalla prefer
+    network.osm.gz / .osm.bz2   compressed OSM XML
+
+XML is written by this module; the other formats by pyosmium. Both get
+the same content from prepare_osm_data(), so an XML and a PBF export of
+one network hold identical nodes, ways and tags. Nodes and ways are
+sorted by id, as tools like osmium expect.
+
+Each graph edge becomes its own 2-node way with a new id (one OSM way
+can produce many edges). Way tags are the ones listed in tags.py plus
+every access tag the mode rules use; node tags (barriers, signals,
+crossings) are NODE_TAGS.
+"""
+
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
 
 import geopandas as gpd
+import osmium
 import pandas as pd
 
 from .errors import InputError
 from .modes import mode_tag_keys
+from .tags import BASE_WAY_TAGS, CUSTOM_COLUMN, CUSTOM_TAG, NODE_TAGS, ROUTING_WAY_TAGS
+
+GENERATOR = "NetworkForge"
+
+XML_SUFFIXES = (".osm",)
+OSMIUM_SUFFIXES = (".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2")
+
+
+@dataclass(frozen=True)
+class OSMData:
+    """A network ready to write: WGS84 coordinates, string tags, sorted by id."""
+
+    bounds: tuple[float, float, float, float]  # min_lon, min_lat, max_lon, max_lat
+    nodes: list[tuple[int, float, float, dict[str, str]]]  # id, lon, lat, tags
+    ways: list[tuple[int, list[int], dict[str, str]]]  # id, node refs, tags
+
+
+def way_tag_columns() -> dict[str, str]:
+    """Edge column -> OSM tag key, for every way tag export writes."""
+    columns = {key: key for key in BASE_WAY_TAGS}
+    for key in [*sorted(mode_tag_keys()), *ROUTING_WAY_TAGS]:
+        columns.setdefault(key, key)
+    columns[CUSTOM_COLUMN] = CUSTOM_TAG
+    return columns
+
+
+def write_osm(
+    nodes_gdf: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+    output_file_path: str | Path,
+) -> None:
+    """
+    Write the network to `output_file_path`, in the format its name
+    implies (.osm, .osm.pbf, .pbf, .osm.gz, .osm.bz2). An existing file
+    is replaced.
+    """
+    name = str(output_file_path).lower()
+
+    if name.endswith(XML_SUFFIXES):
+        _write_xml(prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
+    elif name.endswith(OSMIUM_SUFFIXES):
+        _write_with_osmium(prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
+    else:
+        raise InputError(
+            f"Can't tell the output format from {Path(output_file_path).name!r}. "
+            f"Use one of: {', '.join(XML_SUFFIXES + OSMIUM_SUFFIXES)}"
+        )
 
 
 def write_osm_xml(
     combined_points_gdf: gpd.GeoDataFrame,
     split_lines_combined_gdf: gpd.GeoDataFrame,
-    output_file_path: str,
-):
+    output_file_path: str | Path,
+) -> None:
+    """Write the network as OSM XML, whatever the file name (see write_osm)."""
+    _write_xml(prepare_osm_data(combined_points_gdf, split_lines_combined_gdf), output_file_path)
+
+
+def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> OSMData:
     """
-    Write a NetworkForge network to standard OSM 0.6 XML.
-
-    Input GeoDataFrames should use the analysis CRS. Both are
-    converted to WGS84 (EPSG:4326) for OSM export.
-
-    Each graph edge is exported as a separate OSM way connecting
-    its `u` and `v` nodes.
-
-    Args:
-        combined_points_gdf:
-            Network nodes.
-
-        split_lines_combined_gdf:
-            Network edges. Must contain `u`, `v` and `osmid`
-            columns.
-
-        output_file_path:
-            Path to the output OSM XML file.
+    Convert network GeoDataFrames (any CRS) to OSMData. Edges must have
+    `u` and `v` columns referencing the node index.
     """
 
-    # ================================================================
-    # 1. Validate CRS
-    # ================================================================
+    for label, gdf in (("Node", nodes_gdf), ("Edge", edges_gdf)):
+        if gdf.crs is None:
+            raise InputError(f"{label} GeoDataFrame must have a CRS assigned.")
+    for column in ("u", "v"):
+        if column not in edges_gdf.columns:
+            raise InputError(f"Edge GeoDataFrame is missing required column: {column}")
 
-    if combined_points_gdf.crs is None:
-        raise InputError(
-            "Point GeoDataFrame must have a CRS assigned."
-        )
+    nodes = nodes_gdf.to_crs("EPSG:4326")
+    edges = edges_gdf.to_crs("EPSG:4326")
 
-    if split_lines_combined_gdf.crs is None:
-        raise InputError(
-            "Line GeoDataFrame must have a CRS assigned."
-        )
-
-    # ================================================================
-    # 2. Validate required network columns
-    # ================================================================
-
-    required_node_columns = ["geometry"]
-
-    required_edge_columns = [
-        "u",
-        "v",
-    ]
-
-    for column in required_node_columns:
-        if column not in combined_points_gdf.columns:
-            raise InputError(
-                f"Node GeoDataFrame is missing required column: {column}"
-            )
-
-    for column in required_edge_columns:
-        if column not in split_lines_combined_gdf.columns:
-            raise InputError(
-                f"Edge GeoDataFrame is missing required column: {column}"
-            )
-
-    # ================================================================
-    # 3. Convert to WGS84
-    # ================================================================
-
-    nodes_wgs84 = combined_points_gdf.to_crs("EPSG:4326")
-    edges_wgs84 = split_lines_combined_gdf.to_crs("EPSG:4326")
-
-    # ================================================================
-    # 4. Calculate bounds
-    # ================================================================
-
-    points_bounds = nodes_wgs84.total_bounds
-    lines_bounds = edges_wgs84.total_bounds
-
-    total_bounds = [
-        round(min(points_bounds[0], lines_bounds[0]), 7),
-        round(min(points_bounds[1], lines_bounds[1]), 7),
-        round(max(points_bounds[2], lines_bounds[2]), 7),
-        round(max(points_bounds[3], lines_bounds[3]), 7),
-    ]
-
-    # ================================================================
-    # 5. Create OSM document
-    # ================================================================
-
-    root = ET.Element(
-        "osm",
-        version="0.6",
-        generator="NetworkForge",
+    node_bounds, edge_bounds = nodes.total_bounds, edges.total_bounds
+    bounds = (
+        round(min(node_bounds[0], edge_bounds[0]), 7),
+        round(min(node_bounds[1], edge_bounds[1]), 7),
+        round(max(node_bounds[2], edge_bounds[2]), 7),
+        round(max(node_bounds[3], edge_bounds[3]), 7),
     )
 
-    ET.SubElement(
-        root,
-        "bounds",
-        minlat=str(total_bounds[1]),
-        minlon=str(total_bounds[0]),
-        maxlat=str(total_bounds[3]),
-        maxlon=str(total_bounds[2]),
+    # Plain column lookups rather than itertuples, which can't handle
+    # keys like "sidewalk:left".
+    node_tags = [key for key in NODE_TAGS if key in nodes.columns]
+    node_rows = zip(nodes.index, nodes.geometry, *(nodes[k] for k in node_tags), strict=True)
+    osm_nodes = sorted(
+        (int(node_id), round(point.x, 7), round(point.y, 7), _tags(node_tags, values))
+        for node_id, point, *values in node_rows
     )
 
-    # ================================================================
-    # 6. Write nodes
-    # ================================================================
-
-    for row in nodes_wgs84.itertuples():
-
-        geometry = row.geometry
-
-        ET.SubElement(
-            root,
-            "node",
-            id=str(row.Index),
-            lat=str(round(geometry.y, 7)),
-            lon=str(round(geometry.x, 7)),
-        )
-
-    # ================================================================
-    # 7. Write ways
-    # ================================================================
-
-    tag_columns = {
-        "highway": "highway",
-        "name": "name",
-        "ref": "ref",
-        "lanes": "lanes",
-        "maxspeed": "maxspeed",
-        "oneway": "oneway",
-        "access": "access",
-        "service": "service",
-        "bridge": "bridge",
-        "tunnel": "tunnel",
-        "layer": "layer",
-        "junction": "junction",
-        "surface": "surface",
-        "width": "width",
-        "custom": "nf:custom",
-    }
-
-    # Access tags every routing mode depends on (motor_vehicle, foot,
-    # bicycle, ...). Dropping them would silently lift restrictions.
-    tag_columns.update({key: key for key in mode_tag_keys()})
-
-    # Only columns that exist. Plain column lookups rather than
-    # itertuples, which can't handle keys like "sidewalk:left".
-    present_tags = [
-        (column, osm_key)
-        for column, osm_key in tag_columns.items()
-        if column in edges_wgs84.columns
+    way_tags = [(column, key) for column, key in way_tag_columns().items()
+                if column in edges.columns]
+    way_rows = zip(edges["u"], edges["v"], *(edges[c] for c, _ in way_tags), strict=True)
+    osm_ways = [
+        (way_id, [int(u), int(v)], _tags([key for _, key in way_tags], values))
+        for way_id, (u, v, *values) in enumerate(way_rows, start=1)
     ]
-    tag_values = [edges_wgs84[column].tolist() for column, _ in present_tags]
 
-    for way_id, (u, v, *values) in enumerate(
-        zip(edges_wgs84["u"], edges_wgs84["v"], *tag_values, strict=True),
-        start=1,
-    ):
+    return OSMData(bounds, osm_nodes, osm_ways)
 
-        # ------------------------------------------------------------
-        # Each graph edge becomes its own OSM way.
-        #
-        # We deliberately generate a new unique ID rather than using
-        # the original OSM `osmid`, because multiple graph edges can
-        # originate from the same original OSM way.
-        # ------------------------------------------------------------
 
-        way = ET.SubElement(
-            root,
-            "way",
-            id=str(way_id),
-        )
+def _tags(keys: list[str], values) -> dict[str, str]:
+    tags = {}
+    for key, value in zip(keys, values, strict=True):
+        value = _tag_text(value)
+        if value is not None:
+            tags[key] = value
+    return tags
 
-        # Start node
-        ET.SubElement(
-            way,
-            "nd",
-            ref=str(int(u)),
-        )
 
-        # End node
-        ET.SubElement(
-            way,
-            "nd",
-            ref=str(int(v)),
-        )
+def _tag_text(value) -> str | None:
+    """A tag value as OSM text, or None if missing."""
+    if isinstance(value, list):  # OSMnx can merge values into lists
+        value = ";".join(map(str, value))
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)  # 2.0 -> "2"
+    return str(value)
 
-        # ------------------------------------------------------------
-        # Preserve routing-relevant OSM tags (plus custom provenance)
-        # ------------------------------------------------------------
 
-        for (_, osm_key), value in zip(present_tags, values, strict=True):
+def _write_xml(data: OSMData, path: str | Path) -> None:
+    root = ET.Element("osm", version="0.6", generator=GENERATOR)
 
-            # OSMnx can represent some values as lists.
-            if isinstance(value, list):
-                value = ";".join(map(str, value))
+    min_lon, min_lat, max_lon, max_lat = data.bounds
+    ET.SubElement(root, "bounds", minlat=str(min_lat), minlon=str(min_lon),
+                  maxlat=str(max_lat), maxlon=str(max_lon))
 
-            if value is None or pd.isna(value):
-                continue
+    for node_id, lon, lat, tags in data.nodes:
+        node = ET.SubElement(root, "node", id=str(node_id), lat=str(lat), lon=str(lon))
+        for key, value in tags.items():
+            ET.SubElement(node, "tag", k=key, v=value)
 
-            ET.SubElement(
-                way,
-                "tag",
-                k=osm_key,
-                v=str(value),
-            )
+    for way_id, refs, tags in data.ways:
+        way = ET.SubElement(root, "way", id=str(way_id))
+        for ref in refs:
+            ET.SubElement(way, "nd", ref=str(ref))
+        for key, value in tags.items():
+            ET.SubElement(way, "tag", k=key, v=value)
 
-    # ================================================================
-    # 8. Write XML
-    # ================================================================
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
-    tree = ET.ElementTree(root)
 
-    tree.write(
-        output_file_path,
-        encoding="utf-8",
-        xml_declaration=True,
-    )
+def _write_with_osmium(data: OSMData, path: str | Path) -> None:
+    header = osmium.io.Header()
+    header.set("generator", GENERATOR)
+    min_lon, min_lat, max_lon, max_lat = data.bounds
+    header.add_box(osmium.osm.Box(osmium.osm.Location(min_lon, min_lat),
+                                  osmium.osm.Location(max_lon, max_lat)))
+
+    writer = osmium.SimpleWriter(str(path), header=header, overwrite=True)
+    try:
+        for node_id, lon, lat, tags in data.nodes:
+            writer.add_node(osmium.osm.mutable.Node(id=node_id, location=(lon, lat), tags=tags))
+        for way_id, refs, tags in data.ways:
+            writer.add_way(osmium.osm.mutable.Way(id=way_id, nodes=refs, tags=tags))
+    finally:
+        writer.close()

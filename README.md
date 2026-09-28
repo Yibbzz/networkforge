@@ -18,7 +18,7 @@ uv sync
 ```python
 import logging
 import geopandas as gpd
-from networkforge import build_network, write_osm_xml
+from networkforge import build_network, write_osm
 
 logging.basicConfig(level=logging.INFO)  # show build progress
 
@@ -32,11 +32,20 @@ nodes, edges = build_network(bbox, custom, preset="primary_road",
 # Per feature: each line's own attributes (highway, maxspeed, bridge, ...)
 nodes, edges = build_network(bbox, custom)
 
-write_osm_xml(nodes, edges, "network.osm")
+write_osm(nodes, edges, "network.osm.pbf")  # or .osm, .osm.gz, .osm.bz2
 ```
 
+`write_osm` picks the format from the file name. PBF is OpenStreetMap's
+compressed binary format (open, [documented on the OSM wiki](https://wiki.openstreetmap.org/wiki/PBF_Format)),
+several times smaller than XML and what routers such as GraphHopper
+and Valhalla read. Exports keep the tags routers need: access
+restrictions, one-way exceptions, cycle infrastructure, surface,
+vehicle limits, and barrier nodes such as bollards.
+
 A feature's own attributes win over a preset unless you pass
-`overwrite_tags=True`. Custom lines join every street they cross,
+`overwrite_tags=True`. Who may use each way follows OSM rules: the
+way type plus the access hierarchy (`motorcar` > `motor_vehicle` >
+`vehicle` > `access`, and `bicycle` / `foot` for bikes and walking). Custom lines join every street they cross,
 except motorways, bridges, tunnels and other layers, which they pass
 over or under. Tags are checked against OSM rules before anything is
 downloaded.

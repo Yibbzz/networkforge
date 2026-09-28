@@ -3,7 +3,7 @@ import logging
 import geopandas as gpd
 import osmnx as ox
 
-from networkforge.export import write_osm_xml
+from networkforge.export import write_osm, write_osm_xml
 from networkforge.network import build_network
 
 
@@ -93,6 +93,14 @@ def main():
         "tests/data/custom_network.osm",
     )
 
+    # The same network as PBF, the compressed format routers such as
+    # GraphHopper and Valhalla read.
+    write_osm(
+        nodes,
+        edges,
+        "tests/data/custom_network.osm.pbf",
+    )
+
     # ------------------------------------------------------------------
     # Validate OSM exports
     # ------------------------------------------------------------------
@@ -121,6 +129,7 @@ def main():
     print("\nOutput written:")
     print("  tests/data/baseline.osm")
     print("  tests/data/custom_network.osm")
+    print("  tests/data/custom_network.osm.pbf")
 
 
 if __name__ == "__main__":

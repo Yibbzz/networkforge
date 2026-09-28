@@ -29,6 +29,7 @@ import geopandas as gpd
 
 from .errors import InvalidTagsError, NetworkIntegrityError
 from .modes import allows_mode, mode_tag_keys, usable_modes
+from .tags import BASE_WAY_TAGS, ROUTING_WAY_TAGS
 
 log = logging.getLogger(__name__)
 
@@ -197,11 +198,12 @@ KNOWN_HIGHWAYS = {
     "path", "steps", "corridor",
 }
 
-ACCESS_KEYS = ("access", "motor_vehicle", "motorcar", "foot", "bicycle")
+ACCESS_KEYS = ("access", "vehicle", "motor_vehicle", "motorcar", "foot", "bicycle")
 ACCESS_VALUES = {
     "yes", "no", "private", "permissive", "destination", "designated",
     "customers", "delivery", "agricultural", "forestry", "discouraged",
     "permit", "use_sidepath", "dismount", "official", "unknown",
+    "restricted", "military", "emergency",
 }
 ONEWAY_VALUES = {"yes", "no", "-1", "true", "false", "1", "0", "reversible", "alternating"}
 
@@ -218,10 +220,7 @@ RESERVED_COLUMNS = {"u", "v", "key", "osmid", "custom", "split", "reversed", "le
 
 # Tag keys the pipeline understands (checked, used for routing or
 # exported). Used to spot misspelt or truncated attribute names.
-KNOWN_TAG_KEYS = mode_tag_keys() | {
-    "highway", "maxspeed", "oneway", "lanes", "name", "ref", "bridge",
-    "tunnel", "layer", "junction", "surface", "width",
-}
+KNOWN_TAG_KEYS = mode_tag_keys() | set(BASE_WAY_TAGS) | set(ROUTING_WAY_TAGS)
 
 
 def _tag_value(value) -> str | None:

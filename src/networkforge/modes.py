@@ -1,10 +1,17 @@
 """
 Transport-mode access rules.
 
-The rules are OSMnx's own Overpass network filters, parsed and applied
-to plain tag dicts. That gives a single source of truth: a custom way
-is usable by a mode exactly when a real OSM way with the same tags
-would have been downloaded by `ox.graph_from_bbox(network_type=mode)`.
+Two layers, applied to plain tag dicts:
+
+1. OSMnx's own Overpass network filters (parsed from OSMnx), which
+   decide by way type: e.g. no cars on footways, no walking on
+   motorways.
+2. The OSM access hierarchy, which OSMnx only partly applies: the most
+   specific access tag for the mode decides (for cars: motorcar >
+   motor_vehicle > vehicle > access). This closes ways tagged e.g.
+   access=no or motor_vehicle=private, keeps busways for buses only,
+   and opens ways a mode-specific tag explicitly allows, e.g. a footway
+   with bicycle=designated (a shared-use path).
 
 The same rules are used to:
   - validate custom features before a build (validation.py),
@@ -24,12 +31,40 @@ import osmnx as ox
 from osmnx._overpass import _get_network_filter
 
 from .errors import InputError
+from .tags import BASE_WAY_TAGS, CUSTOM_TAG, NODE_TAGS, ROUTING_WAY_TAGS
 
 # Routing modes a network can be filtered to. "all" / "all_public"
 # are download scopes rather than travel modes, so they're left out.
 MODES = ("drive", "drive_service", "walk", "bike")
 
 _CLAUSE = re.compile(r'\["([^"]+)"(?:(!?~)"([^"]*)")?\]')
+
+# OSM access hierarchy per mode, general -> specific. The most specific
+# tag present decides: access=no + bicycle=yes is open to bikes only.
+ACCESS_HIERARCHY = {
+    "drive": ("access", "vehicle", "motor_vehicle", "motorcar"),
+    "drive_service": ("access", "vehicle", "motor_vehicle", "motorcar"),
+    "bike": ("access", "vehicle", "bicycle"),
+    "walk": ("access", "foot"),
+}
+
+# Access values that close a way to general routing. (destination,
+# customers, permissive, discouraged, dismount etc. stay open.)
+DENIED_ACCESS = {
+    "no", "private", "agricultural", "forestry", "delivery", "emergency",
+    "military", "restricted", "permit", "use_sidepath",
+}
+
+# Mode-specific values that explicitly open a way.
+GRANTED_ACCESS = {"yes", "designated", "permissive", "official"}
+
+# Way types closed to every mode unless a mode-specific tag opens them.
+CLOSED_BY_DEFAULT = {"busway"}
+
+# Way types OSMnx excludes for a mode that a mode-specific tag may open:
+# a footway with bicycle=yes/designated is a shared-use path; a
+# cycleway with foot=yes is walkable.
+OPENABLE = {"bike": {"footway"}, "walk": {"cycleway"}}
 
 
 @cache
@@ -58,19 +93,22 @@ def mode_tag_keys() -> set[str]:
         key
         for mode in ("all", "all_public", *MODES)
         for key, _, _ in mode_rules(mode)
-    }
+    } | {key for keys in ACCESS_HIERARCHY.values() for key in keys}
 
 
 def keep_mode_tags() -> None:
     """
-    Make OSMnx keep every access-relevant tag on ways, plus layer (for
-    grade separation). By default it discards e.g. motor_vehicle, foot
-    and bicycle, which silently removes restrictions from the network. Must be called before any
-    graph is downloaded or loaded from XML.
+    Make OSMnx keep every tag the access rules use, and every way and
+    node tag export writes (see tags.py). By default OSMnx discards
+    e.g. motor_vehicle, foot, bicycle and barrier, which silently
+    removes restrictions from the network. Call before any graph is
+    downloaded or loaded from XML.
     """
     ox.settings.useful_tags_way = sorted(
-        set(ox.settings.useful_tags_way) | mode_tag_keys() | {"nf:custom", "layer"}
+        set(ox.settings.useful_tags_way) | mode_tag_keys()
+        | set(BASE_WAY_TAGS) | set(ROUTING_WAY_TAGS) | {CUSTOM_TAG}
     )
+    ox.settings.useful_tags_node = sorted(set(ox.settings.useful_tags_node) | set(NODE_TAGS))
 
 
 def _as_text(value) -> str | None:
@@ -83,9 +121,51 @@ def _as_text(value) -> str | None:
     return str(value)
 
 
+def effective_access(tags: dict, mode: str) -> tuple[str, str] | None:
+    """(key, value) of the most specific access tag for `mode`, if any."""
+    for key in reversed(ACCESS_HIERARCHY.get(mode, ())):
+        value = _as_text(tags.get(key))
+        if value is not None:
+            return key, value
+    return None
+
+
 def allows_mode(tags: dict, mode: str) -> bool:
     """True if a way with these tags is usable by `mode`."""
+    if mode not in ACCESS_HIERARCHY:  # download scopes "all" / "all_public"
+        return _passes_osmnx_filter(tags, mode)
+
+    access = effective_access(tags, mode)
+    if access is not None and access[1] in DENIED_ACCESS:
+        return False
+
+    # Opened by a mode-specific tag, not just access=yes.
+    granted = access is not None and access[0] != "access" and access[1] in GRANTED_ACCESS
+    highway = _as_text(tags.get("highway"))
+
+    if highway in CLOSED_BY_DEFAULT and not granted:
+        return False
+
+    # The hierarchy above replaces OSMnx's own access clauses (e.g. its
+    # motor_vehicle!~no would reject motor_vehicle=no + motorcar=yes).
+    access_keys = set(ACCESS_HIERARCHY[mode])
+    ignore_highway_type = granted and highway in OPENABLE.get(mode, ())
+    return _passes_osmnx_filter(tags, mode, access_keys, ignore_highway_type)
+
+
+def _passes_osmnx_filter(
+    tags: dict,
+    mode: str,
+    skip_keys: set[str] = frozenset(),
+    ignore_highway_type: bool = False,
+) -> bool:
+    """
+    OSMnx's network filter for `mode`, without clauses on `skip_keys`
+    and, if asked, without its highway-type exclusions.
+    """
     for key, op, regex in mode_rules(mode):
+        if key in skip_keys or (ignore_highway_type and key == "highway" and op == "!~"):
+            continue
         value = _as_text(tags.get(key))
 
         if op is None:

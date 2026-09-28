@@ -15,6 +15,7 @@ dependencies = [
     # Not imported directly: OSMnx needs it for nearest_nodes() on
     # unprojected (lat/lon) graphs, used when routing between points.
     "scikit-learn>=1.9.1",
+    "osmium>=4.3.1",
 ]
 
 # Makes `uv sync` install networkforge itself (editable), so imports work

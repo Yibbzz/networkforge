@@ -3,13 +3,15 @@ Hand-built OSM street grid used in place of the Overpass download.
 
       row 4   21 x 22 -- 23 -- 24 -- 25        x = bus gate (motor_vehicle=no)
               |     |     |     |     |
-      row 3   16 -- 17 -- 18 -- 19 -- 20
+      row 3   16 a 17 -- 18 -- 19 -- 20        a = access=no + foot=yes (walk only)
               |     |     |    /|     |        / = DIAGONAL custom line
-      row 2   11 -- 12 -- 13 -- 14 -- 15           (13 -> 19)
-      ========|=====|=====f=====|=====|====    = = ROAD_ACROSS custom line
-      row 1    6 --  7 --  8 --  9 -- 10       f = footway (8-13)
-              |     |     |     |     c        c = cycleway (5-10)
-      row 0    1 --  2 --  3 --  4 --  5          motorway (100 -> 101), x=500 m
+      row 2   11 -- 12 -- 13 -- 14 -l 15           (13 -> 19)
+      ========|=====|=====f=====|=====|====    l = cycle lane, surface, oneway:bicycle
+      row 1    6 --  7 --  8 --  9 -- 10       = = ROAD_ACROSS custom line
+              |     |     |     |     c        f = footway (8-13)
+      row 0    1 --  2 --  B --  4 --  5       c = cycleway (5-10)
+                                               B = bollard (barrier node)
+                                                  motorway (100 -> 101), x=500 m
 
 100 m blocks. All other ways are residential, 30 mph, two-way. Node
 ids are deliberately small (like the oldest real OSM nodes) to catch
@@ -42,11 +44,19 @@ RESIDENTIAL = {"highway": "residential", "maxspeed": "30 mph"}
 FOOTWAY = frozenset({node_id(1, 2), node_id(2, 2)})
 CYCLEWAY = frozenset({node_id(0, 4), node_id(1, 4)})
 BUS_GATE = frozenset({node_id(4, 0), node_id(4, 1)})
+NO_ACCESS = frozenset({node_id(3, 0), node_id(3, 1)})
+CYCLE_LANE_STREET = frozenset({node_id(2, 3), node_id(2, 4)})
+CYCLE_LANE_TAGS = {"cycleway": "lane", "oneway:bicycle": "no", "surface": "asphalt"}
 SPECIAL_WAYS = {
     FOOTWAY: {"highway": "footway"},
     CYCLEWAY: {"highway": "cycleway"},
     BUS_GATE: {**RESIDENTIAL, "motor_vehicle": "no"},
+    NO_ACCESS: {**RESIDENTIAL, "access": "no", "foot": "yes"},
+    CYCLE_LANE_STREET: {**RESIDENTIAL, **CYCLE_LANE_TAGS},
 }
+
+BOLLARD_NODE = node_id(0, 2)
+NODE_TAGS = {BOLLARD_NODE: {"barrier": "bollard"}}
 
 # Crosses every vertical street between rows 1 and 2 (incl. the footway).
 ROAD_ACROSS = [(X0 - 50, Y0 + 150), (X0 + 450, Y0 + 150)]
@@ -67,7 +77,7 @@ def synthetic_graph() -> nx.MultiDiGraph:
 
     def add_node(nid, x, y):
         lon, lat = to_wgs84.transform(x, y)
-        graph.add_node(nid, x=lon, y=lat)
+        graph.add_node(nid, x=lon, y=lat, **NODE_TAGS.get(nid, {}))
         utm_xy[nid] = (x, y)
 
     way_ids = itertools.count(1)

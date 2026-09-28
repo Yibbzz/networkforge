@@ -144,14 +144,54 @@ the build (or are logged with `strict=False`).
 | `maxspeed` | `30 mph`, `50` (km/h), `20 knots`, `none`, `walk`, `signals`, `variable`, or a country code like `GB:nsl_single` | Car speed. **A number with no unit is km/h**, so write `mph` for UK limits. Without it, a default for the road type is used. |
 | `oneway` | `yes`, `no`, `-1` (against the drawn direction), `reversible`, `alternating` | One-way traffic. Direction = the direction the line was drawn. Walking ignores it. |
 | `lanes` | whole number ≥ 1 | Kept in the output for routing engines that use it. |
-| `access` | `yes`, `no`, `private`, `permissive`, `destination`, `designated`, `customers`, `delivery`, `agricultural`, `forestry`, `discouraged`, `permit`, `use_sidepath`, `dismount`, `official`, `unknown` | General access. `private` closes the way to every mode. |
-| `motor_vehicle`, `motorcar` | same values as `access` | `no` closes the way to cars (a bus gate or filtered street). |
-| `bicycle` | same values as `access` | `no` closes the way to bikes. |
-| `foot` | same values as `access` | `no` closes the way to pedestrians. |
+| `access` | `yes`, `no`, `private`, `permissive`, `destination`, `designated`, `customers`, `delivery`, `agricultural`, `forestry`, `discouraged`, `permit`, `use_sidepath`, `dismount`, `official`, `restricted`, `military`, `emergency`, `unknown` | Access for everyone. See [Who may use a way](#who-may-use-a-way). |
+| `vehicle` | same values as `access` | Access for all vehicles (cars and bikes, not pedestrians). |
+| `motor_vehicle`, `motorcar` | same values as `access` | Access for cars. `motor_vehicle=no` makes a bus gate or filtered street. |
+| `bicycle` | same values as `access` | Access for bikes. `bicycle=designated` on a footway makes it a shared-use path. |
+| `foot` | same values as `access` | Access for pedestrians. `foot=yes` on a cycleway lets people walk on it. |
 | `bridge` | `yes`, `viaduct`, ... (`no` = not a bridge) | Passes **over** the ways it crosses instead of joining them. |
 | `tunnel` | `yes`, `building_passage`, ... (`no` = not a tunnel) | Passes **under** the ways it crosses instead of joining them. |
 | `layer` | whole number, e.g. `1`, `-1` (default `0`) | Ways on different layers cross without joining. |
 | `name`, `ref` | any text | Kept in the output. |
+
+Other tags routers use are kept and exported too, on custom features
+and on the OSM network: `oneway:bicycle` (contraflow cycling),
+`cycleway`, `cycleway:left/right/both`, `segregated`, `surface`,
+`smoothness`, `tracktype`, `lit`, `incline`, `sac_scale`, `toll`,
+`hgv`, `bus`, `psv`, `maxweight`, `maxheight`, `maxwidth`,
+`maxspeed:forward/backward`, `lanes:forward/backward` and more (full
+list in `src/networkforge/tags.py`). On nodes, barriers (`barrier=bollard`,
+`gate`), traffic signals and crossings are kept.
+
+### Who may use a way
+
+Two rules decide whether a mode (car, bike, walk) can use a way:
+
+1. **The way type.** Cars can't use footways, cycleways, paths,
+   pedestrian streets, tracks or steps. Pedestrians can't use motorways
+   or cycleways. Bikes can't use footways, motorways or steps. Service
+   roads are only in the `drive_service` car network.
+2. **Access tags, most specific first.** For cars that's `motorcar`,
+   then `motor_vehicle`, then `vehicle`, then `access`; for bikes
+   `bicycle`, `vehicle`, `access`; for walking `foot`, `access`. The
+   most specific tag present decides:
+   - `no`, `private`, `agricultural`, `forestry`, `delivery`,
+     `emergency`, `military`, `restricted`, `permit` or `use_sidepath`
+     close the way to that mode.
+   - Anything else (`yes`, `designated`, `destination`, `customers`,
+     `permissive`, `dismount`, ...) leaves it open.
+
+   So `access=no` + `bicycle=yes` is a bikes-only route, and
+   `motor_vehicle=no` + `motorcar=yes` is open to cars.
+
+Two special cases follow from these rules:
+
+- **Busways** (`highway=busway`) are for buses: closed to cars, bikes
+  and pedestrians unless a tag opens them (e.g. `bicycle=designated`).
+- **A mode-specific tag can open a way its type would exclude:**
+  a footway with `bicycle=yes` or `designated` is usable by bikes, and a
+  cycleway with `foot=yes` or `designated` is walkable. It never opens
+  motorways to pedestrians or footways to cars.
 
 ### Where lines join
 
@@ -177,6 +217,9 @@ junctions); tag the custom line `bridge=yes` if it goes over one.
 | Shared walking and cycling path | `preset="shared_path"` |
 | Pedestrianise a street | `preset="pedestrian_street"` (+ `bicycle=no` to exclude bikes) |
 | Filtered street / bus gate | `preset="car_free_street"` |
+| Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |
+| Shared-use pavement (walk + cycle on a footway) | `highway=footway`, `bicycle=designated` |
+| Contraflow cycling on a one-way street | `highway=residential`, `oneway=yes`, `oneway:bicycle=no` (exported for routers like GraphHopper; NetworkForge's own OSMnx-based routing still treats the street as one-way for bikes) |
 | Road bridge over a railway or river | `highway=primary`, `bridge=yes`, `layer=1` |
 | Underpass for walking | `highway=footway`, `tunnel=yes`, `layer=-1` |
 | New motorway slip road | `highway=motorway_link`, `oneway=yes`, drawn in the direction of travel, ending on the motorway |
