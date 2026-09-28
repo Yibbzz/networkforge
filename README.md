@@ -7,13 +7,41 @@ Integrate custom (proposed) roads, cycleways and paths into an existing
 OpenStreetMap network, following OSM access rules, so the result can be
 routed for any transport mode and compared with the original network.
 
-## Setup
+## Install
+
+From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-uv sync
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.2.0"
 ```
 
-## Usage
+For development, clone the repo and run `uv sync`.
+
+## Command line
+
+```bash
+# Check a custom layer's tags (seconds, no download)
+networkforge check --custom proposed.gpkg --preset primary_road
+
+# Build: every custom line a 40 mph primary road; OSM PBF + GeoPackage out
+networkforge build --extent extent.gpkg --custom proposed.gpkg \
+    --preset primary_road --tag maxspeed="40 mph" \
+    --out network.osm.pbf --baseline-out baseline.osm.pbf --gpkg network.gpkg
+
+# Area given as W,S,E,N, OSM data from a local extract
+networkforge build --bbox -4.60,54.10,-4.40,54.25 --custom proposed.gpkg \
+    --osm-source isle-of-man.osm.pbf --out network.osm.pbf
+
+networkforge presets              # list presets and who can use them
+networkforge build --help         # every option
+```
+
+Add `--json` to get progress, results and errors as JSON lines on stdout,
+for programs driving the CLI. Exit codes: `0` success, `2` bad usage,
+`3` unusable input, `4` OSM download failed, `5` structural check failed,
+`1` anything else.
+
+## Python
 
 ```python
 import logging
@@ -86,6 +114,16 @@ uv run ruff check .               # lint
 
 CI runs lint and the offline suite on every push and pull request, and
 the live tests plus a 500-example property run nightly.
+
+## Releasing
+
+1. Update `version` in `pyproject.toml` and add a `## [x.y.z]` section to
+   [CHANGELOG.md](CHANGELOG.md).
+2. Commit, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The release workflow checks the tag matches the version, runs the tests,
+builds the package and publishes a GitHub Release with the changelog
+notes and the wheel attached.
 
 ## Scripts
 

@@ -336,7 +336,10 @@ def check_custom_tags(
             problems.append(f"{label}: layer={layer!r} must be a whole number, e.g. 1 or -1")
 
         modes = usable_modes(tags)
-        mode_counts[", ".join(modes) or "NOTHING"] += 1
+        if highway in KNOWN_HIGHWAYS:
+            mode_counts[", ".join(modes) or "NOTHING"] += 1
+        else:
+            mode_counts["NOTHING (invalid highway)"] += 1
         log.debug("%s: highway=%s maxspeed=%s -> usable by: %s",
                   label, highway, maxspeed, ", ".join(modes) or "NOTHING")
 

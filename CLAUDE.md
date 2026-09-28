@@ -6,12 +6,20 @@ OSM XML/PBF) can compare "before" vs "after". See `proposed_arc.txt` for the tar
 
 Python >= 3.12, managed with `uv`. Run things with `uv run python ...` / `uv run pytest`.
 
+Releases: bump `version` in pyproject.toml + CHANGELOG.md section, then push tag `vX.Y.Z`;
+`.github/workflows/release.yml` checks, tests, builds and publishes a GitHub Release.
+No QGIS code in this repo - a plugin will live in a separate repo and call the CLI/API.
+
 Tests: `uv run pytest` runs the offline suite (~30 s). `uv run pytest -m network` runs the live
 tests (download OSM; ~5 min). Offline is the default via `addopts` in pyproject.toml.
 Lint: `uv run ruff check .`. Coverage: `uv run pytest --cov`.
 The package is installed editable by `uv sync` (hatchling build-system), no PYTHONPATH needed.
 
 ## Source (`src/networkforge/`)
+- `cli.py` - `networkforge build|check|presets` (console script; also `python -m networkforge`).
+  `--json` = JSON lines on stdout (progress/done/error events) for programs such as a future QGIS
+  plugin; human logs on stderr. Exit codes 0/1/2/3 input/4 download/5 integrity. Keep this and the
+  JSON event shapes stable: other tools depend on them.
 - `network.py` - `build_network()`: the 13-step pipeline (check inputs/tags -> download OSM -> snap
   custom lines -> find junctions -> split -> merge nodes -> assign u/v -> validate). Logs via
   `logging` (never print in src/) and calls optional `progress(step, total, text)`.

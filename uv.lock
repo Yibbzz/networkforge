@@ -401,11 +401,12 @@ wheels = [
 
 [[package]]
 name = "networkforge"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas" },
     { name = "networkx" },
+    { name = "numpy" },
     { name = "osmium" },
     { name = "osmnx" },
     { name = "pandas" },
@@ -425,15 +426,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "geopandas" },
-    { name = "networkx" },
-    { name = "osmium", specifier = ">=4.3.1" },
-    { name = "osmnx" },
-    { name = "pandas" },
-    { name = "pyproj" },
-    { name = "requests" },
-    { name = "scikit-learn", specifier = ">=1.9.1" },
-    { name = "shapely" },
+    { name = "geopandas", specifier = ">=1.0" },
+    { name = "networkx", specifier = ">=3.0" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "osmium", specifier = ">=4.0" },
+    { name = "osmnx", specifier = ">=2.0,<3" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "pyproj", specifier = ">=3.6" },
+    { name = "requests", specifier = ">=2.31" },
+    { name = "scikit-learn", specifier = ">=1.3" },
+    { name = "shapely", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]

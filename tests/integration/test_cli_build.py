@@ -1,0 +1,77 @@
+"""`networkforge build` end to end on the synthetic grid (download faked)."""
+
+import json
+
+import geopandas as gpd
+import osmium
+import pyogrio
+import pytest
+from shapely.geometry import LineString
+
+from networkforge.cli import EXIT_DOWNLOAD, EXIT_OK, main
+from networkforge.network import TOTAL_STEPS
+from tests.integration.grid import BBOX, DIAGONAL, ROAD_ACROSS, UTM
+
+
+@pytest.fixture
+def files(tmp_path):
+    extent = tmp_path / "extent.gpkg"
+    BBOX.to_file(extent)
+    custom = tmp_path / "custom.gpkg"
+    gpd.GeoDataFrame({"highway": ["primary", "cycleway"]},
+                     geometry=[LineString(ROAD_ACROSS), LineString(DIAGONAL)],
+                     crs=UTM).to_file(custom)
+    return extent, custom, tmp_path
+
+
+def events(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_build_writes_every_output_and_reports_json(fake_osm, files, capsys):
+    extent, custom, out = files
+    code = main(["build", "--extent", str(extent), "--custom", str(custom),
+                 "--tag", "maxspeed=30 mph", "--out", str(out / "net.osm.pbf"),
+                 "--baseline-out", str(out / "base.osm"), "--gpkg", str(out / "net.gpkg"),
+                 "--json"])
+
+    assert code == EXIT_OK
+    log = events(capsys)
+    steps = [e["step"] for e in log if e["event"] == "progress"]
+    assert steps == list(range(1, TOTAL_STEPS + 1))
+
+    done = log[-1]
+    assert done["event"] == "done"
+    assert set(done["outputs"]) == {"osm", "baseline_osm", "gpkg"}
+    assert done["custom_edges"] > 0
+
+    assert sorted(pyogrio.list_layers(out / "net.gpkg")[:, 0]) == ["edges", "nodes"]
+    custom_ways = [dict(w.tags) for w in osmium.FileProcessor(str(out / "net.osm.pbf"),
+                                                              osmium.osm.WAY)
+                   if w.tags.get("nf:custom") == "yes"]
+    assert {w["highway"] for w in custom_ways} == {"primary", "cycleway"}
+    assert all(w["maxspeed"] == "30 mph" for w in custom_ways)
+
+
+def test_build_prints_a_readable_summary(fake_osm, files, capsys):
+    extent, custom, out = files
+    code = main(["build", "--extent", str(extent), "--custom", str(custom),
+                 "--out", str(out / "net.osm")])
+    assert code == EXIT_OK
+    assert capsys.readouterr().out.startswith("Done: ")
+
+
+def test_download_failure_exit_code(monkeypatch, files, capsys):
+    import osmnx as ox
+    import requests
+
+    def offline(*args, **kwargs):
+        raise requests.ConnectionError("offline")
+
+    monkeypatch.setattr(ox, "graph_from_bbox", offline)
+    extent, custom, out = files
+    code = main(["build", "--extent", str(extent), "--custom", str(custom),
+                 "--out", str(out / "net.osm"), "--json"])
+
+    assert code == EXIT_DOWNLOAD
+    assert events(capsys)[-1]["type"] == "OSMDownloadError"
