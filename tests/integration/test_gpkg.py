@@ -11,7 +11,7 @@ import shapely
 
 from networkforge import write_gpkg
 from networkforge.export import analysis_edges
-from tests.helpers import ROUTING_MODES
+from tests.helpers import ROUTING_MODES, qgis_graph
 from tests.integration.grid import (
     BUS_GATE,
     CYCLEWAY,
@@ -24,8 +24,6 @@ from tests.integration.grid import (
     ROAD_TAGS,
     node_id,
 )
-
-MODE_COLUMN = {"drive": "car", "bike": "bike", "walk": "walk"}
 
 
 @pytest.fixture
@@ -41,21 +39,6 @@ def edges(result):
 def rows_between(edges, pair):
     a, b = sorted(pair)
     return edges[((edges.u == a) & (edges.v == b)) | ((edges.u == b) & (edges.v == a))]
-
-
-def qgis_graph(edges, mode):
-    """Directed graph the way QGIS's network tools read the layer."""
-    column = MODE_COLUMN[mode]
-    direction = "both" if mode == "walk" else f"{column}_direction"
-    graph = nx.DiGraph()
-    for row in edges[edges[column]].itertuples():
-        way = "both" if direction == "both" else getattr(row, direction)
-        u, v = int(row.u), int(row.v)
-        if way in ("forward", "both"):
-            graph.add_edge(u, v, length=row.length_m)
-        if way in ("backward", "both"):
-            graph.add_edge(v, u, length=row.length_m)
-    return graph
 
 
 def lengths(graph):

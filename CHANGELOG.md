@@ -14,6 +14,8 @@ minor version may include breaking changes).
   `bike_direction` for QGIS's direction field, incl. contraflow cycling).
   One row per street (OSMnx's reverse copies of two-way streets are
   dropped) and every edge ends exactly on its nodes.
+- CI job routing on the GeoPackage with QGIS's own network analysis
+  (`qgis_process`, QGIS LTR and latest) and checking the routes.
 
 ## [0.2.0] - 2026-09-28
 

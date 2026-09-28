@@ -44,6 +44,34 @@ jobs:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  qgis:
+    name: GeoPackage in QGIS ${{ matrix.qgis }}
+    # Routes on the GeoPackage with QGIS's own network analysis tools
+    # (qgis_process) and checks QGIS finds the expected routes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        qgis: [ltr, latest]  # qgis/qgis Docker image tags
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Build the test GeoPackage and expected routes
+        run: |
+          uv sync --locked
+          uv run python -m tests.qgis.make_fixture qgis-fixture
+
+      - name: Route on it in QGIS
+        run: |
+          docker run --rm -e QT_QPA_PLATFORM=offscreen \
+            -v "$PWD:/work" -w /work "qgis/qgis:${{ matrix.qgis }}" \
+            sh -c "qgis_process --version && python3 tests/qgis/check_with_qgis.py qgis-fixture"
+
   live:
     name: Live OSM tests + deep property tests
     # Slow and depends on Overpass, so not on every push.

@@ -160,9 +160,18 @@ uv run ruff check .               # lint
 | `tests/unit/` | tag rules, CRS selection | milliseconds |
 | `tests/integration/` | full pipeline on a hand-built street grid, plus Hypothesis property tests | seconds |
 | `tests/live/` | real OSM data in Edinburgh, Amsterdam, Manchester | minutes |
+| `tests/qgis/` | the GeoPackage routed with QGIS's own tools (`qgis_process`) | ~1 min, needs QGIS |
 
-CI runs lint and the offline suite on every push and pull request, and
-the live tests plus a 500-example property run nightly.
+CI runs lint, the offline suite and the QGIS check (in the official
+`qgis/qgis` Docker image, LTR and latest) on every push and pull request,
+and the live tests plus a 500-example property run nightly.
+
+To run the QGIS check locally (with QGIS installed):
+
+```bash
+uv run python -m tests.qgis.make_fixture qgis-fixture
+QT_QPA_PLATFORM=offscreen python3 tests/qgis/check_with_qgis.py qgis-fixture   # QGIS's Python
+```
 
 ## Releasing
 

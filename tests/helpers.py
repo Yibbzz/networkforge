@@ -108,3 +108,25 @@ def assert_valid_osm_xml(path: Path) -> None:
     known = set(node_ids)
     dangling = [ref for refs, _ in ways for ref in refs if ref not in known]
     assert not dangling, f"{path.name}: way refs with no <node>: {dangling[:10]}"
+
+
+# Columns QGIS's network tools are pointed at, per routing mode.
+MODE_COLUMN = {"drive": "car", "bike": "bike", "walk": "walk"}
+
+
+def qgis_graph(edges: gpd.GeoDataFrame, mode: str) -> nx.DiGraph:
+    """
+    Directed graph from GeoPackage analysis edges, read the way QGIS's
+    network tools read the layer: filtered to the mode's column, with the
+    mode's direction field (walking: both ways), weighted by length_m.
+    """
+    column = MODE_COLUMN[mode]
+    graph = nx.DiGraph()
+    for row in edges[edges[column]].itertuples():
+        way = "both" if mode == "walk" else getattr(row, f"{column}_direction")
+        u, v = int(row.u), int(row.v)
+        if way in ("forward", "both"):
+            graph.add_edge(u, v, length=row.length_m, minutes=row.car_minutes)
+        if way in ("backward", "both"):
+            graph.add_edge(v, u, length=row.length_m, minutes=row.car_minutes)
+    return graph
