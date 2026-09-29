@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
 ### Added
 - GeoPackage output for QGIS (`write_gpkg`, `networkforge build --gpkg`):
   edges carry network-analysis columns (`car`/`bike`/`walk`,
@@ -86,5 +88,6 @@ minor version may include breaking changes).
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Yibbzz/networkforge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Yibbzz/networkforge/releases/tag/v0.2.0
