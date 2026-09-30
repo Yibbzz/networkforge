@@ -134,3 +134,34 @@ def test_input_errors_are_catchable_as_value_error_and_base_class():
         clean_custom_data(features(), BBOX)
     with pytest.raises(NetworkForgeError):
         clean_custom_data(features(), BBOX)
+
+
+def test_input_errors_list_issues_per_feature():
+    with pytest.raises(InputError) as info:
+        clean_custom_data(features(LINE, Point(150, 150), None), BBOX)
+    assert info.value.issues == [
+        {"feature": 2, "message": "no geometry"},
+        {"feature": 1, "message": "Point, not a line"},
+    ]
+
+
+def test_feature_ids_come_from_the_index():
+    gdf = features(LINE, Point(150, 150)).set_axis(["road-a", "road-b"])
+    with pytest.raises(InputError) as info:
+        clean_custom_data(gdf, BBOX)
+    assert info.value.issues == [{"feature": "road-b", "message": "Point, not a line"}]
+    assert "feature road-b" in str(info.value)
+
+
+def test_repeated_feature_ids_rejected():
+    gdf = features(LINE, LINE).set_axis([7, 7])
+    with pytest.raises(InputError, match="must be unique; repeated: 7"):
+        clean_custom_data(gdf, BBOX)
+
+
+def test_reserved_attribute_names_are_set_aside(caplog):
+    gdf = features(LINE).assign(length=12.5, key="x", highway="primary")
+    cleaned = clean_custom_data(gdf, BBOX)
+    assert {"length", "key"}.isdisjoint(cleaned.columns)
+    assert "highway" in cleaned.columns
+    assert "Ignoring custom attribute(s) key, length" in caplog.text

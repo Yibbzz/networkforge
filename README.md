@@ -32,7 +32,7 @@ is not a full transport model:
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.3.0"
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.4.0"
 ```
 
 For development, clone the repo and run `uv sync`.
@@ -43,23 +43,35 @@ For development, clone the repo and run `uv sync`.
 # Check a custom layer's tags (seconds, no download)
 networkforge check --custom proposed.gpkg --preset primary_road
 
-# Build: every custom line a 40 mph primary road; OSM PBF + GeoPackage out
+# Build: every custom line a 40 mph primary road; routers get PBF,
+# QGIS gets before/after GeoPackages
 networkforge build --extent extent.gpkg --custom proposed.gpkg \
     --preset primary_road --tag maxspeed="40 mph" \
-    --out network.osm.pbf --baseline-out baseline.osm.pbf --gpkg network.gpkg
+    --out after.osm.pbf --baseline-out before.osm.pbf \
+    --gpkg after.gpkg --baseline-gpkg before.gpkg
 
 # Area given as W,S,E,N, OSM data from a local extract
 networkforge build --bbox -4.60,54.10,-4.40,54.25 --custom proposed.gpkg \
     --osm-source isle-of-man.osm.pbf --out network.osm.pbf
 
 networkforge presets              # list presets and who can use them
+networkforge info                 # version, presets, valid tag values, limits
 networkforge build --help         # every option
 ```
 
-Add `--json` to get progress, results and errors as JSON lines on stdout,
-for programs driving the CLI. Exit codes: `0` success, `2` bad usage,
-`3` unusable input, `4` OSM download failed, `5` structural check failed,
-`1` anything else.
+**For programs driving the CLI** (e.g. a QGIS plugin):
+
+- `--json` puts one JSON object per line on stdout; readable logs stay on
+  stderr. Events: `progress`, `warning` (with the `features` or `fields`
+  it's about), `done` (output paths and counts), `error` (with `type`,
+  `message`, `guide`, and `issues`: `[{"feature": 3, "message": ...}]`).
+- `--id-field NAME` names features in warnings and issues by that
+  attribute, e.g. `--id-field fid` for a GeoPackage's feature ids, so a
+  front end can select the features concerned. Default: row number.
+- `networkforge info --json` describes the engine: presets, network
+  types, valid tag values (for building input forms), limits.
+- Exit codes: `0` success, `2` bad usage, `3` unusable input, `4` OSM
+  download failed, `5` structural check failed, `1` anything else.
 
 ## Outputs
 

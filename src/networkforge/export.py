@@ -48,6 +48,13 @@ GENERATOR = "NetworkForge"
 BIKE_KPH = 15.0
 WALK_KPH = 5.0
 
+# Columns analysis_edges() adds for QGIS network analysis.
+GPKG_ANALYSIS_COLUMNS = (
+    "car", "bike", "walk", "speed_kph", "length_m",
+    "car_minutes", "bike_minutes", "walk_minutes",
+    "car_direction", "bike_direction",
+)
+
 # Edge columns that only mean something inside the pipeline.
 INTERNAL_COLUMNS = ["key", "split", "reversed", "length"]
 

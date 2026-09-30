@@ -151,3 +151,14 @@ def test_tag_errors_are_typed_and_link_the_guide():
 def test_invalid_layer_rejected():
     with pytest.raises(ValueError, match="layer='up'"):
         check(custom(highway="primary", layer="up"), {})
+
+
+def test_tag_errors_carry_structured_issues():
+    from networkforge.errors import InvalidTagsError
+
+    gdf = resolve_custom_tags(custom(highway="primary", maxspeed="fast"), {}).set_axis([42])
+    with pytest.raises(InvalidTagsError) as info:
+        check_custom_tags(gdf, "all")
+    assert info.value.issues == [
+        {"feature": 42, "message": "maxspeed='fast' is not a valid OSM speed"}]
+    assert info.value.problems == ["feature 42: maxspeed='fast' is not a valid OSM speed"]

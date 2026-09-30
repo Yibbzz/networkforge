@@ -101,9 +101,12 @@ test a whole layer as something else, e.g. "what if these roads were
 cycleways?".
 
 Attributes that aren't tags (an `id` or `notes` column, for example)
-are ignored, except these names, which the pipeline reserves and
-rejects: `u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed`,
-`length`.
+are ignored. A few names are used internally, so attributes called
+`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed` or `length` are
+set aside with a warning (they aren't OSM tags, so nothing is lost).
+
+Messages name features by row number, or by an id attribute you choose
+(`--id-field` on the command line; the data's index in Python).
 
 ## Presets
 
@@ -242,7 +245,7 @@ every problem, one per feature. What each message means:
 | `access='...' is not a valid OSM access value` (or `foot`, `bicycle`, ...) | Use a value from the `access` row above. |
 | `tags make it unusable by every mode` | The tags close the way to everyone, e.g. `access=private`. |
 | `not usable in network_type='drive'` | You built a car-only network but the feature is e.g. a cycleway. Use the default `network_type="all"`, which keeps every mode. |
-| `custom data has reserved column(s)` | Rename those columns (see [How tags combine](#how-tags-combine)). |
+| `custom data has reserved column(s)` | Only when calling `check_custom_tags` directly: rename those columns. `build_network` and the CLI set them aside with a warning instead (see [How tags combine](#how-tags-combine)). |
 
 Other errors (all are subclasses of `networkforge.NetworkForgeError`):
 

@@ -7,6 +7,25 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-30
+
+### Added
+- `networkforge build --baseline-gpkg`: the untouched OSM network as a
+  GeoPackage with the same analysis columns, for before/after in QGIS.
+- `--id-field NAME` (build, check): name features in warnings and errors
+  by an attribute, e.g. a GeoPackage's `fid`, instead of row number.
+- Errors carry `issues` - `[{"feature": id, "message": ...}]` - on the
+  exception (`NetworkForgeError.issues`) and in `--json` error events.
+- `--json` emits `warning` events, with the `features` / `fields`
+  they're about.
+- `networkforge info [--json]`: version, presets, network types, valid tag
+  values and limits, for front ends building their UI from the engine.
+
+### Changed
+- Custom attributes with internal names (`length`, `key`, `u`, `v`, ...)
+  are set aside with a warning instead of failing the build.
+- Custom feature ids (the data's index) must be unique.
+
 ## [0.3.0] - 2026-09-29
 
 ### Added
@@ -88,6 +107,7 @@ minor version may include breaking changes).
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Yibbzz/networkforge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Yibbzz/networkforge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Yibbzz/networkforge/releases/tag/v0.2.0

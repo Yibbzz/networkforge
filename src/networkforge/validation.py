@@ -273,16 +273,15 @@ def check_custom_tags(
 
     Logs which modes the features support. Problems raise
     InvalidTagsError when strict, otherwise are logged as warnings.
+    Problems name features by the custom data's index.
     """
-    problems = []
+    issues = []  # (feature id or None, message)
     notes = set()
     mode_counts = collections.Counter()
 
     reserved = RESERVED_COLUMNS & set(custom_gdf.columns)
     if reserved:
-        problems.append(
-            f"custom data has reserved column(s) {sorted(reserved)}; rename them"
-        )
+        issues.append((None, f"custom data has reserved column(s) {sorted(reserved)}; rename them"))
 
     tag_columns = [c for c in custom_gdf.columns if c != custom_gdf.geometry.name]
 
@@ -292,7 +291,7 @@ def check_custom_tags(
             log.warning(
                 "Attribute %r is not a tag NetworkForge uses - did you mean %r? "
                 "(Shapefiles cut names to 10 characters; use GeoPackage.)",
-                column, suggestion,
+                column, suggestion, extra={"field": column},
             )
 
     for index, row in custom_gdf.iterrows():
@@ -303,35 +302,35 @@ def check_custom_tags(
         highway = tags.get("highway")
 
         if highway is None:
-            problems.append(f"{label}: no highway tag")
+            issues.append((index, "no highway tag"))
         elif highway not in KNOWN_HIGHWAYS:
-            problems.append(f"{label}: highway={highway!r} is not a routable highway value")
+            issues.append((index, f"highway={highway!r} is not a routable highway value"))
 
         maxspeed = tags.get("maxspeed")
         if maxspeed is not None:
             if not MAXSPEED_PATTERN.match(maxspeed):
-                problems.append(f"{label}: maxspeed={maxspeed!r} is not a valid OSM speed")
+                issues.append((index, f"maxspeed={maxspeed!r} is not a valid OSM speed"))
             elif maxspeed.replace(".", "").isdigit():
                 notes.add(f"maxspeed={maxspeed} has no unit and is read as km/h")
 
         oneway = tags.get("oneway")
         if oneway is not None and oneway not in ONEWAY_VALUES:
-            problems.append(f"{label}: oneway={oneway!r} is not a valid OSM value")
+            issues.append((index, f"oneway={oneway!r} is not a valid OSM value"))
         if oneway in {"yes", "true", "1", "-1"}:
             notes.add("oneway direction follows each line's drawing direction")
 
         lanes = tags.get("lanes")
         if lanes is not None and not (lanes.isdigit() and int(lanes) > 0):
-            problems.append(f"{label}: lanes={lanes!r} must be a positive whole number")
+            issues.append((index, f"lanes={lanes!r} must be a positive whole number"))
 
         for key in ACCESS_KEYS:
             value = tags.get(key)
             if value is not None and value not in ACCESS_VALUES:
-                problems.append(f"{label}: {key}={value!r} is not a valid OSM access value")
+                issues.append((index, f"{key}={value!r} is not a valid OSM access value"))
 
         layer = tags.get("layer")
         if layer is not None and not re.fullmatch(r"-?\d+", layer):
-            problems.append(f"{label}: layer={layer!r} must be a whole number, e.g. 1 or -1")
+            issues.append((index, f"layer={layer!r} must be a whole number, e.g. 1 or -1"))
 
         modes = usable_modes(tags)
         if highway in KNOWN_HIGHWAYS:
@@ -343,23 +342,22 @@ def check_custom_tags(
 
         if highway in KNOWN_HIGHWAYS:
             if not modes:
-                problems.append(f"{label}: tags make it unusable by every mode")
+                issues.append((index, "tags make it unusable by every mode"))
             elif not allows_mode(tags, network_type):
-                problems.append(
-                    f"{label}: not usable in network_type={network_type!r} "
-                    f"(usable by: {', '.join(modes)})"
-                )
+                issues.append((index, f"not usable in network_type={network_type!r} "
+                                      f"(usable by: {', '.join(modes)})"))
 
     for modes, count in mode_counts.most_common():
         log.info("%d custom feature(s) usable by: %s", count, modes)
     for note in sorted(notes):
         log.info("Note: %s", note)
 
-    if problems:
-        error = InvalidTagsError(problems)
+    if issues:
+        error = InvalidTagsError(issues)
         if strict:
             raise error
-        log.warning("strict=False, continuing anyway: %s", error)
+        features = [i["feature"] for i in error.issues if i["feature"] is not None]
+        log.warning("strict=False, continuing anyway: %s", error, extra={"features": features})
 
 
 def _suggest_tag_key(column: str) -> str | None:

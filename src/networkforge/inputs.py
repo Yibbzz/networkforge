@@ -13,6 +13,7 @@ import shapely
 from shapely.geometry import box
 
 from .errors import InputError
+from .validation import RESERVED_COLUMNS
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,8 @@ def clean_custom_data(
             "the map. Set one, e.g. custom_gdf.set_crs('EPSG:4326')."
         )
 
-    custom = custom_gdf.copy()
+    check_feature_ids(custom_gdf)
+    custom = drop_reserved_columns(custom_gdf.copy())
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty
@@ -114,31 +116,37 @@ def clean_custom_data(
     outside = usable & ~geometry.intersects(bbox_area)
     partly_outside = usable & ~outside & ~geometry.within(bbox_area)
 
-    problems = []
-    if no_geometry.any():
-        problems.append(f"{_ids(custom, no_geometry)}: no geometry")
-    if not_a_line.any():
-        types = sorted(set(geometry[not_a_line].geom_type))
-        problems.append(
-            f"{_ids(custom, not_a_line)}: {'/'.join(types)}, not a line "
-            "(only LineString and MultiLineString can be routed)"
-        )
-    if outside.any():
-        problems.append(f"{_ids(custom, outside)}: completely outside the bounding box")
+    problems, issues = [], []
+    types = geometry[not_a_line].geom_type
+    for mask, reason in (
+        (no_geometry, "no geometry"),
+        (not_a_line, f"{'/'.join(sorted(set(types)))}, not a line (only LineString and "
+                     "MultiLineString can be routed)"),
+        (outside, "completely outside the bounding box"),
+    ):
+        if mask.any():
+            problems.append(f"{_ids(custom, mask)}: {reason}")
+            issues += [{"feature": fid, "message": reason} for fid in custom.index[mask]]
+    for issue in issues:  # say which geometry type each non-line is
+        if issue["feature"] in types.index:
+            issue["message"] = f"{types.loc[issue['feature']]}, not a line"
 
     if problems:
         message = "Some custom features can't be used - " + "; ".join(problems) + "."
         if strict:
-            raise InputError(message, guide="preparing-your-data")
-        log.warning("strict=False, dropping them: %s", message)
+            raise InputError(message, guide="preparing-your-data", issues=issues)
+        log.warning("strict=False, dropping them: %s", message,
+                    extra={"features": [i["feature"] for i in issues]})
         custom = custom[usable & ~outside]
         if custom.empty:
-            raise InputError("No usable custom features are left. " + message)
+            raise InputError("No usable custom features are left. " + message, issues=issues)
 
-    if partly_outside.any():
+    partly = partly_outside.loc[custom.index]
+    if partly.any():
         log.warning(
             "%s: partly outside the bounding box; the parts outside can't join "
-            "the OSM network.", _ids(custom, partly_outside.loc[custom.index]).capitalize(),
+            "the OSM network.", _ids(custom, partly).capitalize(),
+            extra={"features": list(custom.index[partly])},
         )
 
     if custom.geometry.has_z.any():
@@ -146,6 +154,33 @@ def clean_custom_data(
         custom = custom.set_geometry(shapely.force_2d(custom.geometry.values), crs=custom.crs)
 
     return custom
+
+
+def check_feature_ids(custom_gdf: gpd.GeoDataFrame) -> None:
+    """The index names features in messages and JSON issues: it must be unique."""
+    if not custom_gdf.index.is_unique:
+        repeated = custom_gdf.index[custom_gdf.index.duplicated()]
+        duplicated = sorted(set(repeated), key=str)[:MAX_LISTED]
+        raise InputError(
+            f"Custom feature ids (the data's index / --id-field) must be unique; "
+            f"repeated: {', '.join(map(str, duplicated))}."
+        )
+
+
+def drop_reserved_columns(custom_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Set aside attributes whose names the pipeline uses internally (e.g.
+    `length`, `key` - common in GIS layers). They aren't OSM tags, so
+    nothing is lost; a warning names them.
+    """
+    reserved = sorted(RESERVED_COLUMNS & set(custom_gdf.columns))
+    if reserved:
+        log.warning(
+            "Ignoring custom attribute(s) %s: the names are used internally and "
+            "aren't OSM tags.", ", ".join(reserved), extra={"fields": reserved},
+        )
+        custom_gdf = custom_gdf.drop(columns=reserved)
+    return custom_gdf
 
 
 def _ids(gdf: gpd.GeoDataFrame, mask) -> str:

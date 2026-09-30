@@ -17,10 +17,13 @@ Lint: `uv run ruff check .`. Coverage: `uv run pytest --cov`.
 The package is installed editable by `uv sync` (hatchling build-system), no PYTHONPATH needed.
 
 ## Source (`src/networkforge/`)
-- `cli.py` - `networkforge build|check|presets` (console script; also `python -m networkforge`).
-  `--json` = JSON lines on stdout (progress/done/error events) for programs such as a future QGIS
-  plugin; human logs on stderr. Exit codes 0/1/2/3 input/4 download/5 integrity. Keep this and the
-  JSON event shapes stable: other tools depend on them.
+- `cli.py` - `networkforge build|check|presets|info` (console script; also `python -m networkforge`).
+  `--json` = JSON lines on stdout (progress/warning/done/error events; errors carry `issues`) for
+  programs such as the QGIS plugin; human logs always on stderr. `--id-field` sets the custom data's
+  index, which names features everywhere (`NetworkForgeError.issues`, `extra={"features": ...}` on
+  log warnings -> JSON warning events via `_WarningEvents`). `--baseline-gpkg` = before network.
+  Exit codes 0/1/2/3 input/4 download/5 integrity. Keep flags and JSON shapes stable: the plugin
+  depends on them (breaking changes = new engine version).
 - `network.py` - `build_network()`: the 13-step pipeline (check inputs/tags -> download OSM -> snap
   custom lines -> find junctions -> split -> merge nodes -> assign u/v -> validate). Logs via
   `logging` (never print in src/) and calls optional `progress(step, total, text)`.

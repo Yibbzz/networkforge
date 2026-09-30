@@ -17,17 +17,31 @@ DOCS = "docs"
 GUIDE = f"{DOCS}/tagging-guide.md"
 
 
+def feature_id(value):
+    """A feature id (custom data index value) as a plain JSON-friendly value."""
+    if hasattr(value, "item"):  # numpy scalar
+        value = value.item()
+    return value if isinstance(value, int | float | str) or value is None else str(value)
+
+
 class NetworkForgeError(Exception):
     """
     Base class for every error NetworkForge raises on purpose.
 
     `guide` is a section of the tagging guide ("presets") or another
     doc in docs/ ("osm-data.md#getting-an-extract").
+
+    `issues` pinpoints problems per custom feature, as a list of
+    {"feature": id, "message": text} (feature None for problems that
+    aren't about one feature). Feature ids are the custom data's index
+    values - set the index to an id column to get your own ids.
     """
 
-    def __init__(self, message: str, guide: str | None = None):
+    def __init__(self, message: str, guide: str | None = None, issues: list | None = None):
         super().__init__(message)
         self.guide = guide
+        self.issues = [{"feature": feature_id(i["feature"]), "message": i["message"]}
+                       for i in issues or []]
 
     def __str__(self) -> str:
         message = super().__str__()
@@ -44,11 +58,16 @@ class InputError(NetworkForgeError, ValueError):
 class InvalidTagsError(InputError):
     """One or more custom features have tags that break OSM rules."""
 
-    def __init__(self, problems: list[str]):
-        self.problems = problems
+    def __init__(self, issues: list[tuple]):
+        """issues: (feature id or None, message) pairs."""
+        self.problems = [
+            message if feature is None else f"feature {feature_id(feature)}: {message}"
+            for feature, message in issues
+        ]
         super().__init__(
-            f"{len(problems)} custom tag problem(s):\n  - " + "\n  - ".join(problems),
+            f"{len(self.problems)} custom tag problem(s):\n  - " + "\n  - ".join(self.problems),
             guide="fixing-tag-errors",
+            issues=[{"feature": feature, "message": message} for feature, message in issues],
         )
 
 

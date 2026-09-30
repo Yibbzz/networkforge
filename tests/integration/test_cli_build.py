@@ -75,3 +75,20 @@ def test_download_failure_exit_code(monkeypatch, files, capsys):
 
     assert code == EXIT_DOWNLOAD
     assert events(capsys)[-1]["type"] == "OSMDownloadError"
+
+
+def test_build_writes_before_and_after_geopackages(fake_osm, files, capsys):
+    extent, custom, out = files
+    code = main(["build", "--extent", str(extent), "--custom", str(custom),
+                 "--tag", "maxspeed=30 mph", "--gpkg", str(out / "after.gpkg"),
+                 "--baseline-gpkg", str(out / "before.gpkg"), "--json"])
+    assert code == EXIT_OK
+    assert set(events(capsys)[-1]["outputs"]) == {"gpkg", "baseline_gpkg"}
+
+    before = gpd.read_file(out / "before.gpkg", layer="edges")
+    after = gpd.read_file(out / "after.gpkg", layer="edges")
+    for layer in (before, after):
+        assert {"car", "bike", "walk", "speed_kph", "car_direction"} <= set(layer.columns)
+    assert "custom" not in before.columns or not (before["custom"] == "yes").any()
+    assert (after["custom"] == "yes").sum() > 0
+    assert len(after) > len(before)

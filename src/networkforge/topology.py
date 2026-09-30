@@ -236,6 +236,7 @@ def snap_line_vertices_to_network(
     to one point is dropped.
     """
 
+    feature_ids = lines_gdf.index  # for messages; work positionally below
     lines = lines_gdf.reset_index(drop=True)
 
     line_numbers, vertices, is_end, line_separated = [], [], [], []
@@ -275,8 +276,10 @@ def snap_line_vertices_to_network(
     lines["geometry"] = new_geometries
     collapsed = lines.geometry.isna()
     if collapsed.any():
+        dropped = list(dict.fromkeys(feature_ids[collapsed.to_numpy()]))
         log.warning("%d custom line(s) shorter than the snap tolerance collapsed onto "
-                    "a single node and were dropped", int(collapsed.sum()))
+                    "a single node and were dropped (features %s)", int(collapsed.sum()),
+                    ", ".join(map(str, dropped)), extra={"features": dropped})
 
     return lines[~collapsed]
 

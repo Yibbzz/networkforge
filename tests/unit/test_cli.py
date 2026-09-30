@@ -3,10 +3,12 @@
 import json
 import subprocess
 import sys
+from importlib.metadata import version
 
 import geopandas as gpd
+import pandas as pd
 import pytest
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from networkforge.cli import (
     EXIT_INPUT,
@@ -126,3 +128,103 @@ def test_tag_arguments():
     assert _tags(["maxspeed=40 mph", " lanes = 2 "]) == {"maxspeed": "40 mph", "lanes": "2"}
     with pytest.raises(InputError, match="KEY=VALUE"):
         _tags(["maxspeed"])
+
+
+# ---------------------------------------------------------------- v0.4 plugin support
+
+@pytest.fixture
+def id_file(tmp_path):
+    """GeoPackage like a QGIS export: fid 101-103, a 'length' field, one bad tag."""
+    path = tmp_path / "custom.gpkg"
+    gdf = gpd.GeoDataFrame(
+        {"highway": ["primary", "cycleway", "primary"],
+         "maxspeed": ["40 mph", None, "fast"],
+         "ref_id": ["a", "b", "c"],
+         "length": [1.0, 2.0, 3.0]},
+        geometry=[LineString([(-3.19, 55.95), (-3.18, 55.96)]),
+                  LineString([(-3.18, 55.95), (-3.17, 55.96)]),
+                  LineString([(-3.17, 55.95), (-3.00, 55.96)])],
+        crs="EPSG:4326", index=pd.Index([101, 102, 103], name="fid"),
+    )
+    gdf.to_file(path, driver="GPKG", index=True)
+    return path
+
+
+def run_json(capsys, *args):
+    code = main([*args, "--json"])
+    return code, json_lines(capsys)
+
+
+def test_issues_name_features_by_gpkg_fid(id_file, capsys):
+    code, events = run_json(capsys, "check", "--custom", str(id_file), "--id-field", "fid")
+    assert code == EXIT_INPUT
+    error = events[-1]
+    assert error["issues"] == [
+        {"feature": 103, "message": "maxspeed='fast' is not a valid OSM speed"}]
+
+
+def test_issues_name_features_by_an_attribute(id_file, capsys):
+    code, events = run_json(capsys, "check", "--custom", str(id_file), "--id-field", "ref_id")
+    assert [i["feature"] for i in events[-1]["issues"]] == ["c"]
+
+
+def test_without_id_field_features_are_row_numbers(id_file, capsys):
+    _, events = run_json(capsys, "check", "--custom", str(id_file))
+    assert [i["feature"] for i in events[-1]["issues"]] == [2]
+
+
+def test_unknown_id_field_lists_attributes(id_file, capsys):
+    code, events = run_json(capsys, "check", "--custom", str(id_file), "--id-field", "nope")
+    assert code == EXIT_INPUT
+    assert "Attributes: highway, maxspeed, ref_id, length" in events[-1]["message"]
+
+
+def test_repeated_ids_are_rejected(id_file, capsys):
+    code, events = run_json(capsys, "check", "--custom", str(id_file), "--id-field", "highway")
+    assert code == EXIT_INPUT
+    assert "must be unique; repeated: primary" in events[-1]["message"]
+
+
+def test_warnings_are_json_events_with_features_and_fields(id_file, capsys):
+    _, events = run_json(capsys, "check", "--custom", str(id_file), "--id-field", "fid",
+                         "--tag", "maxspeed=30 mph", "--overwrite-tags",
+                         "--bbox=-3.2,55.9,-3.1,56.0")
+    warnings = [e for e in events if e["event"] == "warning"]
+    assert {"event": "warning", "fields": ["length"],
+            "message": "Ignoring custom attribute(s) length: the names are used internally "
+                       "and aren't OSM tags."} in warnings
+    assert any(w.get("features") == [103] and "partly outside" in w["message"] for w in warnings)
+    assert events[-1]["event"] == "done"
+
+
+def test_geometry_issues_name_features(tmp_path, capsys):
+    path = tmp_path / "mixed.geojson"
+    gpd.GeoDataFrame({"highway": ["primary", "primary"]},
+                     geometry=[LineString([(-3.19, 55.95), (-3.18, 55.96)]), Point(-3.18, 55.95)],
+                     crs="EPSG:4326").to_file(path)
+    code, events = run_json(capsys, "check", "--custom", str(path), "--bbox=-3.2,55.9,-3.1,56.0")
+    assert code == EXIT_INPUT
+    assert events[-1]["issues"] == [{"feature": 1, "message": "Point, not a line"}]
+
+
+def test_text_mode_keeps_stdout_free_of_json(id_file, capsys):
+    main(["check", "--custom", str(id_file)])
+    captured = capsys.readouterr()
+    assert not captured.out.lstrip().startswith("{")
+    assert "maxspeed='fast'" in captured.err
+
+
+def test_info_describes_the_engine(capsys):
+    from networkforge.export import GPKG_ANALYSIS_COLUMNS
+    from networkforge.inputs import MAX_OVERPASS_AREA_KM2
+    from networkforge.validation import KNOWN_HIGHWAYS
+
+    code, (info,) = run_json(capsys, "info")
+    assert code == EXIT_OK
+    assert info["version"] == version("networkforge")
+    assert list(info["presets"]) == list(PRESETS)
+    assert info["presets"]["cycleway"] == {"tags": PRESETS["cycleway"], "modes": ["bike"]}
+    assert info["tag_values"]["highway"] == sorted(KNOWN_HIGHWAYS)
+    assert "motor_vehicle" in info["tag_values"] and "bicycle" in info["tag_values"]
+    assert info["max_overpass_area_km2"] == MAX_OVERPASS_AREA_KM2
+    assert info["gpkg_edge_columns"] == list(GPKG_ANALYSIS_COLUMNS)
