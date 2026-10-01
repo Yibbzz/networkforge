@@ -32,7 +32,7 @@ is not a full transport model:
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.4.0"
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.5.0"
 ```
 
 For development, clone the repo and run `uv sync`.

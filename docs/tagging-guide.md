@@ -254,4 +254,11 @@ Other errors (all are subclasses of `networkforge.NetworkForgeError`):
 | `InputError` | An argument or the data can't be used: no CRS, no features, not lines, outside the box. See [Preparing your data](#preparing-your-data). |
 | `NoIntersectionError` | No custom line comes within `snap_tolerance` of the OSM network. |
 | `OSMDownloadError` | The OSM download failed (no internet, Overpass busy) or the box has no streets. |
-| `NetworkIntegrityError` | The built network broke a structural rule. Most often a custom line that doesn't connect to the rest of the network ("isolated from the main network component"): extend it to meet a street. Anything else is likely a NetworkForge bug; please report it with your data. |
+| `NetworkIntegrityError` | The built network broke a structural rule. This is likely a NetworkForge bug; please report it with your data. |
+
+A custom line that doesn't connect to the rest of the network is not an
+error: the build finishes with a warning naming the features ("don't
+connect to the rest of the network"). They are kept in the output, but
+no router can reach them - extend them to meet a street (within
+`snap_tolerance`) if they should connect. Only when *no* line reaches
+the network does the build stop (`NoIntersectionError`).

@@ -14,8 +14,17 @@ from osmnx._errors import InsufficientResponseError
 from shapely.geometry import LineString
 
 from networkforge import build_network
-from networkforge.errors import InputError, NoIntersectionError, OSMDownloadError
+from networkforge.errors import (
+    InputError,
+    NetworkIntegrityError,
+    NoIntersectionError,
+    OSMDownloadError,
+)
 from networkforge.network import TOTAL_STEPS
+from networkforge.validation import (
+    assert_all_custom_edges_are_connected,
+    disconnected_custom_edges,
+)
 from tests.integration.grid import BBOX, DIAGONAL, ROAD_ACROSS, UTM
 
 
@@ -70,6 +79,32 @@ def test_line_far_from_every_street_is_a_clear_error(build):
     inside_a_block = [(500_030.0, 6_200_030.0), (500_060.0, 6_200_060.0)]
     with pytest.raises(NoIntersectionError, match="touch"):
         build([(inside_a_block, {"highway": "primary"})])
+
+
+def test_line_away_from_the_network_only_warns(build, caplog):
+    # One line joins the grid, the other sits inside a block: the build
+    # succeeds, keeps both, and names the unreachable feature.
+    inside_a_block = [(500_030.0, 6_200_030.0), (500_060.0, 6_200_060.0)]
+    with caplog.at_level(logging.WARNING, logger="networkforge"):
+        result = build([(inside_a_block, {"highway": "primary"}),
+                        (ROAD_ACROSS, {"highway": "primary"})])
+
+    warnings = [r for r in caplog.records if "don't connect" in r.getMessage()]
+    assert [r.features for r in warnings] == [[0]]
+
+    stranded = result.edges[disconnected_custom_edges(result.edges)]
+    assert len(stranded) == 1
+    assert stranded.geometry.iloc[0].equals(LineString(inside_a_block))
+    with pytest.raises(NetworkIntegrityError, match="isolated"):
+        assert_all_custom_edges_are_connected(result.edges)
+
+
+def test_connected_lines_give_no_disconnected_warning(build, caplog):
+    with caplog.at_level(logging.WARNING, logger="networkforge"):
+        result = build([(ROAD_ACROSS, {"highway": "primary"})])
+
+    assert "don't connect" not in caplog.text
+    assert_all_custom_edges_are_connected(result.edges)
 
 
 def test_bad_snap_tolerance_rejected(build):

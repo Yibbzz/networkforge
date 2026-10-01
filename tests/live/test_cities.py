@@ -35,6 +35,7 @@ from shapely.geometry import LineString, Point, box
 from networkforge.export import way_tag_columns
 from networkforge.modes import usable_modes
 from networkforge.tags import NODE_TAGS
+from networkforge.validation import assert_all_custom_edges_are_connected
 from tests.helpers import (
     ROUTING_MODES,
     Build,
@@ -125,6 +126,8 @@ def case(request, tmp_path_factory) -> Case:
 
     # strict=True (default): bad tags or broken structure fail the build here.
     build = build_and_export(bbox, custom, tmp_path_factory.mktemp(f"{city}-{scenario}"), tags)
+    # The build only warns about unreachable custom lines.
+    assert_all_custom_edges_are_connected(build.edges)
 
     line_wgs84 = gpd.GeoSeries([line], crs=bbox.crs).to_crs("EPSG:4326").iloc[0]
     return Case(label, tags, own_mode, line_wgs84, build)

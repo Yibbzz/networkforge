@@ -52,7 +52,8 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
 - `validation.py` - pre-build `resolve_custom_tags` (feature attributes vs blanket tags, `overwrite`)
   + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
-  self-loops, custom edges connected, custom lines unbroken.
+  self-loops, custom lines unbroken. Custom lines not connected to the network only WARN in the
+  build (naming features; kept in the output) - tests assert `assert_all_custom_edges_are_connected`.
 - Outputs have two audiences: OSM/PBF (`write_osm`) for routers (Valhalla, GraphHopper), which read
   tags themselves; GeoPackage (`write_gpkg` -> `analysis_edges`) for QGIS network analysis, with
   car/bike/walk flags (same `allows_mode` rules, car = "drive"), speed_kph (`modes.car_speed_kph`),

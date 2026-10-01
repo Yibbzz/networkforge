@@ -16,6 +16,11 @@ offending rows/nodes, and returns None if everything is fine. They run
 at the end of build_network and are also used directly by the tests
 (see tests/live/test_structural_invariants.py). Connectivity uses a
 small in-module union-find.
+
+build_network doesn't run assert_all_custom_edges_are_connected: custom
+lines that don't reach the network are usually the user's data, not a
+broken build, so it only warns about them (disconnected_custom_edges).
+The tests still assert it wherever the lines are meant to connect.
 """
 
 import collections
@@ -24,6 +29,7 @@ import logging
 import re
 
 import geopandas as gpd
+import pandas as pd
 
 from .errors import InvalidTagsError, NetworkIntegrityError
 from .modes import allows_mode, mode_tag_keys, usable_modes
@@ -72,21 +78,15 @@ def assert_no_u_equals_v(edges_gdf: gpd.GeoDataFrame) -> None:
         )
 
 
-def assert_all_custom_edges_are_connected(edges_gdf: gpd.GeoDataFrame) -> None:
+def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]:
     """
-    Every custom-tagged edge (edges_gdf['custom'] == 'yes') must be in
-    the same connected component as the rest of the network. A custom
-    edge that only reaches an isolated island - which can happen if a
-    junction gets fragmented into several near-duplicate nodes that
-    never end up linked to each other - will export and load without
-    any error, but will never actually be used by a router, since a
-    router can't reach it from anywhere.
+    (mask of custom edges outside the largest connected component,
+    number of components).
+    """
+    nothing = pd.Series(False, index=edges_gdf.index)
 
-    If edges_gdf has no 'custom' column, this is a no-op (nothing to
-    check).
-    """
     if "custom" not in edges_gdf.columns:
-        return
+        return nothing, 0
 
     parent: dict = {}
 
@@ -105,29 +105,54 @@ def assert_all_custom_edges_are_connected(edges_gdf: gpd.GeoDataFrame) -> None:
     for u, v in zip(edges_gdf["u"], edges_gdf["v"], strict=True):
         union(u, v)
 
-    if not parent:
-        return
+    sizes = collections.Counter(find(node) for node in parent)
 
-    components: dict = {}
-    for node in parent:
-        components.setdefault(find(node), set()).add(node)
+    if len(sizes) <= 1:
+        return nothing, len(sizes)
 
-    if len(components) <= 1:
-        return
+    largest_root = max(sizes, key=sizes.get)
 
-    largest_root = max(components, key=lambda root: len(components[root]))
+    custom = edges_gdf["custom"] == "yes"
+    stranded = edges_gdf.loc[custom, "u"].map(find) != largest_root
 
-    custom_rows = edges_gdf[edges_gdf["custom"] == "yes"]
-    custom_nodes = set(custom_rows["u"]) | set(custom_rows["v"])
+    return stranded.reindex(edges_gdf.index, fill_value=False), len(sizes)
 
-    stranded = {n for n in custom_nodes if find(n) != largest_root}
 
-    if stranded:
+def disconnected_custom_edges(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
+    """
+    Boolean mask over edges_gdf: custom edges (edges_gdf['custom'] ==
+    'yes') that aren't in the same connected component as the rest of
+    the network. They export and load without any error, but a router
+    can't reach them from anywhere.
+
+    All False if edges_gdf has no 'custom' column.
+    """
+    return _stranded_custom_edges(edges_gdf)[0]
+
+
+def assert_all_custom_edges_are_connected(edges_gdf: gpd.GeoDataFrame) -> None:
+    """
+    Every custom-tagged edge (edges_gdf['custom'] == 'yes') must be in
+    the same connected component as the rest of the network. A custom
+    edge that only reaches an isolated island - which can happen if a
+    junction gets fragmented into several near-duplicate nodes that
+    never end up linked to each other - will export and load without
+    any error, but will never actually be used by a router, since a
+    router can't reach it from anywhere.
+
+    If edges_gdf has no 'custom' column, this is a no-op (nothing to
+    check).
+    """
+    mask, components = _stranded_custom_edges(edges_gdf)
+    stranded_rows = edges_gdf[mask]
+
+    if not stranded_rows.empty:
+        stranded = sorted(int(n) for n in set(stranded_rows["u"]) | set(stranded_rows["v"]))
         raise NetworkIntegrityError(
             f"{len(stranded)} custom-network node(s) are isolated from the "
             f"main network component and will never be reachable by a "
-            f"router: {sorted(stranded, key=str)}. The network has "
-            f"{len(components)} disconnected components in total."
+            f"router: {stranded}. The network has "
+            f"{components} disconnected components in total."
         )
 
 

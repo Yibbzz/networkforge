@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 from shapely.geometry import LineString, Point
 
 from networkforge.modes import usable_modes
+from networkforge.validation import assert_all_custom_edges_are_connected
 from tests.helpers import ROUTING_MODES, assert_valid_osm_xml, custom_pairs
 from tests.integration.grid import MOTORWAY_NODES, ROAD_TAGS, SPACING, X0, Y0, N, all_pair_costs
 
@@ -105,8 +106,12 @@ def assert_routes(result, allowed_modes):
 @given(features=st.lists(custom_feature(), min_size=1, max_size=2))
 def test_integration_rules_hold_for_any_custom_lines(build, features):
     # strict=True (default): tag checks and structural invariants
-    # (valid nodes, no self-loops, connected, unbroken) raise here.
+    # (valid nodes, no self-loops, unbroken) raise here.
     result = build(features)
+
+    # The build only warns about unreachable custom lines; these all
+    # start on a node, so they must connect.
+    assert_all_custom_edges_are_connected(result.edges)
 
     assert result.nodes.index.is_unique
     assert_valid_osm_xml(result.baseline_path)

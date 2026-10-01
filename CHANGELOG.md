@@ -7,6 +7,19 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
+### Changed
+- Custom lines that don't connect to the rest of the network no longer
+  fail the build (`NetworkIntegrityError`, exit code 5). The build
+  finishes with a warning - a `--json` `warning` event - naming the
+  `features`; they are kept in the output. A build where no line
+  reaches the network still fails (`NoIntersectionError`).
+
+### Added
+- `validation.disconnected_custom_edges(edges)`: which custom edges a
+  router can't reach.
+
 ## [0.4.0] - 2026-09-30
 
 ### Added
@@ -107,7 +120,8 @@ minor version may include breaking changes).
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Yibbzz/networkforge/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Yibbzz/networkforge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Yibbzz/networkforge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Yibbzz/networkforge/releases/tag/v0.2.0

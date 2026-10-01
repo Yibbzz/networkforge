@@ -12,7 +12,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import shapely
 from pyproj import CRS
 
 from .errors import InputError, NetworkIntegrityError
@@ -37,11 +39,11 @@ from .topology import (
     validate_user_osm_intersection,
 )
 from .validation import (
-    assert_all_custom_edges_are_connected,
     assert_all_edges_have_valid_nodes,
     assert_custom_lines_unbroken,
     assert_no_u_equals_v,
     check_custom_tags,
+    disconnected_custom_edges,
     resolve_custom_tags,
 )
 
@@ -88,6 +90,35 @@ def _count_custom(gdf: gpd.GeoDataFrame) -> int:
     return int((gdf["custom"] == "yes").sum())
 
 
+def _warn_about_disconnected_features(
+    edges_gdf: gpd.GeoDataFrame,
+    custom_gdf: gpd.GeoDataFrame,
+    snap_tolerance: float,
+) -> None:
+    """
+    Warn, naming the features, about custom lines that ended up outside
+    the main network (e.g. drawn away from every street). They stay in
+    the output, but no router can reach them.
+
+    custom_gdf: the snapped custom lines, indexed by feature id.
+    """
+    stranded = edges_gdf[disconnected_custom_edges(edges_gdf)]
+    if stranded.empty:
+        return
+
+    # Edges don't carry their feature's id: find the custom line each
+    # stranded edge was cut from by its midpoint.
+    midpoints = shapely.line_interpolate_point(stranded.geometry.to_numpy(), 0.5, normalized=True)
+    tree = shapely.STRtree(custom_gdf.geometry.to_numpy())
+    _, line_pos = tree.query_nearest(midpoints, max_distance=snap_tolerance)
+    features = list(dict.fromkeys(custom_gdf.index[np.unique(line_pos)]))
+
+    log.warning("%d custom feature(s) don't connect to the rest of the network, so a "
+                "router can never reach them (features %s). They are kept in the "
+                "output; extend them to meet a street if they should connect.",
+                len(features), ", ".join(map(str, features)), extra={"features": features})
+
+
 def build_network(
     bbox_gdf: gpd.GeoDataFrame,
     custom_data_gdf: gpd.GeoDataFrame,
@@ -132,6 +163,8 @@ def build_network(
         snap_tolerance: metres within which custom lines join the network.
         strict: raise on bad tags, unusable features or structural problems.
             False logs warnings and drops what can't be used instead.
+            Custom lines that don't connect to the network only ever warn
+            (and are kept), as long as at least one line reaches it.
         osm_source: a local OSM file (.osm.pbf, .osm, ...), e.g. a Geofabrik
             extract, to read the existing network from instead of the
             Overpass API. Required for boxes over MAX_OVERPASS_AREA_KM2
@@ -215,8 +248,9 @@ def build_network(
     # Custom vertices within snap_tolerance of the OSM network are moved
     # exactly onto it (nearest node, else nearest edge), so the line
     # joins the network itself rather than a point next to it.
+    custom_parts_gdf = custom_data_gdf.explode(index_parts=False)
     custom_data_gdf = snap_line_vertices_to_network(
-        custom_data_gdf.explode(index_parts=False),
+        custom_parts_gdf,
         nodes_gdf,
         edges_gdf,
         snap_tolerance,
@@ -227,6 +261,9 @@ def build_network(
             f"Every custom line is shorter than snap_tolerance ({snap_tolerance}) "
             "and collapsed onto a single existing node - nothing to add."
         )
+
+    # The snapped lines are numbered by position; keep each one's feature id.
+    custom_feature_ids = custom_parts_gdf.index[custom_data_gdf.index]
 
     combined_gdf = combine_custom_lines_with_osm_edges(
         custom_data_gdf,
@@ -368,7 +405,6 @@ def build_network(
     try:
         assert_all_edges_have_valid_nodes(final_lines_gdf, combined_points_gdf)
         assert_no_u_equals_v(final_lines_gdf)
-        assert_all_custom_edges_are_connected(final_lines_gdf)
         assert_custom_lines_unbroken(
             final_lines_gdf,
             len(custom_data_gdf.explode(index_parts=True)),
@@ -377,6 +413,12 @@ def build_network(
         if strict:
             raise
         log.warning("strict=False, continuing anyway: %s", exc)
+
+    _warn_about_disconnected_features(
+        final_lines_gdf,
+        custom_data_gdf.set_axis(custom_feature_ids),
+        snap_tolerance,
+    )
 
     log.info("Network built: %d nodes, %d edges (%d custom)",
              len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))

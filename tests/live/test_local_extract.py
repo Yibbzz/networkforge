@@ -9,8 +9,13 @@ Downloads the Isle of Man extract (~6 MB). The box is well inside the
 island, so the extract covers it plus OSMnx's 500 m buffer. Both sources
 must be current to within a day or so: Geofabrik updates daily, so a
 recent edit can make a single run differ.
+
+Geofabrik's "-latest" link sometimes 404s while the dated files are
+fine, so the download falls back to the newest dated extract.
 """
 
+import datetime
+import urllib.error
 import urllib.request
 
 import geopandas as gpd
@@ -22,15 +27,26 @@ from networkforge.projection import get_analysis_crs
 
 pytestmark = pytest.mark.network
 
-EXTRACT_URL = "https://download.geofabrik.de/europe/isle-of-man-latest.osm.pbf"
+EXTRACT_URL = "https://download.geofabrik.de/europe/isle-of-man-{stamp}.osm.pbf"
+DATED_EXTRACTS_TRIED = 5  # days back from today
 DOUGLAS = gpd.GeoDataFrame(geometry=[box(-4.495, 54.140, -4.470, 54.160)], crs="EPSG:4326")
 
 
 @pytest.fixture(scope="module")
 def extract(tmp_path_factory):
     path = tmp_path_factory.mktemp("geofabrik") / "isle-of-man.osm.pbf"
-    urllib.request.urlretrieve(EXTRACT_URL, path)
-    return path
+    today = datetime.datetime.now(datetime.UTC).date()
+    days = [today - datetime.timedelta(days=back) for back in range(DATED_EXTRACTS_TRIED)]
+    failures = []
+    for stamp in ["latest", *(f"{day:%y%m%d}" for day in days)]:
+        url = EXTRACT_URL.format(stamp=stamp)
+        try:
+            urllib.request.urlretrieve(url, path)
+        except urllib.error.URLError as exc:
+            failures.append(f"{url}: {exc}")
+        else:
+            return path
+    pytest.fail("No Isle of Man extract could be downloaded:\n" + "\n".join(failures))
 
 
 def text(value) -> str:

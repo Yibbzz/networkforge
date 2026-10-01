@@ -92,3 +92,22 @@ def test_build_writes_before_and_after_geopackages(fake_osm, files, capsys):
     assert "custom" not in before.columns or not (before["custom"] == "yes").any()
     assert (after["custom"] == "yes").sum() > 0
     assert len(after) > len(before)
+
+
+def test_disconnected_feature_is_a_warning_event_not_a_failure(fake_osm, tmp_path, capsys):
+    extent = tmp_path / "extent.gpkg"
+    BBOX.to_file(extent)
+    custom = tmp_path / "custom.gpkg"
+    inside_a_block = [(500_030.0, 6_200_030.0), (500_060.0, 6_200_060.0)]
+    gpd.GeoDataFrame({"ref": ["joined", "island"], "highway": ["primary", "primary"]},
+                     geometry=[LineString(ROAD_ACROSS), LineString(inside_a_block)],
+                     crs=UTM).to_file(custom)
+
+    code = main(["build", "--extent", str(extent), "--custom", str(custom),
+                 "--id-field", "ref", "--out", str(tmp_path / "net.osm"), "--json"])
+
+    assert code == EXIT_OK
+    log = events(capsys)
+    warnings = [e for e in log if e["event"] == "warning"]
+    assert [w["features"] for w in warnings if "don't connect" in w["message"]] == [["island"]]
+    assert log[-1]["event"] == "done"
