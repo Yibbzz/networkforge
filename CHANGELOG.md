@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-02
+
 ### Added
 - **Removing existing streets.** A feature with an OSM way id and
   `remove=yes` takes the stretch it lies along out of the "after" network:
@@ -219,7 +221,8 @@ minor version may include breaking changes).
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Yibbzz/networkforge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Yibbzz/networkforge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Yibbzz/networkforge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Yibbzz/networkforge/compare/v0.4.0...v0.5.0
