@@ -13,7 +13,8 @@ JSON events (a stable interface: other tools depend on these shapes):
 
     {"event": "progress", "step": 2, "total": 13, "message": "Downloading OSM network"}
     {"event": "warning", "message": "...", "features": [3, 7]}        # features/fields optional
-    {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...}
+    {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...,
+     "custom_edges": 12, "modified_edges": 3}
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
      "issues": [{"feature": 3, "message": "maxspeed='fast' is not a valid OSM speed"}],
      "problems": ["feature 3: maxspeed='fast' is not a valid OSM speed"]}
@@ -39,6 +40,7 @@ from pathlib import Path
 import geopandas as gpd
 from shapely.geometry import box
 
+from .edits import check_edit_tags, split_edits, take_edit_ids
 from .errors import (
     InputError,
     InvalidTagsError,
@@ -58,6 +60,7 @@ from .modes import MODES, usable_modes
 from .network import build_network
 from .osm import NETWORK_TYPES
 from .presets import PRESETS, preset_tags
+from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, MODIFIED_COLUMN
 from .validation import (
     ACCESS_KEYS,
     ACCESS_VALUES,
@@ -141,10 +144,12 @@ def cmd_build(args, emit) -> int:
         outputs["baseline_gpkg"] = str(args.baseline_gpkg)
 
     custom_edges = int((edges["custom"] == "yes").sum()) if "custom" in edges else 0
+    modified_edges = (int((edges[MODIFIED_COLUMN] == "yes").sum())
+                      if MODIFIED_COLUMN in edges else 0)
     emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(edges),
-          "custom_edges": custom_edges},
-         text=f"Done: {len(nodes):,} nodes, {len(edges):,} edges ({custom_edges:,} custom). "
-              f"Wrote {', '.join(outputs.values())}")
+          "custom_edges": custom_edges, "modified_edges": modified_edges},
+         text=f"Done: {len(nodes):,} nodes, {len(edges):,} edges ({custom_edges:,} custom, "
+              f"{modified_edges:,} changed). Wrote {', '.join(outputs.values())}")
     return EXIT_OK
 
 
@@ -154,11 +159,18 @@ def cmd_check(args, emit) -> int:
         custom = clean_custom_data(custom, _read_extent(args), strict=True)
     else:
         check_feature_ids(custom)
-        custom = drop_reserved_columns(custom)
+        custom = take_edit_ids(custom)
+        custom = drop_reserved_columns(custom, quiet=EDIT_ID_COLUMN in custom.columns)
+
+    # Changes to existing streets are checked for valid values only: which
+    # way they change is known once the network is downloaded (build).
+    custom, edits = split_edits(custom)
+    check_edit_tags(edits, strict=True)
 
     blanket = {**(preset_tags(args.preset) if args.preset else {}), **_tags(args.tag)}
-    custom = resolve_custom_tags(custom, blanket, overwrite=args.overwrite_tags)
-    check_custom_tags(custom, args.network_type, strict=True)
+    if not custom.empty:
+        custom = resolve_custom_tags(custom, blanket, overwrite=args.overwrite_tags)
+        check_custom_tags(custom, args.network_type, strict=True)
 
     tag_columns = [c for c in custom.columns if c != custom.geometry.name]
     modes = Counter(
@@ -167,8 +179,11 @@ def cmd_check(args, emit) -> int:
         for _, row in custom.iterrows()
     )
     summary = "; ".join(f"{count} usable by {m}" for m, count in modes.most_common())
-    emit({"event": "done", "features": len(custom), "modes": dict(modes)},
-         text=f"OK: {len(custom)} feature(s) - {summary}")
+    if len(edits):
+        summary = "; ".join(filter(None, [summary, f"{len(edits)} change existing streets"]))
+    emit({"event": "done", "features": len(custom) + len(edits), "modes": dict(modes),
+          "edits": len(edits)},
+         text=f"OK: {len(custom) + len(edits)} feature(s) - {summary}")
     return EXIT_OK
 
 
@@ -184,6 +199,7 @@ def cmd_info(args, emit) -> int:
         "max_overpass_area_km2": MAX_OVERPASS_AREA_KM2,
         "osm_formats": [".osm", ".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2"],
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
+        "edit_id_fields": list(EDIT_ID_COLUMNS),
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "highway": sorted(KNOWN_HIGHWAYS),

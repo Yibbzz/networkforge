@@ -11,8 +11,7 @@ import logging
 
 import pytest
 
-from tests.integration.grid import NO_LEFT_TURN
-from tests.valhalla.conftest import at, xy
+from tests.valhalla.conftest import AFTER_THE_TURN, at, turn_metres, xy
 
 ROAD = {"highway": "residential"}
 
@@ -273,21 +272,19 @@ def test_line_through_a_bollard_is_closed_to_cars_there(scenario):
 def test_turn_restriction_survives_a_new_junction_on_its_way(scenario):
     """
     A new road crosses Row 3 Street between nodes 17 and 18, on the
-    "from" way of NO_LEFT_TURN. The way keeps its id, so the restriction
-    still applies - also to traffic joining from the new road.
+    "from" way of the grid's turn restriction. The way keeps its id, so
+    the restriction still applies - also to traffic joining from the new
+    road, which meets the street 50 m before the turn.
     """
-    (from_u, _), via, (_, to_v) = NO_LEFT_TURN
     built = scenario([([xy(1.5, 2.5), xy(1.5, 3.5)], ROAD)])
-    start, end = built.after.node(from_u), built.after.node(to_v)
-    through_via = {way for way, (refs, _) in built.after.ways.items() if via in refs}
+    (road,) = built.custom_ways
 
-    from_the_west = shortest(built, start, end)
-    from_the_new_road = shortest(built, at(1.5, 2.5), end)
-    on_foot = shortest(built, at(1.5, 2.5), end, "pedestrian")
+    assert turn_metres(built.after, "auto") == pytest.approx(300, abs=2)
+    assert turn_metres(built.after, "pedestrian") == pytest.approx(100, abs=2)
 
-    assert not set(from_the_west.way_ids) <= through_via
-    assert from_the_new_road.length_m == pytest.approx(300, abs=2)  # round the block
-    assert on_foot.length_m == pytest.approx(200, abs=2)             # straight there
+    from_the_new_road = shortest(built, at(1.5, 2.5), AFTER_THE_TURN)
+    assert from_the_new_road.way_ids[0] == road
+    assert from_the_new_road.length_m == pytest.approx(50 + 300, abs=2)
 
 
 def test_new_road_past_the_bus_gate_opens_it_to_cars(scenario):

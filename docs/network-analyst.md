@@ -42,6 +42,30 @@ another file is named.
 Turn restrictions are not part of that tutorial, but OpenStreetMap has
 them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_after`.
 
+## Changing the existing network
+
+In ArcGIS you edit the street features and rebuild. Here a feature that
+carries a street's OSM id changes that street: copy it from the "before"
+layer or a QuickOSM layer, edit an attribute, add it to the custom layer
+([how](tagging-guide.md#changing-existing-streets)). Tests in
+`tests/valhalla/test_edits.py`:
+
+| Change | Tag | Test |
+|---|---|---|
+| Make a street one-way, or reverse it | `oneway=yes` / `-1` | `test_street_made_one_way`, `test_one_way_reversed_by_drawing_the_feature_the_other_way` |
+| Make a one-way street two-way | `oneway=no` | `test_existing_one_way_made_two_way` |
+| Close a street | `access=no` | `test_street_closed` |
+| Close it to motor traffic | `motor_vehicle=no` | `test_street_closed_to_motor_traffic_only` |
+| Pedestrianise | `highway=pedestrian` | `test_street_pedestrianised` |
+| Open a bus gate | `motor_vehicle=yes` | `test_bus_gate_opened_to_cars` |
+| Lower the speed limit | `maxspeed` | `test_lower_speed_limit_takes_longer_over_the_same_distance` |
+| Add a height limit | `maxheight` | `test_height_limit_added_to_an_existing_street` |
+| Turn restrictions on a changed street still apply | | `test_turn_restriction_still_applies_when_its_way_is_changed` |
+| A new line joins a changed street | | `test_new_line_joins_a_changed_street` |
+
+Not possible yet: removing a tag, moving a street, deleting one outright
+(close it instead), and changing part of a stretch between two OSM nodes.
+
 ## What is not covered
 
 | Esri | Status |
@@ -49,7 +73,6 @@ them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_aft
 | **Time zone attribute** | Not NetworkForge's part. Time-of-day tags such as `motor_vehicle:conditional=no @ (07:00-19:00)` are written and Valhalla reads them (`test_time_of_day_closure_reaches_valhalla`), but it only applies them to trips with a departure time, on a graph built with its time zone database. |
 | **Turn penalties you set yourself** (7 s for a left turn between local roads) | Valhalla's turn delays are built in. Its options change them as a whole, not per turn type. |
 | **Your own turn restrictions** | Existing OSM restrictions are kept. You can't yet add one for your own lines. |
-| **Changing or closing an existing street** | Not supported: NetworkForge only adds lines. A line drawn on top of a street is added beside it. |
 | **Landmarks in directions** | Valhalla has a separate landmark database; NetworkForge doesn't write to it. |
 | **Street names in several languages** | Kept on existing streets. On your own lines only `name`, `alt_name`, `official_name`, `ref` and `int_ref` are written. |
 | **Live or historical traffic** | Not modelled. |
@@ -72,6 +95,7 @@ them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_aft
   modes that can use it; Valhalla and NetworkForge's own routing measure
   every trip the same.
 - `test_random_lines.py`: the same agreement for random lines.
+- `test_edits.py`: changes to existing streets.
 - `tests/live/test_valhalla_real_data.py` (nightly): the same on a real
   extract (Monaco).
 

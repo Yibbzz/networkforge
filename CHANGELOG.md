@@ -7,6 +7,30 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- **Changing existing streets.** A custom feature with an OSM way id
+  (an `osm_id` attribute, as on QuickOSM layers, or `osmid`, as in
+  NetworkForge's GeoPackage) changes that street instead of adding a
+  line: make it one-way, close it, change its speed limit or type. Only
+  attributes that differ from OpenStreetMap are applied, and only on the
+  stretches the feature lies along. See "Changing existing streets" in
+  the tagging guide.
+- Changed stretches are marked `modified` = `yes` in the GeoPackage and
+  `nf:modified=yes` in the OSM file; the "before" outputs are untouched.
+- `--json`: the build's `done` event has `modified_edges`; `check`'s has
+  `edits`; `info` has `edit_id_fields`. Errors about such features use
+  the guide anchor `changing-existing-streets`.
+- A build may consist of changes only, with no new lines.
+
+### Changed
+- A turn restriction whose way is written in several pieces (cropped at
+  the edge of the area, or partly changed) now follows the piece its via
+  node is on, instead of being dropped.
+- `nf_edit` and `modified` join the attribute names set aside as
+  internal. Such names are now only noted, not warned about, when the
+  layer has OSM ids (rows copied from a NetworkForge layer always have
+  them).
+
 ## [0.6.0] - 2026-10-02
 
 ### Added

@@ -37,6 +37,18 @@ def xy(column: float, row: float) -> tuple[float, float]:
     return (X0 + column * SPACING, Y0 + row * SPACING)
 
 
+# The grid's turn restriction (NO_LEFT_TURN): driving east along Row 3
+# Street, no left turn north at node 18. A trip from half a block before
+# the turn to half a block after it is 100 m if the turn is allowed, and
+# 300 m round the block if not - no other route ties with either.
+BEFORE_THE_TURN, AFTER_THE_TURN = at(1.5, 3), at(2, 3.5)
+
+
+def turn_metres(router: Router, costing: str) -> float:
+    """Length of the shortest trip across the restricted turn."""
+    return router.route(BEFORE_THE_TURN, AFTER_THE_TURN, costing, shortest=True).length_m
+
+
 @dataclass
 class Scenario:
     """A build on the grid and Valhalla's graph of its before and after PBF."""

@@ -39,7 +39,13 @@ from .modes import (
     open_to_other_vehicles,
     usable_modes,
 )
-from .tags import BASE_WAY_TAGS, PART_COLUMN, ROUTING_WAY_TAGS
+from .tags import (
+    BASE_WAY_TAGS,
+    EDIT_COLUMN,
+    MODIFIED_COLUMN,
+    PART_COLUMN,
+    ROUTING_WAY_TAGS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -256,7 +262,10 @@ LIMIT_PATTERN = re.compile(
 # Columns the pipeline itself uses. A custom property with one of
 # these names would corrupt topology (e.g. a 'u' value stops the
 # feature being treated as custom).
-RESERVED_COLUMNS = {"u", "v", "key", "osmid", "custom", "split", "reversed", "length", PART_COLUMN}
+RESERVED_COLUMNS = {
+    "u", "v", "key", "osmid", "custom", "split", "reversed", "length",
+    PART_COLUMN, MODIFIED_COLUMN, EDIT_COLUMN,
+}
 
 # Tag keys the pipeline understands (checked, used for routing or
 # exported). Used to spot misspelt or truncated attribute names.
@@ -304,6 +313,49 @@ def resolve_custom_tags(
     return custom_gdf
 
 
+def tag_value_problems(tags: dict[str, str]) -> tuple[list[str], set[str]]:
+    """
+    (problems, notes) for one feature's tag values: is each a value OSM
+    and routers understand. Says nothing about the highway type or who
+    can use the way (check_custom_tags does that for new lines).
+    """
+    problems, notes = [], set()
+
+    maxspeed = tags.get("maxspeed")
+    if maxspeed is not None:
+        if not MAXSPEED_PATTERN.match(maxspeed):
+            problems.append(f"maxspeed={maxspeed!r} is not a valid OSM speed")
+        elif maxspeed.replace(".", "").isdigit():
+            notes.add(f"maxspeed={maxspeed} has no unit and is read as km/h")
+
+    oneway = tags.get("oneway")
+    if oneway is not None and oneway not in ONEWAY_VALUES:
+        problems.append(f"oneway={oneway!r} is not a valid OSM value")
+    if oneway in {"yes", "true", "1", "-1"}:
+        notes.add("oneway direction follows each line's drawing direction")
+
+    lanes = tags.get("lanes")
+    if lanes is not None and not (lanes.isdigit() and int(lanes) > 0):
+        problems.append(f"lanes={lanes!r} must be a positive whole number")
+
+    for key in ACCESS_KEYS:
+        value = tags.get(key)
+        if value is not None and value not in ACCESS_VALUES:
+            problems.append(f"{key}={value!r} is not a valid OSM access value")
+
+    for key in LIMIT_KEYS:
+        value = tags.get(key)
+        if value is not None and not LIMIT_PATTERN.match(value):
+            problems.append(f"{key}={value!r} is not a valid OSM limit "
+                            "(e.g. 3.5, '3.5 m', '12 ft', '7.5 t')")
+
+    layer = tags.get("layer")
+    if layer is not None and not re.fullmatch(r"-?\d+", layer):
+        problems.append(f"layer={layer!r} must be a whole number, e.g. 1 or -1")
+
+    return problems, notes
+
+
 def check_custom_tags(
     custom_gdf: gpd.GeoDataFrame,
     network_type: str,
@@ -348,37 +400,10 @@ def check_custom_tags(
         elif highway not in KNOWN_HIGHWAYS:
             issues.append((index, f"highway={highway!r} is not a routable highway value"))
 
+        problems, value_notes = tag_value_problems(tags)
+        issues += [(index, problem) for problem in problems]
+        notes |= value_notes
         maxspeed = tags.get("maxspeed")
-        if maxspeed is not None:
-            if not MAXSPEED_PATTERN.match(maxspeed):
-                issues.append((index, f"maxspeed={maxspeed!r} is not a valid OSM speed"))
-            elif maxspeed.replace(".", "").isdigit():
-                notes.add(f"maxspeed={maxspeed} has no unit and is read as km/h")
-
-        oneway = tags.get("oneway")
-        if oneway is not None and oneway not in ONEWAY_VALUES:
-            issues.append((index, f"oneway={oneway!r} is not a valid OSM value"))
-        if oneway in {"yes", "true", "1", "-1"}:
-            notes.add("oneway direction follows each line's drawing direction")
-
-        lanes = tags.get("lanes")
-        if lanes is not None and not (lanes.isdigit() and int(lanes) > 0):
-            issues.append((index, f"lanes={lanes!r} must be a positive whole number"))
-
-        for key in ACCESS_KEYS:
-            value = tags.get(key)
-            if value is not None and value not in ACCESS_VALUES:
-                issues.append((index, f"{key}={value!r} is not a valid OSM access value"))
-
-        for key in LIMIT_KEYS:
-            value = tags.get(key)
-            if value is not None and not LIMIT_PATTERN.match(value):
-                issues.append((index, f"{key}={value!r} is not a valid OSM limit "
-                                      "(e.g. 3.5, '3.5 m', '12 ft', '7.5 t')"))
-
-        layer = tags.get("layer")
-        if layer is not None and not re.fullmatch(r"-?\d+", layer):
-            issues.append((index, f"layer={layer!r} must be a whole number, e.g. 1 or -1"))
 
         modes = usable_modes(tags)
         if highway in KNOWN_HIGHWAYS:

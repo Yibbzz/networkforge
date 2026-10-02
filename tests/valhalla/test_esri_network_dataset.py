@@ -20,8 +20,8 @@ roads (it prefers main roads and avoids turns).
 
 import pytest
 
-from tests.integration.grid import NO_LEFT_TURN, RESTRICTION_ID
-from tests.valhalla.conftest import at, xy
+from tests.integration.grid import grid_elements
+from tests.valhalla.conftest import at, turn_metres, xy
 
 SHORTCUT = [xy(1, 1), xy(2, 2)]
 FROM, TO = at(0, 1), at(3, 2)
@@ -303,18 +303,17 @@ def test_existing_street_names_are_in_the_directions(scenario):
 # ---------------------------------------------------------------------
 
 def test_existing_turn_restriction_is_obeyed_before_and_after(scenario):
-    """NO_LEFT_TURN: east along row 3, no turning north at node 18."""
-    (from_u, _), via, (_, to_v) = NO_LEFT_TURN
+    """Vehicles and bikes go round the block; walkers just turn."""
     built = scenario([(SHORTCUT, ROAD)])
-    start, end = built.after.node(from_u), built.after.node(to_v)
-
     for router in (built.before, built.after):
-        assert RESTRICTION_ID  # the relation the grid defines
-        driving = router.route(start, end, "auto", shortest=True)
-        walking = router.route(start, end, "pedestrian", shortest=True)
-        through_via = {way for way, (refs, _) in router.ways.items() if via in refs}
+        for costing in ("auto", "bus", "truck", "bicycle"):
+            assert turn_metres(router, costing) == pytest.approx(300, abs=2), costing
+        assert turn_metres(router, "pedestrian") == pytest.approx(100, abs=2)
 
-        assert walking.length_m == pytest.approx(200, abs=2)
-        assert driving.length_m == pytest.approx(200, abs=2)
-        assert set(walking.way_ids) <= through_via       # straight through the junction
-        assert not set(driving.way_ids) <= through_via   # around the block instead
+
+def test_without_the_restriction_the_turn_is_allowed(scenario):
+    """The same grid with the relation left out: proof the relation is what stops the turn."""
+    unrestricted = [element for element in grid_elements() if element["type"] != "relation"]
+    built = scenario([(SHORTCUT, ROAD)], elements=unrestricted)
+    for router in (built.before, built.after):
+        assert turn_metres(router, "auto") == pytest.approx(100, abs=2)

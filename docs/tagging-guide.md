@@ -20,6 +20,7 @@ Contents:
 [How tags combine](#how-tags-combine) ·
 [Presets](#presets) ·
 [Attributes](#attributes) ·
+[Changing existing streets](#changing-existing-streets) ·
 [Recipes](#recipes) ·
 [Fixing tag errors](#fixing-tag-errors)
 
@@ -222,6 +223,50 @@ that's how you add a new slip road. Only crossings are skipped.
 Trunk roads are treated as ordinary roads (many have at-grade
 junctions); tag the custom line `bridge=yes` if it goes over one.
 
+## Changing existing streets
+
+A feature that carries the **OpenStreetMap id of a way** is not a new
+line: it changes that existing street. Use it to test "what if this road
+were one-way, closed, slower, or pedestrianised?".
+
+1. Get the street as a feature that has its OSM id. Either copy it from
+   NetworkForge's own "before" GeoPackage (the id is in `osmid`), or from
+   a layer made by the QuickOSM plugin (the id is in `osm_id`).
+2. Paste it into your custom layer and change the attribute you want:
+   `oneway=yes`, `maxspeed=20 mph`, `access=no`, `highway=pedestrian`.
+3. Build as usual. New lines and changes can be in the same layer.
+
+What happens:
+
+- **Only what you changed is changed.** Each attribute is compared with
+  the street's tag in OpenStreetMap; only different values are applied.
+  A feature pasted with all its attributes and nothing edited changes
+  nothing (and a warning says so).
+- **Only where the feature lies.** The change applies to the stretches
+  of the street under the feature, in whole steps from one OSM node to
+  the next. Every junction is a node, so one block is the smallest
+  stretch you can always change. To change part of a long street, cut
+  the feature to that part (or copy just those rows from the "before"
+  layer, which has one row per stretch).
+- **`oneway` follows the direction the feature is drawn**, as for new
+  lines. To reverse a one-way street, reverse the line or use `-1`.
+- **Tags are set, not removed.** Close a street with `access=no` (or
+  `motor_vehicle=no` for motor traffic only); open a bus gate with
+  `motor_vehicle=yes`; make a one-way street two-way with `oneway=no`.
+- **The "before" network is never changed.**
+- Presets and `--tag` apply to new lines only.
+
+In the outputs, changed stretches have `modified` = `yes` in the
+GeoPackage and `nf:modified=yes` in the OSM file. Turn restrictions on a
+changed street still apply.
+
+| Message | Meaning |
+|---|---|
+| `OSM way N is not in this network` | The id isn't a street inside the area: it is outside the box, isn't a routable way, or OpenStreetMap changed since the layer was made. Copy the street from the "before" layer of a fresh build. |
+| `doesn't lie along OSM way N` | The feature's line isn't on that street. Its geometry must follow the street (within the snap tolerance). |
+| `overlaps feature X on OSM way N` | Two features change the same stretch. Put both changes on one feature. |
+| `change nothing` (warning) | The feature's tags are all the same as OpenStreetMap's. |
+
 ## Recipes
 
 | You want | Tags |
@@ -229,6 +274,8 @@ junctions); tag the custom line `bridge=yes` if it goes over one.
 | New 40 mph bypass | `preset="primary_road"`, `network_tags={"maxspeed": "40 mph"}` |
 | Segregated cycle route | `preset="cycleway"` |
 | Shared walking and cycling path | `preset="shared_path"` |
+| Make an existing street one-way | copy it from the "before" layer, set `oneway=yes` ([changing existing streets](#changing-existing-streets)) |
+| Close an existing street | copy it, set `access=no` |
 | Pedestrianise a street | `preset="pedestrian_street"` (cycling allowed), or `highway=pedestrian` for walking only |
 | Filtered street / bus gate | `preset="car_free_street"` |
 | Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |

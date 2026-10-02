@@ -19,7 +19,7 @@ import osmium
 import pytest
 from shapely.geometry import LineString, box
 
-from networkforge import build_network, write_osm
+from networkforge import build_network, write_gpkg, write_osm
 
 pytest.importorskip("valhalla", reason="pyvalhalla is not installed (uv sync installs it)")
 
@@ -124,3 +124,63 @@ def test_footbridge_shortens_the_walk_across_the_harbour(routers):
 
     driving = routers["after"].route(start, end, "auto")
     assert driving is None or not driving.uses(bridge)
+
+
+# ---------------------------------------------------------------------
+# Changing an existing street, the way a QGIS user would
+# ---------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def closed_street(extract, tmp_path_factory):
+    """
+    Build once, open the before GeoPackage, copy the rows of one named
+    two-way street, set access=no, and build again with those rows as
+    the custom layer. Returns (before router, after router, way id).
+    """
+    folder = tmp_path_factory.mktemp("closure")
+    header = osmium.io.Reader(str(extract), osmium.osm.osm_entity_bits.NOTHING).header().box()
+    area = gpd.GeoDataFrame(geometry=[box(
+        header.bottom_left.lon - 0.01, header.bottom_left.lat - 0.01,
+        header.top_right.lon + 0.01, header.top_right.lat + 0.01)], crs="EPSG:4326")
+    bridge = gpd.GeoDataFrame({"highway": ["footway"], "bridge": ["yes"], "layer": ["1"]},
+                              geometry=[FOOTBRIDGE], crs="EPSG:4326")
+
+    _, _, osm_nodes, osm_edges = build_network(area, bridge, osm_source=extract,
+                                               return_source_osm=True)
+    write_gpkg(osm_nodes, osm_edges, folder / "before.gpkg")
+    layer = gpd.read_file(folder / "before.gpkg", layer="edges")
+
+    streets = layer[layer.highway.isin(["residential", "tertiary", "secondary"])
+                    & (layer.car_direction == "both") & layer.name.notna()]
+    way = int(streets.osmid.value_counts().index[0])  # the street with the most stretches
+    rows = layer[layer.osmid == way].copy()
+    rows["access"] = "no"
+
+    nodes, edges, osm_nodes, osm_edges = build_network(
+        area, rows, osm_source=extract, return_source_osm=True)
+    write_osm(osm_nodes, osm_edges, folder / "before.osm.pbf")
+    write_osm(nodes, edges, folder / "after.osm.pbf")
+    return (Router.from_pbf(folder / "before.osm.pbf", folder / "before"),
+            Router.from_pbf(folder / "after.osm.pbf", folder / "after"), way)
+
+
+def test_closed_street_is_no_longer_driven_along(closed_street):
+    before, after, way = closed_street
+    refs, tags = before.ways[way]
+    start, end = before.node(refs[0]), before.node(refs[-1])
+
+    changed = [w for w, (_, t) in after.ways.items() if t.get("nf:modified") == "yes"]
+    assert changed and all(after.ways[w][1]["access"] == "no" for w in changed)
+    assert all(after.ways[w][1]["name"] == tags["name"] for w in changed)
+
+    assert before.route(start, end, "auto", shortest=True).uses(way)
+    detour = after.route(start, end, "auto", shortest=True)
+    assert detour is None or not (set(detour.way_ids) & {way, *changed})
+
+
+def test_closing_one_street_leaves_the_rest_of_the_file_alone(closed_street):
+    before, after, way = closed_street
+    changed = {w for w, (_, t) in after.ways.items() if t.get("nf:modified") == "yes"}
+
+    assert {w: v for w, v in after.ways.items() if w not in changed and w != way} == {
+        w: v for w, v in before.ways.items() if w != way}

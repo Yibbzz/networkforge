@@ -12,7 +12,9 @@ import geopandas as gpd
 import shapely
 from shapely.geometry import box
 
+from .edits import take_edit_ids
 from .errors import InputError
+from .tags import EDIT_ID_COLUMN
 from .validation import RESERVED_COLUMNS
 
 log = logging.getLogger(__name__)
@@ -105,7 +107,8 @@ def clean_custom_data(
         )
 
     check_feature_ids(custom_gdf)
-    custom = drop_reserved_columns(custom_gdf.copy())
+    custom = take_edit_ids(custom_gdf)
+    custom = drop_reserved_columns(custom.copy(), quiet=EDIT_ID_COLUMN in custom.columns)
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty
@@ -167,15 +170,18 @@ def check_feature_ids(custom_gdf: gpd.GeoDataFrame) -> None:
         )
 
 
-def drop_reserved_columns(custom_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def drop_reserved_columns(custom_gdf: gpd.GeoDataFrame, quiet: bool = False) -> gpd.GeoDataFrame:
     """
     Set aside attributes whose names the pipeline uses internally (e.g.
     `length`, `key` - common in GIS layers). They aren't OSM tags, so
-    nothing is lost; a warning names them.
+    nothing is lost; a warning names them. `quiet`: only note it - rows
+    copied from a NetworkForge layer (to change existing streets) always
+    have them.
     """
     reserved = sorted(RESERVED_COLUMNS & set(custom_gdf.columns))
     if reserved:
-        log.warning(
+        log.log(
+            logging.INFO if quiet else logging.WARNING,
             "Ignoring custom attribute(s) %s: the names are used internally and "
             "aren't OSM tags.", ", ".join(reserved), extra={"fields": reserved},
         )

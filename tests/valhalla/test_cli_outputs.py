@@ -12,8 +12,8 @@ from shapely.geometry import LineString
 
 from networkforge import osm
 from networkforge.cli import EXIT_OK, main
-from tests.integration.grid import BBOX, NO_LEFT_TURN, UTM, grid_elements
-from tests.valhalla.conftest import at, xy
+from tests.integration.grid import BBOX, UTM, grid_elements
+from tests.valhalla.conftest import at, turn_metres, xy
 from tests.valhalla.harness import Router
 from tests.valhalla.test_before_and_after import grid_points, write_grid_osm
 
@@ -86,8 +86,6 @@ def test_after_file_has_the_custom_lines_with_their_rules(built):
 
 
 def test_turn_restriction_is_in_both_files(built):
-    (from_u, _), via, (_, to_v) = NO_LEFT_TURN
     for router in built:
-        through_via = {way for way, (refs, _) in router.ways.items() if via in refs}
-        driving = router.route(router.node(from_u), router.node(to_v), "auto", shortest=True)
-        assert not set(driving.way_ids) <= through_via
+        assert turn_metres(router, "auto") == pytest.approx(300, abs=2)
+        assert turn_metres(router, "pedestrian") == pytest.approx(100, abs=2)

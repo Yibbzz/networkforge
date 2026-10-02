@@ -31,6 +31,10 @@ that way. This matters to routers - Valhalla reads far more tags than
 the edge table holds, obeys turn restrictions (which name way ids), and
 measures curvature and junction density from whole ways.
 
+A stretch of a way that a feature changed (edits.py) is written as its
+own way with the changed tags and `nf:modified=yes`; the rest of the way
+keeps its id. Turn restrictions follow the piece their via node is on.
+
 Each custom line is one way with a new id (above every OSM way id),
 its nodes being the line's vertices and junctions, tagged with the
 attributes listed in tags.py plus `nf:custom=yes`.
@@ -58,6 +62,9 @@ from .tags import (
     BASE_WAY_TAGS,
     CUSTOM_COLUMN,
     CUSTOM_TAG,
+    EDIT_COLUMN,
+    EDITS_ATTR,
+    MODIFIED_TAG,
     NODE_TAGS,
     PART_COLUMN,
     ROUTING_WAY_TAGS,
@@ -77,7 +84,7 @@ GPKG_ANALYSIS_COLUMNS = (
 )
 
 # Edge columns that only mean something inside the pipeline.
-INTERNAL_COLUMNS = ["key", "split", "reversed", "length", PART_COLUMN]
+INTERNAL_COLUMNS = ["key", "split", "reversed", "length", PART_COLUMN, EDIT_COLUMN]
 
 MEMBER_TYPES = {"n": "node", "w": "way", "r": "relation"}
 
@@ -295,23 +302,36 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         # OSMnx holds a two-way street as two edges; one way covers both.
         existing = existing[existing["reversed"] != True]  # noqa: E712
 
-    # (way id or None for "needs a new one", node refs, tags)
-    ways = _existing_ways(existing, source) + _custom_ways(edges_gdf[is_custom])
+    # (way id or None for "needs a new one", node refs, tags, id of the
+    # OSM way it is a piece of, or None)
+    ways = _existing_ways(existing, source, edges_gdf.attrs.get(EDITS_ATTR) or {})
+    ways += _custom_ways(edges_gdf[is_custom])
 
-    new_ids = iter(range(max((way_id for way_id, _, _ in ways if way_id), default=0) + 1,
-                         2**62))
-    osm_ways = sorted((way_id or next(new_ids), refs, tags) for way_id, refs, tags in ways)
+    new_ids = iter(range(max((way[0] for way in ways if way[0]), default=0) + 1, 2**62))
+    pieces = defaultdict(list)  # OSM way id -> [(id written, refs)]
+    osm_ways = []
+    for way_id, refs, tags, origin in ways:
+        way_id = way_id or next(new_ids)
+        osm_ways.append((way_id, refs, tags))
+        if origin is not None:
+            pieces[origin].append((way_id, refs))
+    osm_ways.sort()
 
-    relations = _relations(source, osm_ways, set(node_ids)) if source is not None else []
+    relations = _relations(source, pieces, set(node_ids)) if source is not None else []
     return OSMData(bounds, osm_nodes, osm_ways, relations)
 
 
-def _existing_ways(edges: pd.DataFrame, source: OSMSource | None) -> list[tuple]:
+def _existing_ways(
+    edges: pd.DataFrame,
+    source: OSMSource | None,
+    changes: dict[int, dict[str, str]],
+) -> list[tuple]:
     """
     The existing network's edges (one per street segment and direction
     of drawing) as ways. With a source, each way is its OSM original:
-    untouched ways are copied; ways the build cut (a new junction) or
-    cropped (the edge of the area) are rebuilt around their OSM nodes.
+    untouched ways are copied; ways the build cut (a new junction),
+    cropped (the edge of the area) or changed (`changes`, by the edit
+    number in EDIT_COLUMN) are rebuilt around their OSM nodes.
     """
     if edges.empty:
         return []
@@ -325,6 +345,8 @@ def _existing_ways(edges: pd.DataFrame, source: OSMSource | None) -> list[tuple]
         way_ids = way_ids.to_numpy()
     else:
         way_ids = np.zeros(len(edges), dtype="int64")
+    edit = (edges[EDIT_COLUMN].to_numpy(dtype="float64") if EDIT_COLUMN in edges
+            else np.full(len(edges), np.nan))
 
     known = np.zeros(len(edges), dtype=bool)
     ways = []
@@ -334,26 +356,32 @@ def _existing_ways(edges: pd.DataFrame, source: OSMSource | None) -> list[tuple]
                             dtype=bool, count=len(edges))
         cut = (edges["split"] == "yes").to_numpy() if "split" in edges else np.zeros_like(known)
         counts = pd.Series(way_ids[known]).value_counts()
-        cut_ids = set(way_ids[known & cut].tolist())
-        segments = defaultdict(list)
+        touched = set(way_ids[known & (cut | ~np.isnan(edit))].tolist())
 
         rebuild = []
         for way_id, count in counts.items():
             refs, tags = source.ways[way_id]
-            if way_id in cut_ids or count != len(refs) - 1:
+            if way_id in touched or count != len(refs) - 1:
                 rebuild.append(way_id)
             else:
-                ways.append((way_id if way_id > 0 else None, list(refs), dict(tags)))
+                ways.append((way_id if way_id > 0 else None, list(refs), dict(tags), way_id))
 
+        segments = defaultdict(dict)  # way id -> {(u, v): edit number or None}
         rows = known & np.isin(way_ids, rebuild)
-        for way_id, u, v in zip(way_ids[rows].tolist(), us[rows].tolist(), vs[rows].tolist(),
-                                strict=True):
-            segments[way_id].append((u, v))
+        for way_id, u, v, number in zip(way_ids[rows].tolist(), us[rows].tolist(),
+                                        vs[rows].tolist(), edit[rows].tolist(), strict=True):
+            segments[way_id][(u, v)] = None if number != number else int(number)
         for way_id in rebuild:
             refs, tags = source.ways[way_id]
-            for number, run in enumerate(_runs(refs, segments[way_id])):
-                keeps_id = number == 0 and way_id > 0
-                ways.append((way_id if keeps_id else None, run, dict(tags)))
+            runs = _runs(refs, segments[way_id])
+            # The way's id stays with its first unchanged part.
+            keeper = next((i for i, (_, number) in enumerate(runs) if number is None), None)
+            for i, (run, number) in enumerate(runs):
+                run_tags = dict(tags)
+                if number is not None:
+                    run_tags |= {**changes.get(number, {}), MODIFIED_TAG: "yes"}
+                ways.append((way_id if i == keeper and way_id > 0 else None, run, run_tags,
+                             way_id))
 
     # No source for these: chain each way's edges, tags from the columns.
     rest = edges[~known]
@@ -367,7 +395,7 @@ def _existing_ways(edges: pd.DataFrame, source: OSMSource | None) -> list[tuple]
             chains = _chains([(rest_us[row], rest_vs[row]) for row in rows])
             for number, chain in enumerate(chains):
                 keeps_id = number == 0 and isinstance(way_id, int) and way_id > 0
-                ways.append((way_id if keeps_id else None, chain, tags[rows[0]]))
+                ways.append((way_id if keeps_id else None, chain, tags[rows[0]], None))
 
     return ways
 
@@ -388,7 +416,7 @@ def _custom_ways(edges: pd.DataFrame) -> list[tuple]:
         groups[("part", part) if numbered else ("edge", row)].append(row)
 
     return [
-        (None, chain, tags[rows[0]])
+        (None, chain, tags[rows[0]], None)
         for rows in groups.values()
         for chain in _chains([(us[row], vs[row]) for row in rows])
     ]
@@ -425,17 +453,24 @@ def _chains(segments: list[tuple[int, int]]) -> list[list[int]]:
     return chains
 
 
-def _runs(refs: list[int], segments: list[tuple[int, int]]) -> list[list[int]]:
+def _runs(
+    refs: list[int],
+    segments: dict[tuple[int, int], int | None],
+) -> list[tuple[list[int], int | None]]:
     """
     An OSM way's nodes after the build, from its original `refs` and
-    the (u, v) of its remaining edges: nodes the build inserted between
-    two neighbours are added in place; where a stretch is gone (cropped
-    at the edge of the area) the way breaks into separate runs.
+    its remaining edges, {(u, v): edit number or None}: nodes the build
+    inserted between two neighbours are added in place. The way breaks
+    into separate runs where a stretch is gone (cropped at the edge of
+    the area) and where the edit number changes. Returns (run, edit
+    number) pairs in order along the way.
     """
     joined = defaultdict(set)
-    for u, v in segments:
+    number_of = {}
+    for (u, v), number in segments.items():
         joined[u].add(v)
         joined[v].add(u)
+        number_of[frozenset((u, v))] = number
     original = set(refs)
 
     def via_new_nodes(start: int, end: int) -> list[int] | None:
@@ -450,45 +485,67 @@ def _runs(refs: list[int], segments: list[tuple[int, int]]) -> list[list[int]]:
             stack.extend((nxt, [*path, nxt]) for nxt in sorted(joined[node] - original - seen))
         return None
 
-    runs, run = [], [refs[0]]
+    runs, run, current = [], [refs[0]], None
     for start, end in zip(refs, refs[1:], strict=False):
         if start == end:
             continue
         path = [end] if end in joined[start] else via_new_nodes(start, end)
         if path is None:
-            runs.append(run)
+            runs.append((run, current))
             run = [end]
-        else:
-            run.extend(path)
-    runs.append(run)
-    return [run for run in runs if len(run) >= 2]
+            continue
+        number = number_of[frozenset((start, path[0]))]
+        if len(run) > 1 and number != current:
+            runs.append((run, current))
+            run = [start]
+        current = number
+        run.extend(path)
+    runs.append((run, current))
+    return [(run, number) for run, number in runs if len(run) >= 2]
 
 
-def _relations(source: OSMSource, ways: list[tuple], node_ids: set[int]) -> list[tuple]:
+def _relations(
+    source: OSMSource,
+    pieces: dict[int, list[tuple[int, list[int]]]],
+    node_ids: set[int],
+) -> list[tuple]:
     """
     The source's relations that still make sense in the written network.
-    A turn restriction needs every member, with its via node on the ways
-    it joins; a route keeps whichever of its members are there.
+    `pieces`: the ways each OSM way was written as (one, unless it was
+    cropped or part of it was changed).
+
+    A turn restriction needs every member; where a member way is now
+    several pieces, it means the piece its via node is on. A route keeps
+    whichever of its members are there, in all their pieces.
     """
-    refs_of = {way_id: refs for way_id, refs, _ in ways}
     relations = []
 
     for relation_id, tags, members in source.relations:
-        present = [
-            (kind, ref, role) for kind, ref, role in members
-            if (kind == "w" and ref in refs_of) or (kind == "n" and ref in node_ids)
-        ]
         if tags.get("type") == "route":
+            present = []
+            for kind, ref, role in members:
+                if kind == "w":
+                    present += [("w", way_id, role) for way_id, _ in pieces.get(ref, [])]
+                elif kind == "n" and ref in node_ids:
+                    present.append((kind, ref, role))
             if any(kind == "w" for kind, _, _ in present):
                 relations.append((relation_id, present, dict(tags)))
             continue
 
         via_nodes = [ref for kind, ref, role in members if kind == "n" and role == "via"]
-        member_ways = [refs_of[ref] for kind, ref, _ in present if kind == "w"]
-        if len(present) == len(members) and all(
-            node in refs for node in via_nodes for refs in member_ways
-        ):
-            relations.append((relation_id, present, dict(tags)))
+        written = []
+        for kind, ref, role in members:
+            if kind == "n" and ref in node_ids:
+                written.append((kind, ref, role))
+            elif kind == "w":
+                # With a via way instead of a node, only an unbroken way will do.
+                on_via = [way_id for way_id, refs in pieces.get(ref, [])
+                          if all(node in refs for node in via_nodes)]
+                if on_via and (via_nodes or len(pieces[ref]) == 1):
+                    # Cut at the via node itself: the piece with the way's own id.
+                    written.append((kind, ref if ref in on_via else on_via[0], role))
+        if len(written) == len(members):
+            relations.append((relation_id, written, dict(tags)))
 
     return sorted(relations)
 

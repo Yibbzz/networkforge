@@ -41,6 +41,16 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   Boxes over `MAX_OVERPASS_AREA_KM2` (1,000) are refused unless `osm_source` is given.
 - `errors.py` - exception hierarchy (NetworkForgeError; InputError is also a ValueError). Raise these,
   not bare ValueError/AssertionError; pass `guide=` anchor into docs/tagging-guide.md where useful.
+- `edits.py` - changing existing streets: custom features with an OSM way id (`osm_id` /
+  `osmid`, `EDIT_ID_COLUMNS`) are split off in step 1 (`split_edits`) and applied to a COPY of the
+  OSM edge table right after download (`apply_edits`); the before network is never touched. Only
+  tags differing from the source way's tags are changes; a feature claims the edges of that way
+  whose midpoint is within snap_tolerance (nearest feature wins; equal claims must agree). `oneway`
+  is relative to the feature's drawn direction and stored in way terms; one-way changes rebuild
+  the stretch's edges OSMnx-style (`_in_direction`). Edges get `modified="yes"` + `nf_edit` (edit
+  number); tag changes travel in `edges.attrs[EDITS_ATTR]`. Export writes each edited run as its
+  own way (`nf:modified=yes`), the way id staying with the first unchanged run; `_relations` remaps
+  restriction members to the piece holding the via node. Edits-only builds return after step 2.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
@@ -108,7 +118,10 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   Valhalla == our OSMnx routing), `test_random_lines.py` (Hypothesis). Writing these tests: put the
   line mid-route (Valhalla skips restrictions on the first/last edge), use `shortest=True` (default
   costing prefers main roads / U-turns at dead ends), avoid equal-length alternatives on the grid.
-  Live: `tests/live/test_valhalla_real_data.py` (Monaco extract: vehicles identical to raw OSM).
+  `test_edits.py` (edited existing streets). Turn-restriction checks use `turn_metres()` (a
+  tie-free trip across the grid's restricted turn: 100 m allowed, 300 m not).
+  Live: `tests/live/test_valhalla_real_data.py` (Monaco extract: vehicles identical to raw OSM;
+  closing a street via rows copied from the before GeoPackage).
 - `conftest.py` - Hypothesis profiles via `HYPOTHESIS_PROFILE`: dev (20), ci (50), thorough (500).
 - `tests/data/` - demo inputs (extent + custom lines, used by test_structural_invariants). Build the
   demo network with the CLI: `networkforge build --extent tests/data/extent.geojson --custom

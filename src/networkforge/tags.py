@@ -76,6 +76,19 @@ ROUTE_RELATIONS = ("road", "bicycle", "mtb", "foot", "hiking")
 CUSTOM_COLUMN = "custom"
 CUSTOM_TAG = "nf:custom"
 
+# A custom feature with an OSM way id in one of these attributes changes
+# that existing way instead of adding a line (see edits.py). QuickOSM
+# layers have `osm_id`; NetworkForge's GeoPackage has `osmid`.
+EDIT_ID_COLUMNS = ("osm_id", "osmid")
+EDIT_ID_COLUMN = "osm_id"
+
+# Marks edges (and, as a tag, ways) whose tags an edit changed, and
+# which edit; the tag changes travel in edges.attrs[EDITS_ATTR].
+MODIFIED_COLUMN = "modified"
+MODIFIED_TAG = "nf:modified"
+EDIT_COLUMN = "nf_edit"
+EDITS_ATTR = "networkforge_edits"
+
 # Numbers the custom lines, so the pieces a line is cut into at
 # junctions can be written as one way again.
 PART_COLUMN = "nf_part"

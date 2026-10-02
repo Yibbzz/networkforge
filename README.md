@@ -18,6 +18,10 @@ is not a full transport model:
   NetworkForge exports can be combined with GTFS timetables in tools
   such as [r5py](https://r5py.readthedocs.io) or
   [OpenTripPlanner](https://www.opentripplanner.org) for that.
+- **Existing streets can be re-tagged, not redrawn.** Make a street
+  one-way, close it, change its speed limit or type
+  ([how](docs/tagging-guide.md#changing-existing-streets)); you can't move
+  or delete one.
 - **No traffic simulation.** No congestion, demand or signal timing:
   travel times come from speed limits (or default speeds per road type).
 - **Turn restrictions come from OpenStreetMap only.** Existing ones

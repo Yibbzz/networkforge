@@ -17,6 +17,7 @@ import pandas as pd
 import shapely
 from pyproj import CRS
 
+from .edits import apply_edits, check_edit_tags, is_bidirectional, split_edits
 from .errors import InputError, NetworkIntegrityError
 from .inputs import check_bbox, clean_custom_data
 from .osm import (
@@ -27,7 +28,7 @@ from .osm import (
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
-from .tags import PART_COLUMN
+from .tags import EDITS_ATTR, PART_COLUMN
 from .topology import (
     assign_point_ids_to_lines,
     check_line_node_consistency,
@@ -210,13 +211,20 @@ def build_network(
     analysis_crs = get_analysis_crs(bbox_gdf)
     custom_data_gdf = custom_data_gdf.to_crs(analysis_crs)
 
-    blanket_tags = {**(preset_tags(preset) if preset else {}), **(network_tags or {})}
-    custom_data_gdf = resolve_custom_tags(custom_data_gdf, blanket_tags, overwrite=overwrite_tags)
-    check_custom_tags(custom_data_gdf, network_type, strict=strict)
+    # Features with an OSM way id change that existing way (edits.py);
+    # the rest are new lines. Blanket tags are for new lines only.
+    custom_data_gdf, edits_gdf = split_edits(custom_data_gdf)
 
-    log.info("Custom features: %d | analysis CRS: %s | network type: %s | "
-             "snap tolerance: %s m", len(custom_data_gdf), analysis_crs.to_string(),
-             network_type, snap_tolerance)
+    blanket_tags = {**(preset_tags(preset) if preset else {}), **(network_tags or {})}
+    if not custom_data_gdf.empty:
+        custom_data_gdf = resolve_custom_tags(
+            custom_data_gdf, blanket_tags, overwrite=overwrite_tags)
+        check_custom_tags(custom_data_gdf, network_type, strict=strict)
+    check_edit_tags(edits_gdf, strict=strict)
+
+    log.info("New lines: %d | changes to existing streets: %d | analysis CRS: %s | "
+             "network type: %s | snap tolerance: %s m", len(custom_data_gdf), len(edits_gdf),
+             analysis_crs.to_string(), network_type, snap_tolerance)
     if blanket_tags:
         log.info("Blanket tags (%s): %s",
                  "replacing feature values" if overwrite_tags else "filling gaps",
@@ -247,6 +255,31 @@ def build_network(
     # OSM as it is (all tags, turn restrictions): export writes the
     # existing network from this. Re-attached to the results at the end.
     source_data = edges_gdf.attrs.pop(SOURCE_ATTR, None)
+
+    # The untouched network is the "before"; changes to existing streets
+    # go into a copy, which the new lines are then joined to.
+    osm_edges_gdf, changes = edges_gdf, {}
+    if not edits_gdf.empty:
+        edges_gdf, changes = apply_edits(
+            osm_edges_gdf, nodes_gdf, edits_gdf, source_data, snap_tolerance,
+            bidirectional=is_bidirectional(network_type), strict=strict,
+        )
+        log.info("Changed %d existing edge(s)", int(edges_gdf.get("modified", pd.Series()).eq(
+            "yes").sum()))
+
+    def finish(nodes, edges):
+        if source_data is not None:
+            edges.attrs[SOURCE_ATTR] = source_data
+            osm_edges_gdf.attrs[SOURCE_ATTR] = source_data
+        edges.attrs[EDITS_ATTR] = changes
+        return (nodes, edges, nodes_gdf, osm_edges_gdf) if return_source_osm else (nodes, edges)
+
+    if custom_data_gdf.empty:
+        if not changes:
+            raise InputError("Nothing to build: no new lines, and no feature changes an "
+                             "existing street.", guide="changing-existing-streets")
+        log.info("No new lines: the network is OSM with %d change(s)", len(changes))
+        return finish(nodes_gdf, edges_gdf)
 
     # =========================================================
     # 3. Combine OSM and custom network
@@ -438,19 +471,4 @@ def build_network(
     log.info("Network built: %d nodes, %d edges (%d custom)",
              len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))
 
-    if source_data is not None:
-        final_lines_gdf.attrs[SOURCE_ATTR] = source_data
-        edges_gdf.attrs[SOURCE_ATTR] = source_data
-
-    if return_source_osm:
-        return (
-            combined_points_gdf,
-            final_lines_gdf,
-            nodes_gdf,
-            edges_gdf,
-        )
-
-    return (
-        combined_points_gdf,
-        final_lines_gdf,
-    )
+    return finish(combined_points_gdf, final_lines_gdf)
