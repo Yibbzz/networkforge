@@ -64,7 +64,7 @@ is not a full transport model:
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.9.0"
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v0.10.0"
 ```
 
 (Use the newest tag on the Releases page.)

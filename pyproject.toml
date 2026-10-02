@@ -1,6 +1,6 @@
 [project]
 name = "networkforge"
-version = "0.9.0"
+version = "0.10.0"
 description = "Build and edit routable street networks from GIS layers: add to, change or replace OpenStreetMap; output OSM PBF and GeoPackage"
 readme = "README.md"
 license-files = ["LICENSE"]

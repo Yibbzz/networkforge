@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-02
+
 ### Added
 - **Standalone networks**: `networkforge build --no-osm` (Python:
   `build_network(None, lines, standalone=True)`) builds a network from the
@@ -278,7 +280,8 @@ with Valhalla on the raw data:
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Yibbzz/networkforge/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Yibbzz/networkforge/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Yibbzz/networkforge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Yibbzz/networkforge/compare/v0.6.0...v0.7.0
