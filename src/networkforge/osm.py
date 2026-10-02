@@ -6,11 +6,18 @@ Both return the same thing: nodes and edges GeoDataFrames in the
 analysis CRS, built exactly as ox.graph_from_bbox builds them (500 m
 buffer, largest component, cropped to the box), so a build from a local
 extract matches a build from Overpass for the same area and data.
+
+Both also keep the OSM data itself (OSMSource: every way with its
+nodes and all its tags, tagged nodes, turn restrictions and route
+relations), attached to the edges as `edges.attrs[SOURCE_ATTR]`. The
+edge table only holds the tags OSMnx is told to keep; export writes the
+existing network from the source, so routers get OSM as it is.
 """
 
 import logging
 import os
-import tempfile
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
@@ -18,14 +25,20 @@ import networkx as nx
 import osmium
 import osmnx as ox
 import requests
+from osmnx import _overpass
 from osmnx._errors import InsufficientResponseError, ResponseStatusCodeError
+from osmnx.graph import _create_graph
 from pyproj import CRS
+from shapely.geometry import box
 
 from .errors import InputError, OSMDownloadError
 from .modes import _passes_osmnx_filter, keep_mode_tags
-from .tags import NODE_TAGS
+from .tags import RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
 
 log = logging.getLogger(__name__)
+
+# Where the OSMSource travels: edges.attrs[SOURCE_ATTR].
+SOURCE_ATTR = "networkforge_osm"
 
 # OSMnx's built-in network filters, applied in the Overpass query.
 # "all" (the default) keeps every mode's ways plus their access tags,
@@ -61,12 +74,91 @@ def _check_network_type(network_type: str) -> None:
         )
 
 
-def _to_gdfs(
-    graph: nx.MultiDiGraph,
+@dataclass(frozen=True, eq=False)
+class OSMSource:
+    """
+    The area's OpenStreetMap data as OSM has it. Elements use the
+    Overpass JSON shapes OSMnx reads.
+
+    ways:       way id -> (node ids in order, all tags)
+    node_tags:  node id -> all tags, for nodes a router acts on
+                (barriers, signals, crossings ... see ROUTING_NODE_KEYS)
+    relations:  (id, tags, [(member type "n"/"w"/"r", ref, role), ...])
+                for turn restrictions and routes that use a kept way
+    """
+
+    ways: dict[int, tuple[list[int], dict[str, str]]] = field(default_factory=dict)
+    node_tags: dict[int, dict[str, str]] = field(default_factory=dict)
+    relations: list[tuple[int, dict[str, str], list[tuple[str, int, str]]]] = field(
+        default_factory=list)
+
+    # pandas deep-copies .attrs on most operations; the source is
+    # read-only, so share it rather than copy a whole city each time.
+    def __deepcopy__(self, memo):
+        return self
+
+    def __copy__(self):
+        return self
+
+
+def _keeps_relation(tags: dict[str, str]) -> bool:
+    kind = tags.get("type", "")
+    if kind in RELATION_TYPES or kind.startswith("restriction:"):
+        return True
+    return kind == "route" and tags.get("route") in ROUTE_RELATIONS
+
+
+def _source_from_elements(elements: list[dict]) -> OSMSource:
+    ways, node_tags, relations = {}, {}, []
+    for element in elements:
+        tags = element.get("tags") or {}
+        if element["type"] == "way":
+            ways[element["id"]] = (list(element["nodes"]), dict(tags))
+        elif element["type"] == "node":
+            if any(key in tags for key in ROUTING_NODE_KEYS):
+                node_tags[element["id"]] = dict(tags)
+    for element in elements:
+        if element["type"] != "relation" or not _keeps_relation(element.get("tags") or {}):
+            continue
+        members = [(m["type"][0], m["ref"], m.get("role", "")) for m in element["members"]]
+        if any(kind == "w" and ref in ways for kind, ref, _ in members):
+            relations.append((element["id"], dict(element["tags"]), members))
+    return OSMSource(ways, node_tags, relations)
+
+
+def _network_from_elements(
+    elements: list[dict],
+    polygon,
+    polygon_buffered,
+    network_type: str,
     analysis_crs: CRS,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """
+    Nodes and edges from OSM elements covering `polygon_buffered`: the
+    same steps as ox.graph_from_polygon (what graph_from_bbox uses).
+    """
+    graph_buffered = _create_graph(
+        [{"elements": [e for e in elements if e["type"] != "relation"]}],
+        bidirectional=network_type in ox.settings.bidirectional_network_types,
+    )
+    graph_buffered = ox.truncate.truncate_graph_polygon(graph_buffered, polygon_buffered)
+    graph_buffered = ox.truncate.largest_component(graph_buffered)
+    graph = ox.truncate.truncate_graph_polygon(graph_buffered, polygon)
+    graph = ox.truncate.largest_component(graph)
+    street_counts = ox.stats.count_streets_per_node(graph_buffered, nodes=graph.nodes)
+    nx.set_node_attributes(graph, values=street_counts, name="street_count")
+
     nodes, edges = ox.graph_to_gdfs(graph)
-    return nodes.to_crs(analysis_crs), edges.to_crs(analysis_crs).reset_index()
+    nodes, edges = nodes.to_crs(analysis_crs), edges.to_crs(analysis_crs).reset_index()
+    edges.attrs[SOURCE_ATTR] = _source_from_elements(elements)
+    return nodes, edges
+
+
+def _buffered(polygon, bbox: gpd.GeoDataFrame):
+    """`polygon` (WGS84) grown by BUFFER_M, as ox.graph_from_polygon does."""
+    utm = bbox.estimate_utm_crs()
+    buffered = gpd.GeoSeries([polygon], crs="EPSG:4326").to_crs(utm).buffer(BUFFER_M)
+    return buffered.to_crs("EPSG:4326").iloc[0]
 
 
 def get_osm_data_from_bbox(
@@ -79,22 +171,19 @@ def get_osm_data_from_bbox(
     _check_network_type(network_type)
 
     # Keep motor_vehicle / foot / bicycle etc., which OSMnx drops by
-    # default, so access restrictions survive into the export.
+    # default, so access restrictions survive into the edge table.
     keep_mode_tags()
 
     # Otherwise OSMnx caches responses in ./cache wherever it's run from.
     configure_osmnx_cache()
 
-    bbox_wgs84 = bbox.to_crs("EPSG:4326")
-
-    west, south, east, north = bbox_wgs84.total_bounds
+    polygon = box(*bbox.to_crs("EPSG:4326").total_bounds)
+    polygon_buffered = _buffered(polygon, bbox)
 
     try:
-        graph = ox.graph_from_bbox(
-            (west, south, east, north),
-            network_type=network_type,
-            simplify=False,
-        )
+        elements = _download_elements(polygon_buffered, network_type)
+        return _network_from_elements(
+            elements, polygon, polygon_buffered, network_type, analysis_crs)
     except (InsufficientResponseError, ValueError) as exc:
         raise OSMDownloadError(
             f"OpenStreetMap has no {network_type!r} ways in this bounding box "
@@ -107,7 +196,33 @@ def get_osm_data_from_bbox(
             "rate-limits heavy use."
         ) from exc
 
-    return _to_gdfs(graph, analysis_crs)
+
+def _download_elements(polygon, network_type: str) -> list[dict]:
+    """
+    Every way OSMnx's filter for `network_type` matches inside `polygon`,
+    with its nodes (OSMnx's own query), plus the turn restrictions and
+    routes those ways belong to (a second query). Overpass JSON elements.
+    """
+    elements = [
+        element
+        for response in _overpass._download_overpass_network(polygon, network_type, None)
+        for element in response["elements"]
+    ]
+
+    settings = _overpass._make_overpass_settings()
+    way_filter = _overpass._get_network_filter(network_type)
+    kinds = "|".join(RELATION_TYPES)
+    routes = "|".join(ROUTE_RELATIONS)
+    for coords in _overpass._make_overpass_polygon_coord_strs(polygon):
+        query = (
+            f"{settings};way{way_filter}(poly:{coords!r})->.w;"
+            f'(rel(bw.w)["type"~"^({kinds})(:|$)"];'
+            f'rel(bw.w)["type"="route"]["route"~"^({routes})$"];);out;'
+        )
+        elements += _overpass._overpass_request(OrderedDict(data=query))["elements"]
+
+    # Large areas are downloaded in pieces that overlap.
+    return list({(e["type"], e["id"]): e for e in elements}.values())
 
 
 def get_osm_data_from_file(
@@ -131,37 +246,19 @@ def get_osm_data_from_file(
     keep_mode_tags()
 
     polygon = bbox.to_crs("EPSG:4326").union_all()
-    utm = bbox.estimate_utm_crs()
-    buffered = gpd.GeoSeries([polygon], crs="EPSG:4326").to_crs(utm).buffer(BUFFER_M)
-    polygon_buffered = buffered.to_crs("EPSG:4326").iloc[0]
+    polygon_buffered = _buffered(polygon, bbox)
 
     _check_file_covers(path, polygon)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        area_xml = Path(tmp) / "area.osm"
-        way_count = _extract_area(path, polygon_buffered.bounds, network_type, area_xml)
-        if way_count == 0:
-            raise InputError(
-                f"{path.name} has no {network_type!r} ways inside the bounding box. "
-                "Check the file covers the area.",
-                guide="osm-data.md#getting-an-extract",
-            )
-        graph_buffered = ox.graph_from_xml(
-            area_xml,
-            bidirectional=network_type in ox.settings.bidirectional_network_types,
-            simplify=False,
-            retain_all=True,
+    elements = _read_elements(path, polygon_buffered.bounds, network_type)
+    if not any(element["type"] == "way" for element in elements):
+        raise InputError(
+            f"{path.name} has no {network_type!r} ways inside the bounding box. "
+            "Check the file covers the area.",
+            guide="osm-data.md#getting-an-extract",
         )
 
-    # The same steps as ox.graph_from_polygon (what graph_from_bbox uses).
-    graph_buffered = ox.truncate.truncate_graph_polygon(graph_buffered, polygon_buffered)
-    graph_buffered = ox.truncate.largest_component(graph_buffered)
-    graph = ox.truncate.truncate_graph_polygon(graph_buffered, polygon)
-    graph = ox.truncate.largest_component(graph)
-    street_counts = ox.stats.count_streets_per_node(graph_buffered, nodes=graph.nodes)
-    nx.set_node_attributes(graph, values=street_counts, name="street_count")
-
-    return _to_gdfs(graph, analysis_crs)
+    return _network_from_elements(elements, polygon, polygon_buffered, network_type, analysis_crs)
 
 
 def _check_file_covers(path: Path, polygon) -> None:
@@ -184,11 +281,11 @@ def _check_file_covers(path: Path, polygon) -> None:
         )
 
 
-def _extract_area(path: Path, bounds, network_type: str, out_xml: Path) -> int:
+def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
     """
-    Copy the ways (filtered like the Overpass query for network_type)
-    and nodes within `bounds` from `path` into a small OSM XML file
-    OSMnx can load. Returns the number of ways copied.
+    The ways in `path` within `bounds` (filtered like the Overpass query
+    for network_type) with their nodes, and the relations kept with them
+    (see OSMSource), as Overpass JSON elements.
     """
     west, south, east, north = bounds
 
@@ -197,27 +294,36 @@ def _extract_area(path: Path, bounds, network_type: str, out_xml: Path) -> int:
 
     tagged_nodes: dict[int, dict[str, str]] = {}
     locations: dict[int, tuple[float, float]] = {}
-    ways = []
+    ways, relations = [], []
     cut_ways = 0
     extra_way_ids = iter(range(-1, -(10**15), -1))  # ids for pieces of cut ways
 
-    # Only objects with a highway or node-routing tag reach Python; the
-    # location cache still sees every node, so ways get coordinates.
+    # Only objects with a highway, node-routing or relation-type tag reach
+    # Python; the location cache still sees every node, so ways get coordinates.
     processor = (
-        osmium.FileProcessor(str(path), osmium.osm.NODE | osmium.osm.WAY)
+        osmium.FileProcessor(str(path))
         .with_locations()
-        .with_filter(osmium.filter.KeyFilter("highway", *NODE_TAGS))
+        .with_filter(osmium.filter.KeyFilter("highway", "type", *ROUTING_NODE_KEYS))
     )
     try:
         for obj in processor:
             if obj.is_node():
                 if inside(obj.location.lon, obj.location.lat):
-                    tags = {tag.k: tag.v for tag in obj.tags if tag.k in NODE_TAGS}
-                    if tags:
+                    tags = {tag.k: tag.v for tag in obj.tags}
+                    if any(key in tags for key in ROUTING_NODE_KEYS):
                         tagged_nodes[obj.id] = tags
                 continue
 
             tags = {tag.k: tag.v for tag in obj.tags}
+            if obj.is_relation():
+                if _keeps_relation(tags):
+                    relations.append({"type": "relation", "id": obj.id, "tags": tags, "members": [
+                        {"type": {"n": "node", "w": "way", "r": "relation"}[m.type],
+                         "ref": m.ref, "role": m.role} for m in obj.members]})
+                continue
+            if not obj.is_way():
+                continue
+
             if "highway" not in tags or not _passes_osmnx_filter(tags, network_type):
                 continue
             nodes = [(n.ref, (n.location.lon, n.location.lat)) if n.location.valid()
@@ -232,7 +338,8 @@ def _extract_area(path: Path, bounds, network_type: str, out_xml: Path) -> int:
                 cut_ways += 1
             for number, run in enumerate(runs):
                 way_id = obj.id if number == 0 else next(extra_way_ids)
-                ways.append((way_id, [ref for ref, _ in run], tags))
+                ways.append({"type": "way", "id": way_id, "tags": tags,
+                             "nodes": [ref for ref, _ in run]})
                 locations.update(run)
     except RuntimeError as exc:
         raise InputError(f"Can't read {path.name} as an OSM file ({exc}).") from exc
@@ -242,18 +349,11 @@ def _extract_area(path: Path, bounds, network_type: str, out_xml: Path) -> int:
                     "the extract's edge); kept the parts it does contain. Use an "
                     "extract that fully covers the area to avoid gaps.", cut_ways, path.name)
 
-    writer = osmium.SimpleWriter(str(out_xml), overwrite=True)
-    try:
-        for ref in sorted(locations):
-            writer.add_node(osmium.osm.mutable.Node(
-                id=ref, location=locations[ref], tags=tagged_nodes.get(ref, {}),
-            ))
-        for way_id, refs, tags in sorted(ways, key=lambda way: way[0]):
-            writer.add_way(osmium.osm.mutable.Way(id=way_id, nodes=refs, tags=tags))
-    finally:
-        writer.close()
-
-    return len(ways)
+    nodes = [
+        {"type": "node", "id": ref, "lon": lon, "lat": lat, "tags": tagged_nodes.get(ref, {})}
+        for ref, (lon, lat) in sorted(locations.items())
+    ]
+    return [*nodes, *sorted(ways, key=lambda way: way["id"]), *relations]
 
 
 def _known_runs(nodes: list[tuple[int, tuple[float, float] | None]]) -> list[list]:

@@ -1,24 +1,24 @@
 """Fixtures for the offline integration tests (synthetic OSM grid)."""
 
 import geopandas as gpd
-import osmnx as ox
 import pytest
 from shapely.geometry import LineString
 
+from networkforge import osm
 from tests.helpers import build_and_export
-from tests.integration.grid import BBOX, UTM, synthetic_graph
+from tests.integration.grid import BBOX, UTM, grid_elements
 
 
 @pytest.fixture
 def fake_osm(monkeypatch):
-    """Replace the Overpass download with synthetic_graph(); counts calls."""
+    """Replace the Overpass download with grid_elements(); counts calls."""
     calls = []
 
-    def fake_graph_from_bbox(bbox, network_type="all", simplify=True, **kwargs):
+    def fake_download(polygon, network_type):
         calls.append(network_type)
-        return synthetic_graph()
+        return grid_elements()
 
-    monkeypatch.setattr(ox, "graph_from_bbox", fake_graph_from_bbox)
+    monkeypatch.setattr(osm, "_download_elements", fake_download)
     return calls
 
 

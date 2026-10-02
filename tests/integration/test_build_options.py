@@ -7,13 +7,12 @@ when the download or the data can't be used.
 import logging
 
 import geopandas as gpd
-import osmnx as ox
 import pytest
 import requests
 from osmnx._errors import InsufficientResponseError
 from shapely.geometry import LineString
 
-from networkforge import build_network
+from networkforge import build_network, osm
 from networkforge.errors import (
     InputError,
     NetworkIntegrityError,
@@ -120,7 +119,7 @@ def test_download_failures_become_osm_download_errors(monkeypatch, failure, mess
     def failing_download(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(ox, "graph_from_bbox", failing_download)
+    monkeypatch.setattr(osm, "_download_elements", failing_download)
     custom = gpd.GeoDataFrame({"highway": ["primary"]},
                               geometry=[LineString(ROAD_ACROSS)], crs=UTM)
 

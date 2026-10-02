@@ -1,12 +1,17 @@
 """
-Which OpenStreetMap tags NetworkForge keeps from the download and
-writes on export.
+Which OpenStreetMap tags NetworkForge understands.
 
-OSMnx discards every tag not in its `useful_tags_way` / `useful_tags_node`
-settings, and export only writes the tags listed here, so anything a
-downstream router (GraphHopper, Valhalla, ...) needs has to be listed.
-modes.keep_mode_tags() applies these lists (plus every access tag the
-mode rules use) before any download or load.
+Existing OSM ways, nodes and relations are written to .osm / .osm.pbf
+exactly as OpenStreetMap has them (every tag), so routers such as
+Valhalla see the real data. The lists here decide:
+
+- which attributes of a *custom* feature are written as tags (anything
+  else is not an OSM tag NetworkForge knows, and is left out);
+- which tags become columns of the edge / node tables (and so of the
+  GeoPackage). OSMnx discards every tag not in its `useful_tags_way` /
+  `useful_tags_node` settings; modes.keep_mode_tags() applies these
+  lists (plus every access tag the mode rules use) before any load;
+- which nodes and relations of a local extract are worth reading.
 """
 
 # Core way tags, written first on export.
@@ -22,14 +27,23 @@ ROUTING_WAY_TAGS = (
     "oneway:bicycle", "oneway:bus", "oneway:psv",
     # Access for other vehicle types
     "vehicle", "hgv", "goods", "bus", "psv", "motorcycle", "horse", "wheelchair",
+    "taxi", "hov", "moped", "emergency", "motorroad",
+    # Access that depends on the time of day, e.g. "no @ (Mo-Fr 07:00-09:00)"
+    "access:conditional", "motor_vehicle:conditional", "vehicle:conditional",
+    "hgv:conditional", "bicycle:conditional", "foot:conditional",
     # Vehicle size / weight limits
-    "maxweight", "maxheight", "maxwidth", "maxlength", "maxaxleload",
+    "maxweight", "maxheight", "maxwidth", "maxlength", "maxaxleload", "maxaxles", "hazmat",
     # Direction- and vehicle-specific speeds and lanes
     "maxspeed:forward", "maxspeed:backward", "maxspeed:hgv",
     "lanes:forward", "lanes:backward",
+    "turn:lanes", "turn:lanes:forward", "turn:lanes:backward",
+    # Names and signs used in turn-by-turn directions
+    "alt_name", "official_name", "int_ref", "destination", "destination:ref", "junction:ref",
+    # Walking
+    "sidewalk", "footway", "crossing",
     # Cycle infrastructure
     "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
-    "segregated", "bicycle_road", "cyclestreet",
+    "segregated", "bicycle_road", "cyclestreet", "shoulder",
     # Surface and difficulty
     "smoothness", "tracktype", "sac_scale", "incline", "lit", "ford", "toll",
 )
@@ -41,6 +55,27 @@ NODE_TAGS = (
     "access", "vehicle", "motor_vehicle", "motorcar", "bicycle", "foot",
 )
 
+# A node of a local extract is read (with all its tags) if it has one
+# of these keys: NODE_TAGS plus further tags routers act on. Untagged
+# nodes, and nodes that are only e.g. a shop or a tree, carry nothing a
+# router uses.
+ROUTING_NODE_KEYS = (
+    *NODE_TAGS,
+    "bus", "psv", "hgv", "taxi", "motorcycle", "moped", "emergency", "horse", "wheelchair",
+    "bollard", "entrance", "toll", "traffic_signals", "traffic_signals:direction",
+    "direction", "maxheight", "maxwidth", "maxweight", "name", "exit_to", "level",
+)
+
+# Relations kept with the network: turn restrictions and lane
+# connectivity (by `type`), and the routes routers read names, refs and
+# cycle / walking networks from (type=route, by `route`).
+RELATION_TYPES = ("restriction", "connectivity")
+ROUTE_RELATIONS = ("road", "bicycle", "mtb", "foot", "hiking")
+
 # The column marking custom features, and the tag it's exported as.
 CUSTOM_COLUMN = "custom"
 CUSTOM_TAG = "nf:custom"
+
+# Numbers the custom lines, so the pieces a line is cut into at
+# junctions can be written as one way again.
+PART_COLUMN = "nf_part"

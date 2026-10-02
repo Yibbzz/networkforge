@@ -37,17 +37,21 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
-  `NETWORKFORGE_OSMNX_CACHE`) or a local extract (`get_osm_data_from_file`, via `osm_source=`):
-  pyosmium copies filtered ways/nodes in the 500 m-buffered bbox to temp XML, then the same steps as
-  ox.graph_from_polygon (truncate, largest component, street_count). Must match Overpass exactly
-  (tests/live/test_local_extract.py). Ways cut at an extract's edge keep their known runs.
+  `NETWORKFORGE_OSMNX_CACHE`) or a local extract (`get_osm_data_from_file`, via `osm_source=`).
+  Both produce Overpass-JSON "elements" (`_download_elements` / `_read_elements`), then one path
+  (`_network_from_elements`): OSMnx's private `_create_graph` + the same steps as
+  ox.graph_from_polygon (truncate, largest component, street_count). Both attach an `OSMSource`
+  (every way's nodes + ALL tags, tagged nodes, turn-restriction / route relations) as
+  `edges.attrs[SOURCE_ATTR]`; build_network re-attaches it to its results and export writes the
+  existing network from it. Ways cut at an extract's edge keep their known runs.
   `network_type` = OSMnx download filter; keep `"all"` so one build serves every mode.
 - `modes.py` - transport-mode access rules: OSMnx's own network filters (by way type) + the OSM access
   hierarchy (`ACCESS_HIERARCHY`, most specific tag wins; `DENIED_ACCESS`; busways closed unless a
   mode tag opens them; `OPENABLE` e.g. footway+bicycle=designated). OSMnx's own access clauses are
   skipped for routing modes (the hierarchy replaces them). `usable_modes(tags)`,
   `filter_graph_by_mode`, `load_graph(osm_file, mode)`, `keep_mode_tags()` (way + node tags to keep).
-- `tags.py` - which way/node tags are kept at download and written on export (single source).
+- `tags.py` - tags written for CUSTOM features and kept as edge/node columns (single source);
+  `ROUTING_NODE_KEYS` (which extract nodes are read), relation types kept, `PART_COLUMN`.
 - `projection.py` - picks a projected UTM analysis CRS from the bbox; WGS84 helpers.
 - `validation.py` - pre-build `resolve_custom_tags` (feature attributes vs blanket tags, `overwrite`)
   + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the
@@ -60,14 +64,21 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   length_m, *_minutes, car/bike_direction (forward/backward/both). One row per street (drops OSMnx
   reverse copies where reversed & two-way); geometry rebuilt u->v so QGIS topology is exact.
   tests/integration/test_gpkg.py routes on the layer "as QGIS does" and must match the engine.
-- `export.py` - `write_osm(nodes, edges, path)`: format from extension (.osm via ElementTree; .osm.pbf,
-  .pbf, .osm.gz, .osm.bz2 via pyosmium). Both from `prepare_osm_data()` so content is identical; sorted
-  by id. Every edge becomes a 2-node way; custom edges get `nf:custom=yes`. `write_osm_xml` = XML only.
+- `export.py` - `write_osm(nodes, edges, path)`: format from extension (.osm via streamed XML;
+  .osm.pbf, .pbf, .osm.gz, .osm.bz2 via pyosmium). Both from `prepare_osm_data()` so content is
+  identical; sorted by id. Existing ways are written from the `OSMSource`: same id, node order and
+  tags; ways the build cut or the bbox cropped are rebuilt around their OSM nodes (`_runs`: new
+  junction nodes inserted in place). Relations kept if their members survive. Each custom line is
+  ONE way (pieces chained by `nf_part`, `_chains`), id above the max way id, `nf:custom=yes`.
+  Edge tables without a source (straight from OSMnx) fall back to chaining by `osmid` + column
+  tags. Never go back to one 2-node way per edge or to writing OSMnx's reverse copies: Valhalla
+  routes measurably differently (tests/valhalla).
 
 ## Tests (`tests/`)
 - `unit/` - tag/mode rules (`test_custom_tags.py`), CRS selection (`test_projection.py`).
 - `integration/` - offline. `grid.py` is a hand-built 5x5 OSM grid (footway, cycleway, bus gate,
-  motorway, small node ids); `conftest.py` monkeypatches `ox.graph_from_bbox` to return it
+  motorway + slip road, small node ids, multi-block named ways, one turn restriction) as Overpass
+  elements (`grid_elements()`); `conftest.py` monkeypatches `osm._download_elements` to return it
   (`fake_osm`, `build` fixtures). `test_synthetic_grid.py` = exact rule checks + regression cases
   Hypothesis found; `test_properties.py` = Hypothesis random custom lines, checks invariants.
   - `live/` - `network` marker: `test_cities.py` (3 cities x road/cycleway/footway, seeded via

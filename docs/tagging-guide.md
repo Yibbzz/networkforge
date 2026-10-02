@@ -102,7 +102,8 @@ cycleways?".
 
 Attributes that aren't tags (an `id` or `notes` column, for example)
 are ignored. A few names are used internally, so attributes called
-`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed` or `length` are
+`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed`, `length` or
+`nf_part` are
 set aside with a warning (they aren't OSM tags, so nothing is lost).
 
 Messages name features by row number, or by an id attribute you choose
@@ -126,15 +127,15 @@ otherwise a default speed for the road type is used.
 | `cycleway` | `highway=cycleway`, `oneway=no` | | ✓ | |
 | `footpath` | `highway=footway` | | | ✓ |
 | `shared_path` | `highway=path`, `bicycle=designated`, `foot=designated` | | ✓ | ✓ |
-| `pedestrian_street` | `highway=pedestrian` | | ✓ | ✓ |
+| `pedestrian_street` | `highway=pedestrian`, `bicycle=yes` | | ✓ | ✓ |
 | `car_free_street` | `highway=residential`, `motor_vehicle=no`, `oneway=no` | | ✓ | ✓ |
 
 \* Service roads are part of the `drive_service` network, not the
 plain `drive` one (OSMnx's rule), so a car router using `drive` skips them.
 
 `oneway=no` is set on roads because a single drawn line usually stands
-for both directions. `pedestrian_street` is open to bikes under these
-rules; add `bicycle=no` if cycling isn't allowed.
+for both directions. `pedestrian_street` allows cycling (`bicycle=yes`);
+for walking only, tag `highway=pedestrian` yourself or add `bicycle=no`.
 
 ## Attributes
 
@@ -152,6 +153,11 @@ the build (or are logged with `strict=False`).
 | `motor_vehicle`, `motorcar` | same values as `access` | Access for cars. `motor_vehicle=no` makes a bus gate or filtered street. |
 | `bicycle` | same values as `access` | Access for bikes. `bicycle=designated` on a footway makes it a shared-use path. |
 | `foot` | same values as `access` | Access for pedestrians. `foot=yes` on a cycleway lets people walk on it. |
+| `bus`, `psv`, `hgv`, `goods`, `taxi`, `motorcycle`, `moped`, `emergency`, `horse`, `hov` | same values as `access` | Access for other vehicles, for routers that have such a profile (Valhalla: bus, truck, taxi, motorcycle). `access=no` + `bus=yes` is a bus-only road. |
+| `motorroad` | `yes`, `no` | `yes`: motorway rules on any road - no walking or cycling. |
+| `maxheight`, `maxwidth`, `maxlength` | metres: `3.5`, `3.5 m`; or `12 ft`, `11'6"` | Size limit. Routers keep taller / wider / longer vehicles off it (set the vehicle's size in the router). |
+| `maxweight`, `maxaxleload` | tonnes: `7.5`, `7.5 t`; or `5 st`, `12000 lbs` | Weight limit, used the same way. |
+| `surface` | `asphalt`, `paved`, `gravel`, `unpaved`, `dirt`, ... | Unpaved surfaces are slower, and routers can be told to avoid them. |
 | `bridge` | `yes`, `viaduct`, ... (`no` = not a bridge) | Passes **over** the ways it crosses instead of joining them. |
 | `tunnel` | `yes`, `building_passage`, ... (`no` = not a tunnel) | Passes **under** the ways it crosses instead of joining them. |
 | `layer` | whole number, e.g. `1`, `-1` (default `0`) | Ways on different layers cross without joining. |
@@ -172,8 +178,9 @@ Two rules decide whether a mode (car, bike, walk) can use a way:
 
 1. **The way type.** Cars can't use footways, cycleways, paths,
    pedestrian streets, tracks or steps. Pedestrians can't use motorways
-   or cycleways. Bikes can't use footways, motorways or steps. Service
-   roads are only in the `drive_service` car network.
+   or cycleways. Bikes can't use footways, pedestrian streets, motorways
+   or steps. Nobody walks or cycles on a road tagged `motorroad=yes`.
+   Service roads are only in the `drive_service` car network.
 2. **Access tags, most specific first.** For cars that's `motorcar`,
    then `motor_vehicle`, then `vehicle`, then `access`; for bikes
    `bicycle`, `vehicle`, `access`; for walking `foot`, `access`. The
@@ -191,9 +198,13 @@ Two special cases follow from these rules:
 
 - **Busways** (`highway=busway`) are for buses: closed to cars, bikes
   and pedestrians unless a tag opens them (e.g. `bicycle=designated`).
+  A line only buses (or taxis, lorries ...) may use is accepted: the
+  car / bike / walk columns leave it out, and a router's bus profile
+  uses it.
 - **A mode-specific tag can open a way its type would exclude:**
-  a footway with `bicycle=yes` or `designated` is usable by bikes, and a
-  cycleway with `foot=yes` or `designated` is walkable. It never opens
+  a footway or pedestrian street with `bicycle=yes` or `designated` is
+  usable by bikes, and a cycleway with `foot=yes` or `designated` is
+  walkable. It never opens
   motorways to pedestrians or footways to cars.
 
 ### Where lines join
@@ -218,7 +229,7 @@ junctions); tag the custom line `bridge=yes` if it goes over one.
 | New 40 mph bypass | `preset="primary_road"`, `network_tags={"maxspeed": "40 mph"}` |
 | Segregated cycle route | `preset="cycleway"` |
 | Shared walking and cycling path | `preset="shared_path"` |
-| Pedestrianise a street | `preset="pedestrian_street"` (+ `bicycle=no` to exclude bikes) |
+| Pedestrianise a street | `preset="pedestrian_street"` (cycling allowed), or `highway=pedestrian` for walking only |
 | Filtered street / bus gate | `preset="car_free_street"` |
 | Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |
 | Shared-use pavement (walk + cycle on a footway) | `highway=footway`, `bicycle=designated` |

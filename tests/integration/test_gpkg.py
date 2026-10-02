@@ -71,8 +71,15 @@ def test_geometry_runs_exactly_between_its_nodes(result, edges):
     assert shapely.equals(ends, nodes.loc[edges.v.astype(int)].to_numpy()).all()
 
 
+def test_footway_cut_by_the_custom_road_is_two_walk_only_rows(edges):
+    """ROAD_ACROSS crosses the footway: two pieces, and no leftover uncut copy."""
+    assert rows_between(edges, FOOTWAY).empty
+    pieces = edges[(edges.highway == "footway") & (edges.custom != "yes")]
+    assert len(pieces) == 2
+    assert {(row.car, row.bike, row.walk) for row in pieces.itertuples()} == {(False, False, True)}
+
+
 @pytest.mark.parametrize("pair, car, bike, walk", [
-    (FOOTWAY, False, False, True),
     (CYCLEWAY, False, True, False),
     (BUS_GATE, False, True, True),
     (NO_ACCESS, False, False, True),

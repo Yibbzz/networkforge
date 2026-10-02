@@ -21,11 +21,13 @@ from .errors import InputError, NetworkIntegrityError
 from .inputs import check_bbox, clean_custom_data
 from .osm import (
     NETWORK_TYPES,
+    SOURCE_ATTR,
     get_osm_data_from_bbox,
     get_osm_data_from_file,
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
+from .tags import PART_COLUMN
 from .topology import (
     assign_point_ids_to_lines,
     check_line_node_consistency,
@@ -70,8 +72,10 @@ def combine_custom_lines_with_osm_edges(
     # Reset the OSM edge index before combining.
     edges_gdf_reset = edges_gdf.reset_index(drop=True)
 
-    # Mark custom features so they can be identified later.
+    # Mark custom features so they can be identified later, and number
+    # the lines so export can write each one as a single way.
     custom["custom"] = "yes"
+    custom[PART_COLUMN] = np.arange(len(custom))
 
     # Combine OSM and custom network lines.
     combined_gdf = gpd.GeoDataFrame(
@@ -239,6 +243,10 @@ def build_network(
 
     log.info("OSM network: %d nodes, %d edges", len(nodes_gdf), len(edges_gdf))
 
+    # OSM as it is (all tags, turn restrictions): export writes the
+    # existing network from this. Re-attached to the results at the end.
+    source_data = edges_gdf.attrs.pop(SOURCE_ATTR, None)
+
     # =========================================================
     # 3. Combine OSM and custom network
     # =========================================================
@@ -368,8 +376,14 @@ def build_network(
 
     step(10, "Finalising edges")
 
+    # Pieces left without two different end nodes (the zero-length piece
+    # cut off where a line is split at its own end) must go: an existing
+    # street's piece would otherwise keep the whole street's u and v, a
+    # second copy of the street that bypasses the new junctions on it.
+    not_edges = osm_split_lines_gdf.index.difference(updated_lines.index)
+
     final_lines_gdf = update_and_finalize_lines_gdf(
-        split_lines_gdf,
+        split_lines_gdf.drop(not_edges),
         updated_lines,
     )
 
@@ -422,6 +436,10 @@ def build_network(
 
     log.info("Network built: %d nodes, %d edges (%d custom)",
              len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))
+
+    if source_data is not None:
+        final_lines_gdf.attrs[SOURCE_ATTR] = source_data
+        edges_gdf.attrs[SOURCE_ATTR] = source_data
 
     if return_source_osm:
         return (

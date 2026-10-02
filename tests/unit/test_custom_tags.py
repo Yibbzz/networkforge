@@ -77,10 +77,39 @@ def test_strict_false_only_warns(caplog):
     ({"highway": "primary", "oneway": "maybe"}, "oneway='maybe'"),
     ({"highway": "primary", "lanes": "0"}, "positive whole number"),
     ({"highway": "primary", "foot": "nope"}, "foot='nope'"),
+    ({"highway": "primary", "bus": "sometimes"}, "bus='sometimes'"),
+    ({"highway": "primary", "maxheight": "low"}, "maxheight='low'"),
+    ({"highway": "primary", "maxweight": "7,5"}, "maxweight='7,5'"),
 ])
 def test_invalid_tags_rejected(tags, message):
     with pytest.raises(ValueError, match=message):
         check(custom(**tags), {})
+
+
+@pytest.mark.parametrize("tags", [
+    {"highway": "primary", "maxheight": "3.5"},
+    {"highway": "primary", "maxheight": "3.5 m"},
+    {"highway": "primary", "maxheight": "11'6\""},
+    {"highway": "primary", "maxheight": "12 ft"},
+    {"highway": "primary", "maxheight": "default"},
+    {"highway": "primary", "maxweight": "7.5 t"},
+    {"highway": "primary", "maxweight": "12000 lbs"},
+    {"highway": "primary", "hgv": "destination", "taxi": "no"},
+])
+def test_vehicle_limits_and_access_accepted(tags):
+    check(custom(**tags), {})
+
+
+@pytest.mark.parametrize("tags", [
+    {"highway": "busway"},
+    {"highway": "residential", "access": "no", "bus": "yes"},
+    {"highway": "residential", "access": "no", "psv": "designated"},
+])
+def test_bus_only_feature_is_accepted_with_a_note(tags, caplog):
+    """No car / bike / walk mode can use it, but a router's bus profile can."""
+    with caplog.at_level("INFO"):
+        check(custom(**tags), {})
+    assert "open only to buses" in caplog.text
 
 
 def test_reserved_column_rejected():

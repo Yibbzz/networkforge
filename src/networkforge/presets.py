@@ -31,7 +31,9 @@ PRESETS: dict[str, dict[str, str]] = {
     "cycleway": {"highway": "cycleway", "oneway": "no"},
     "footpath": {"highway": "footway"},
     "shared_path": {"highway": "path", "bicycle": "designated", "foot": "designated"},
-    "pedestrian_street": {"highway": "pedestrian"},
+    # Cycling on a pedestrian street has to be allowed explicitly; leave
+    # the preset out and tag highway=pedestrian for walking only.
+    "pedestrian_street": {"highway": "pedestrian", "bicycle": "yes"},
     # A road closed to motor traffic (e.g. a filtered street or bus gate).
     "car_free_street": {"highway": "residential", "motor_vehicle": "no", "oneway": "no"},
 }

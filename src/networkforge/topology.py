@@ -626,11 +626,7 @@ def update_and_finalize_lines_gdf(
 
     original_gdf.update(updated_gdf)
 
-    original_gdf = original_gdf.set_geometry("geometry")
-
-    original_gdf["osmid"] = original_gdf.index + 1
-
-    return original_gdf
+    return original_gdf.set_geometry("geometry")
 
 def check_line_node_consistency(
     split_lines_combined_gdf: gpd.GeoDataFrame,

@@ -13,7 +13,7 @@ from shapely.geometry import LineString, box
 
 from networkforge import write_osm
 from networkforge.errors import InputError
-from networkforge.osm import _extract_area
+from networkforge.osm import _read_elements
 from tests.helpers import ROUTING_MODES, build_and_export, custom_pairs
 from tests.integration.grid import (
     BBOX,
@@ -122,7 +122,7 @@ def test_file_that_does_not_cover_the_bbox_is_refused(grid_pbf, tmp_path):
 
 def test_ways_cut_at_the_extract_edge_keep_their_known_parts(tmp_path, caplog):
     """Way 10 references node 99, which the file doesn't contain."""
-    source, area = tmp_path / "cut.osm.pbf", tmp_path / "area.osm"
+    source = tmp_path / "cut.osm.pbf"
     writer = osmium.SimpleWriter(str(source))
     for ref in (1, 2, 3, 4):
         writer.add_node(osmium.osm.mutable.Node(id=ref, location=(ref * 0.001, 0.0)))
@@ -131,9 +131,8 @@ def test_ways_cut_at_the_extract_edge_keep_their_known_parts(tmp_path, caplog):
     writer.close()
 
     with caplog.at_level(logging.WARNING):
-        count = _extract_area(source, (-1, -1, 1, 1), "all", area)
+        elements = _read_elements(source, (-1, -1, 1, 1), "all")
 
-    ways = [[n.ref for n in way.nodes] for way in osmium.FileProcessor(str(area), osmium.osm.WAY)]
-    assert count == 2
+    ways = [element["nodes"] for element in elements if element["type"] == "way"]
     assert sorted(ways) == [[1, 2], [3, 4]]
     assert "cut at the extract's edge" in caplog.text

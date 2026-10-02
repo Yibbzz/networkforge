@@ -32,8 +32,14 @@ import geopandas as gpd
 import pandas as pd
 
 from .errors import InvalidTagsError, NetworkIntegrityError
-from .modes import allows_mode, mode_tag_keys, usable_modes
-from .tags import BASE_WAY_TAGS, ROUTING_WAY_TAGS
+from .modes import (
+    OTHER_VEHICLE_KEYS,
+    allows_mode,
+    mode_tag_keys,
+    open_to_other_vehicles,
+    usable_modes,
+)
+from .tags import BASE_WAY_TAGS, PART_COLUMN, ROUTING_WAY_TAGS
 
 log = logging.getLogger(__name__)
 
@@ -221,7 +227,9 @@ KNOWN_HIGHWAYS = {
     "path", "steps", "corridor",
 }
 
-ACCESS_KEYS = ("access", "vehicle", "motor_vehicle", "motorcar", "foot", "bicycle")
+ACCESS_KEYS = (
+    "access", "vehicle", "motor_vehicle", "motorcar", "foot", "bicycle", *OTHER_VEHICLE_KEYS,
+)
 ACCESS_VALUES = {
     "yes", "no", "private", "permissive", "destination", "designated",
     "customers", "delivery", "agricultural", "forestry", "discouraged",
@@ -236,10 +244,19 @@ MAXSPEED_PATTERN = re.compile(
     r"^(\d+(\.\d+)?( mph| knots)?|[A-Z]{2}:[a-z_]+|none|walk|signals|variable)$"
 )
 
+# Size and weight limits: a number (metres / tonnes), a number with a
+# unit ("3.5 m", "12 ft", "7.5 t", "5 st", "12000 lbs"), feet and inches
+# (11'6"), or one of OSM's words for "no posted limit".
+LIMIT_KEYS = ("maxheight", "maxwidth", "maxlength", "maxweight", "maxaxleload")
+LIMIT_PATTERN = re.compile(
+    r"""^(\d+(\.\d+)?( ?(m|ft|t|st|kg|lbs))?|\d+'(\d+(\.\d+)?")?|"""
+    r"""none|default|below_default|unsigned)$"""
+)
+
 # Columns the pipeline itself uses. A custom property with one of
 # these names would corrupt topology (e.g. a 'u' value stops the
 # feature being treated as custom).
-RESERVED_COLUMNS = {"u", "v", "key", "osmid", "custom", "split", "reversed", "length"}
+RESERVED_COLUMNS = {"u", "v", "key", "osmid", "custom", "split", "reversed", "length", PART_COLUMN}
 
 # Tag keys the pipeline understands (checked, used for routing or
 # exported). Used to spot misspelt or truncated attribute names.
@@ -353,6 +370,12 @@ def check_custom_tags(
             if value is not None and value not in ACCESS_VALUES:
                 issues.append((index, f"{key}={value!r} is not a valid OSM access value"))
 
+        for key in LIMIT_KEYS:
+            value = tags.get(key)
+            if value is not None and not LIMIT_PATTERN.match(value):
+                issues.append((index, f"{key}={value!r} is not a valid OSM limit "
+                                      "(e.g. 3.5, '3.5 m', '12 ft', '7.5 t')"))
+
         layer = tags.get("layer")
         if layer is not None and not re.fullmatch(r"-?\d+", layer):
             issues.append((index, f"layer={layer!r} must be a whole number, e.g. 1 or -1"))
@@ -365,8 +388,16 @@ def check_custom_tags(
         log.debug("%s: highway=%s maxspeed=%s -> usable by: %s",
                   label, highway, maxspeed, ", ".join(modes) or "NOTHING")
 
+        if highway == "bridleway" and not ({"foot", "bicycle"} & tags.keys()):
+            notes.add("highway=bridleway: Valhalla only lets walkers and bikes use a "
+                      "bridleway tagged foot=yes / bicycle=yes")
+
         if highway in KNOWN_HIGHWAYS:
-            if not modes:
+            if not modes and open_to_other_vehicles(tags):
+                notes.add("some features are open only to buses or other special "
+                          "vehicles: the car / bike / walk columns leave them out, "
+                          "routers use them for those vehicles")
+            elif not modes:
                 issues.append((index, "tags make it unusable by every mode"))
             elif not allows_mode(tags, network_type):
                 issues.append((index, f"not usable in network_type={network_type!r} "
@@ -391,6 +422,6 @@ def _suggest_tag_key(column: str) -> str | None:
         return None
     truncated = [key for key in KNOWN_TAG_KEYS if len(column) >= 5 and key.startswith(column)]
     if truncated:
-        return truncated[0]
+        return min(truncated, key=lambda key: (len(key), key))
     close = difflib.get_close_matches(column, KNOWN_TAG_KEYS, n=1, cutoff=0.85)
     return close[0] if close else None

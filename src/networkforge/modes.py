@@ -58,8 +58,25 @@ DENIED_ACCESS = {
 # Mode-specific values that explicitly open a way.
 GRANTED_ACCESS = {"yes", "designated", "permissive", "official"}
 
-# Way types closed to every mode unless a mode-specific tag opens them.
-CLOSED_BY_DEFAULT = {"busway"}
+# Way types closed to these modes unless a mode-specific tag opens them:
+# busways are for buses; cycling on a pedestrian street needs e.g.
+# bicycle=yes (OSM's default, and how Valhalla reads it).
+CLOSED_BY_DEFAULT = {
+    "busway": ("drive", "drive_service", "bike", "walk"),
+    "pedestrian": ("bike",),
+}
+
+# motorroad=yes: motorway-like rules on any road type - no walking or
+# cycling unless foot= / bicycle= says otherwise.
+MOTORROAD_CLOSED = ("bike", "walk")
+
+# Access tags for vehicles NetworkForge has no mode for. A way open
+# only to these (a bus gate, a busway) is still a real way: routers
+# with a bus, truck or taxi profile use it.
+OTHER_VEHICLE_KEYS = (
+    "bus", "psv", "hgv", "goods", "taxi", "motorcycle", "moped", "emergency", "horse", "hov",
+)
+BUS_HIGHWAYS = {"busway", "bus_guideway"}
 
 # Way types OSMnx excludes for a mode that a mode-specific tag may open:
 # a footway with bicycle=yes/designated is a shared-use path; a
@@ -93,7 +110,7 @@ def mode_tag_keys() -> set[str]:
         key
         for mode in ("all", "all_public", *MODES)
         for key, _, _ in mode_rules(mode)
-    } | {key for keys in ACCESS_HIERARCHY.values() for key in keys}
+    } | {key for keys in ACCESS_HIERARCHY.values() for key in keys} | {"motorroad"}
 
 
 def keep_mode_tags() -> None:
@@ -143,7 +160,9 @@ def allows_mode(tags: dict, mode: str) -> bool:
     granted = access is not None and access[0] != "access" and access[1] in GRANTED_ACCESS
     highway = _as_text(tags.get("highway"))
 
-    if highway in CLOSED_BY_DEFAULT and not granted:
+    if mode in CLOSED_BY_DEFAULT.get(highway, ()) and not granted:
+        return False
+    if mode in MOTORROAD_CLOSED and _as_text(tags.get("motorroad")) == "yes" and not granted:
         return False
 
     # The hierarchy above replaces OSMnx's own access clauses (e.g. its
@@ -178,6 +197,16 @@ def _passes_osmnx_filter(
             return False
 
     return True
+
+
+def open_to_other_vehicles(tags: dict) -> bool:
+    """
+    True if the tags open the way to a vehicle NetworkForge has no mode
+    for (buses, taxis, lorries ...): a busway, or e.g. bus=yes / psv=yes.
+    """
+    if _as_text(tags.get("highway")) in BUS_HIGHWAYS:
+        return True
+    return any(_as_text(tags.get(key)) in GRANTED_ACCESS for key in OTHER_VEHICLE_KEYS)
 
 
 def usable_modes(tags: dict) -> list[str]:

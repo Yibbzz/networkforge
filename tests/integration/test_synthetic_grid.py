@@ -86,6 +86,21 @@ def test_line_ending_near_a_node_snaps_to_it_without_a_gap(build):
     ]
 
 
+def test_line_ending_on_a_node_leaves_no_second_copy_of_the_streets_there(build):
+    """
+    DIAGONAL ends on nodes 13 and 19, so every street there is cut at
+    its own end. The zero-length offcut used to stay as an edge with the
+    whole street's u and v: a copy of the footway 8-13 that skipped the
+    junction ROAD_ACROSS makes on it.
+    """
+    edges = build([(ROAD_ACROSS, ROAD_TAGS), (DIAGONAL, {"highway": "cycleway"})]).edges
+
+    assert not edges.duplicated(["u", "v"]).any()
+    assert (edges.geometry.length > 0).all()
+    footway = edges[(edges["highway"] == "footway")]
+    assert not ((footway["u"] == node_id(1, 2)) & (footway["v"] == node_id(2, 2))).any()
+
+
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
     edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
 

@@ -20,8 +20,10 @@ is not a full transport model:
   [OpenTripPlanner](https://www.opentripplanner.org) for that.
 - **No traffic simulation.** No congestion, demand or signal timing:
   travel times come from speed limits (or default speeds per road type).
-- **No turn restrictions yet.** OSM turn restrictions ("no right turn")
-  are relations, which aren't downloaded or exported.
+- **Turn restrictions come from OpenStreetMap only.** Existing ones
+  ("no right turn") are kept in the exported file and routers obey them;
+  you can't yet add one for your own lines. NetworkForge's own simplified
+  routing and the QGIS GeoPackage don't apply them.
 - **Its own routing is simplified.** `networkforge.modes.load_graph`
   (OSMnx-based, used by the tests) ignores e.g. `oneway:bicycle`; routers
   such as GraphHopper and Valhalla read those tags from the exported file,
@@ -134,9 +136,12 @@ repeatable builds) download an extract, e.g. from
 `write_osm` picks the format from the file name. PBF is OpenStreetMap's
 compressed binary format (open, [documented on the OSM wiki](https://wiki.openstreetmap.org/wiki/PBF_Format)),
 several times smaller than XML and what routers such as GraphHopper
-and Valhalla read. Exports keep the tags routers need: access
-restrictions, one-way exceptions, cycle infrastructure, surface,
-vehicle limits, and barrier nodes such as bollards.
+and Valhalla read. The existing network is written as OpenStreetMap
+has it: every way keeps its id, its nodes and all its tags, and turn
+restrictions are kept, so a router treats the "before" file like
+OpenStreetMap itself. Your lines are added as new ways (tagged
+`nf:custom=yes`), and where one joins an existing street the junction is
+added to that street.
 
 A feature's own attributes win over a preset unless you pass
 `overwrite_tags=True`. Who may use each way follows OSM rules: the

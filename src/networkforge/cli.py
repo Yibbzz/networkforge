@@ -63,6 +63,8 @@ from .validation import (
     ACCESS_VALUES,
     KNOWN_HIGHWAYS,
     KNOWN_TAG_KEYS,
+    LIMIT_KEYS,
+    LIMIT_PATTERN,
     MAXSPEED_PATTERN,
     ONEWAY_VALUES,
     check_custom_tags,
@@ -189,7 +191,8 @@ def cmd_info(args, emit) -> int:
             **{key: sorted(ACCESS_VALUES) for key in ACCESS_KEYS},
         },
         "tag_patterns": {"maxspeed": MAXSPEED_PATTERN.pattern, "lanes": r"^[1-9]\d*$",
-                         "layer": r"^-?\d+$"},
+                         "layer": r"^-?\d+$",
+                         **{key: LIMIT_PATTERN.pattern for key in LIMIT_KEYS}},
     }
     emit(info, text=(
         f"networkforge {info['version']}\n"

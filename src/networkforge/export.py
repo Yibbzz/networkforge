@@ -19,15 +19,28 @@ write_osm() picks the format from the file name:
 
 XML is written by this module; the other formats by pyosmium. Both get
 the same content from prepare_osm_data(), so an XML and a PBF export of
-one network hold identical nodes, ways and tags. Nodes and ways are
-sorted by id, as tools like osmium expect.
+one network hold identical nodes, ways, relations and tags. Each kind
+is sorted by id, as tools like osmium expect.
 
-Each graph edge becomes its own 2-node way with a new id (one OSM way
-can produce many edges). Way tags are the ones listed in tags.py plus
-every access tag the mode rules use; node tags (barriers, signals,
-crossings) are NODE_TAGS.
+The existing network is written as OpenStreetMap has it (see
+osm.OSMSource): each way keeps its id, its nodes in order and every
+tag, tagged nodes keep theirs, and turn restrictions and route
+relations are kept. The build only adds to it: where a custom line
+joins an existing way mid-way, the new junction node is inserted into
+that way. This matters to routers - Valhalla reads far more tags than
+the edge table holds, obeys turn restrictions (which name way ids), and
+measures curvature and junction density from whole ways.
+
+Each custom line is one way with a new id (above every OSM way id),
+its nodes being the line's vertices and junctions, tagged with the
+attributes listed in tags.py plus `nf:custom=yes`.
+
+Edges without a source (tables not made by build_network, e.g. straight
+from OSMnx) are still written: ways are rebuilt from the `osmid` column
+and tags come from the columns.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
@@ -40,7 +53,15 @@ import shapely
 
 from .errors import InputError
 from .modes import allows_mode, car_speed_kph, mode_tag_keys
-from .tags import BASE_WAY_TAGS, CUSTOM_COLUMN, CUSTOM_TAG, NODE_TAGS, ROUTING_WAY_TAGS
+from .osm import SOURCE_ATTR, OSMSource
+from .tags import (
+    BASE_WAY_TAGS,
+    CUSTOM_COLUMN,
+    CUSTOM_TAG,
+    NODE_TAGS,
+    PART_COLUMN,
+    ROUTING_WAY_TAGS,
+)
 
 GENERATOR = "NetworkForge"
 
@@ -56,7 +77,9 @@ GPKG_ANALYSIS_COLUMNS = (
 )
 
 # Edge columns that only mean something inside the pipeline.
-INTERNAL_COLUMNS = ["key", "split", "reversed", "length"]
+INTERNAL_COLUMNS = ["key", "split", "reversed", "length", PART_COLUMN]
+
+MEMBER_TYPES = {"n": "node", "w": "way", "r": "relation"}
 
 XML_SUFFIXES = (".osm",)
 OSMIUM_SUFFIXES = (".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2")
@@ -69,6 +92,8 @@ class OSMData:
     bounds: tuple[float, float, float, float]  # min_lon, min_lat, max_lon, max_lat
     nodes: list[tuple[int, float, float, dict[str, str]]]  # id, lon, lat, tags
     ways: list[tuple[int, list[int], dict[str, str]]]  # id, node refs, tags
+    # id, [(member type "n"/"w"/"r", ref, role)], tags
+    relations: list[tuple[int, list[tuple[str, int, str]], dict[str, str]]] = ()
 
 
 def way_tag_columns() -> dict[str, str]:
@@ -149,7 +174,7 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
         car_direction, bike_direction
                                forward / backward / both, relative to the line's
                                direction (walking is always both). Bikes follow
-                               oneway:bicycle=no (contraflow).
+                               oneway:bicycle=no / cycleway=opposite* (contraflow).
     """
     edges = edges_gdf.copy()
 
@@ -183,6 +208,8 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
     bike_direction = car_direction.copy()
     if "oneway:bicycle" in edges:
         bike_direction[edges["oneway:bicycle"].astype(str).eq("no")] = "both"
+    if "cycleway" in edges:  # the older way to tag contraflow cycling
+        bike_direction[edges["cycleway"].astype(str).str.startswith("opposite")] = "both"
 
     analysis = pd.DataFrame({
         "car": car.astype(bool),
@@ -241,35 +268,229 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         if column not in edges_gdf.columns:
             raise InputError(f"Edge GeoDataFrame is missing required column: {column}")
 
+    source = edges_gdf.attrs.get(SOURCE_ATTR)
     nodes = nodes_gdf.to_crs("EPSG:4326")
-    edges = edges_gdf.to_crs("EPSG:4326")
 
-    node_bounds, edge_bounds = nodes.total_bounds, edges.total_bounds
-    bounds = (
-        round(min(node_bounds[0], edge_bounds[0]), 7),
-        round(min(node_bounds[1], edge_bounds[1]), 7),
-        round(max(node_bounds[2], edge_bounds[2]), 7),
-        round(max(node_bounds[3], edge_bounds[3]), 7),
-    )
+    # Every edge runs between nodes, so the nodes give the extent.
+    min_lon, min_lat, max_lon, max_lat = nodes.total_bounds
+    bounds = (round(min_lon, 7), round(min_lat, 7), round(max_lon, 7), round(max_lat, 7))
 
-    node_tags = _row_tags(nodes, {key: key for key in NODE_TAGS})
+    node_ids = nodes.index.astype("int64").tolist()
+    if source is None:
+        node_tags = _row_tags(nodes, {key: key for key in NODE_TAGS})
+    else:
+        node_tags = [source.node_tags.get(node_id, {}) for node_id in node_ids]
     osm_nodes = sorted(zip(
-        nodes.index.astype("int64").tolist(),
+        node_ids,
         [round(x, 7) for x in nodes.geometry.x.tolist()],
         [round(y, 7) for y in nodes.geometry.y.tolist()],
         node_tags,
         strict=True,
     ))
 
-    way_tags = _row_tags(edges, way_tag_columns())
-    refs = zip(edges["u"].astype("int64").tolist(), edges["v"].astype("int64").tolist(),
-               strict=True)
-    osm_ways = [
-        (way_id, [u, v], tags)
-        for way_id, ((u, v), tags) in enumerate(zip(refs, way_tags, strict=True), start=1)
+    is_custom = (edges_gdf[CUSTOM_COLUMN] == "yes" if CUSTOM_COLUMN in edges_gdf
+                 else pd.Series(False, index=edges_gdf.index))
+    existing = edges_gdf[~is_custom]
+    if "reversed" in existing:
+        # OSMnx holds a two-way street as two edges; one way covers both.
+        existing = existing[existing["reversed"] != True]  # noqa: E712
+
+    # (way id or None for "needs a new one", node refs, tags)
+    ways = _existing_ways(existing, source) + _custom_ways(edges_gdf[is_custom])
+
+    new_ids = iter(range(max((way_id for way_id, _, _ in ways if way_id), default=0) + 1,
+                         2**62))
+    osm_ways = sorted((way_id or next(new_ids), refs, tags) for way_id, refs, tags in ways)
+
+    relations = _relations(source, osm_ways, set(node_ids)) if source is not None else []
+    return OSMData(bounds, osm_nodes, osm_ways, relations)
+
+
+def _existing_ways(edges: pd.DataFrame, source: OSMSource | None) -> list[tuple]:
+    """
+    The existing network's edges (one per street segment and direction
+    of drawing) as ways. With a source, each way is its OSM original:
+    untouched ways are copied; ways the build cut (a new junction) or
+    cropped (the edge of the area) are rebuilt around their OSM nodes.
+    """
+    if edges.empty:
+        return []
+
+    us = edges["u"].astype("int64").to_numpy()
+    vs = edges["v"].astype("int64").to_numpy()
+    if "osmid" in edges:
+        # A real way id is one whole number; anything else (missing, or a
+        # list from a simplified OSMnx graph) makes the edge its own way.
+        way_ids = pd.to_numeric(edges["osmid"], errors="coerce").fillna(0).astype("int64")
+        way_ids = way_ids.to_numpy()
+    else:
+        way_ids = np.zeros(len(edges), dtype="int64")
+
+    known = np.zeros(len(edges), dtype=bool)
+    ways = []
+
+    if source is not None:
+        known = np.fromiter((way_id in source.ways for way_id in way_ids.tolist()),
+                            dtype=bool, count=len(edges))
+        cut = (edges["split"] == "yes").to_numpy() if "split" in edges else np.zeros_like(known)
+        counts = pd.Series(way_ids[known]).value_counts()
+        cut_ids = set(way_ids[known & cut].tolist())
+        segments = defaultdict(list)
+
+        rebuild = []
+        for way_id, count in counts.items():
+            refs, tags = source.ways[way_id]
+            if way_id in cut_ids or count != len(refs) - 1:
+                rebuild.append(way_id)
+            else:
+                ways.append((way_id if way_id > 0 else None, list(refs), dict(tags)))
+
+        rows = known & np.isin(way_ids, rebuild)
+        for way_id, u, v in zip(way_ids[rows].tolist(), us[rows].tolist(), vs[rows].tolist(),
+                                strict=True):
+            segments[way_id].append((u, v))
+        for way_id in rebuild:
+            refs, tags = source.ways[way_id]
+            for number, run in enumerate(_runs(refs, segments[way_id])):
+                keeps_id = number == 0 and way_id > 0
+                ways.append((way_id if keeps_id else None, run, dict(tags)))
+
+    # No source for these: chain each way's edges, tags from the columns.
+    rest = edges[~known]
+    if not rest.empty:
+        tags = _row_tags(rest, way_tag_columns())
+        groups = defaultdict(list)
+        for row, way_id in enumerate(way_ids[~known].tolist()):
+            groups[way_id or ("edge", row)].append(row)
+        rest_us, rest_vs = us[~known].tolist(), vs[~known].tolist()
+        for way_id, rows in groups.items():
+            chains = _chains([(rest_us[row], rest_vs[row]) for row in rows])
+            for number, chain in enumerate(chains):
+                keeps_id = number == 0 and isinstance(way_id, int) and way_id > 0
+                ways.append((way_id if keeps_id else None, chain, tags[rows[0]]))
+
+    return ways
+
+
+def _custom_ways(edges: pd.DataFrame) -> list[tuple]:
+    """Custom edges as ways: one per custom line (or per edge if unnumbered)."""
+    if edges.empty:
+        return []
+
+    tags = _row_tags(edges, way_tag_columns())
+    us = edges["u"].astype("int64").tolist()
+    vs = edges["v"].astype("int64").tolist()
+    parts = edges[PART_COLUMN].tolist() if PART_COLUMN in edges else [None] * len(edges)
+
+    groups = defaultdict(list)
+    for row, part in enumerate(parts):
+        numbered = part is not None and part == part  # not NaN
+        groups[("part", part) if numbered else ("edge", row)].append(row)
+
+    return [
+        (None, chain, tags[rows[0]])
+        for rows in groups.values()
+        for chain in _chains([(us[row], vs[row]) for row in rows])
     ]
 
-    return OSMData(bounds, osm_nodes, osm_ways)
+
+def _chains(segments: list[tuple[int, int]]) -> list[list[int]]:
+    """
+    Join directed segments (u, v) end to start into as few node chains
+    as it takes to use each segment once. A line cut into pieces gives
+    back its nodes in order; a closed loop starts at its first segment.
+    """
+    following = defaultdict(list)
+    arrivals = defaultdict(int)
+    for u, v in segments:
+        following[u].append(v)
+        arrivals[v] += 1
+
+    def walk(node: int) -> list[int]:
+        chain = [node]
+        while following[node]:
+            node = following[node].pop(0)
+            chain.append(node)
+        return chain
+
+    chains = []
+    # Start where a chain must start (more segments leave than arrive),
+    # then pick up whatever is left (loops).
+    for start in [node for node, _ in segments if len(following[node]) > arrivals[node]]:
+        while len(following[start]) > arrivals[start]:
+            chains.append(walk(start))
+    for start, _ in segments:
+        while following[start]:
+            chains.append(walk(start))
+    return chains
+
+
+def _runs(refs: list[int], segments: list[tuple[int, int]]) -> list[list[int]]:
+    """
+    An OSM way's nodes after the build, from its original `refs` and
+    the (u, v) of its remaining edges: nodes the build inserted between
+    two neighbours are added in place; where a stretch is gone (cropped
+    at the edge of the area) the way breaks into separate runs.
+    """
+    joined = defaultdict(set)
+    for u, v in segments:
+        joined[u].add(v)
+        joined[v].add(u)
+    original = set(refs)
+
+    def via_new_nodes(start: int, end: int) -> list[int] | None:
+        """Nodes after `start` up to `end`, passing only inserted nodes."""
+        stack = [(node, [node]) for node in sorted(joined[start] - original)]
+        seen = {start}
+        while stack:
+            node, path = stack.pop()
+            if end in joined[node]:
+                return [*path, end]
+            seen.add(node)
+            stack.extend((nxt, [*path, nxt]) for nxt in sorted(joined[node] - original - seen))
+        return None
+
+    runs, run = [], [refs[0]]
+    for start, end in zip(refs, refs[1:], strict=False):
+        if start == end:
+            continue
+        path = [end] if end in joined[start] else via_new_nodes(start, end)
+        if path is None:
+            runs.append(run)
+            run = [end]
+        else:
+            run.extend(path)
+    runs.append(run)
+    return [run for run in runs if len(run) >= 2]
+
+
+def _relations(source: OSMSource, ways: list[tuple], node_ids: set[int]) -> list[tuple]:
+    """
+    The source's relations that still make sense in the written network.
+    A turn restriction needs every member, with its via node on the ways
+    it joins; a route keeps whichever of its members are there.
+    """
+    refs_of = {way_id: refs for way_id, refs, _ in ways}
+    relations = []
+
+    for relation_id, tags, members in source.relations:
+        present = [
+            (kind, ref, role) for kind, ref, role in members
+            if (kind == "w" and ref in refs_of) or (kind == "n" and ref in node_ids)
+        ]
+        if tags.get("type") == "route":
+            if any(kind == "w" for kind, _, _ in present):
+                relations.append((relation_id, present, dict(tags)))
+            continue
+
+        via_nodes = [ref for kind, ref, role in members if kind == "n" and role == "via"]
+        member_ways = [refs_of[ref] for kind, ref, _ in present if kind == "w"]
+        if len(present) == len(members) and all(
+            node in refs for node in via_nodes for refs in member_ways
+        ):
+            relations.append((relation_id, present, dict(tags)))
+
+    return sorted(relations)
 
 
 def _row_tags(gdf: gpd.GeoDataFrame, columns: dict[str, str]) -> list[dict[str, str]]:
@@ -332,6 +553,14 @@ def _write_xml(data: OSMData, path: str | Path) -> None:
             nds = "".join(f'    <nd ref="{ref}"/>\n' for ref in refs)
             out.write(f'  <way id="{way_id}">\n{nds}{tag_lines(tags)}  </way>\n')
 
+        for relation_id, members, tags in data.relations:
+            lines = "".join(
+                f'    <member type="{MEMBER_TYPES[kind]}" ref="{ref}" role={quoteattr(role)}/>\n'
+                for kind, ref, role in members
+            )
+            out.write(f'  <relation id="{relation_id}">\n{lines}{tag_lines(tags)}'
+                      "  </relation>\n")
+
         out.write("</osm>\n")
 
 
@@ -348,5 +577,8 @@ def _write_with_osmium(data: OSMData, path: str | Path) -> None:
             writer.add_node(osmium.osm.mutable.Node(id=node_id, location=(lon, lat), tags=tags))
         for way_id, refs, tags in data.ways:
             writer.add_way(osmium.osm.mutable.Way(id=way_id, nodes=refs, tags=tags))
+        for relation_id, members, tags in data.relations:
+            writer.add_relation(osmium.osm.mutable.Relation(
+                id=relation_id, members=members, tags=tags))
     finally:
         writer.close()

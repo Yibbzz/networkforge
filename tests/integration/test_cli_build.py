@@ -62,13 +62,14 @@ def test_build_prints_a_readable_summary(fake_osm, files, capsys):
 
 
 def test_download_failure_exit_code(monkeypatch, files, capsys):
-    import osmnx as ox
     import requests
+
+    from networkforge import osm
 
     def offline(*args, **kwargs):
         raise requests.ConnectionError("offline")
 
-    monkeypatch.setattr(ox, "graph_from_bbox", offline)
+    monkeypatch.setattr(osm, "_download_elements", offline)
     extent, custom, out = files
     code = main(["build", "--extent", str(extent), "--custom", str(custom),
                  "--out", str(out / "net.osm"), "--json"])

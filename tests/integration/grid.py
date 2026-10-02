@@ -11,20 +11,26 @@ Hand-built OSM street grid used in place of the Overpass download.
               |     |     |     |     c        f = footway (8-13)
       row 0    1 --  2 --  B --  4 --  5       c = cycleway (5-10)
                                                B = bollard (barrier node)
-                                                  motorway (100 -> 101), x=500 m
+                                                  motorway (100 -> 101), x=500 m,
+                                                  joined by a slip road (5 -> 100)
 
 100 m blocks. All other ways are residential, 30 mph, two-way. Node
 ids are deliberately small (like the oldest real OSM nodes) to catch
 id collisions with the nodes the build creates.
-"""
 
-import itertools
+Each row is "Row r Street" and each column "Column c Avenue", drawn as
+OSM ways several blocks long (a new way wherever the tags change), and
+one turn restriction (NO_LEFT_TURN) - so the OSM data has the shapes
+real data has: long ways, names and relations.
+"""
 
 import geopandas as gpd
 import networkx as nx
+from osmnx.graph import _create_graph
 from pyproj import Transformer
 from shapely.geometry import box
 
+from networkforge.modes import keep_mode_tags
 from tests.helpers import WEIGHT
 
 UTM = "EPSG:32630"
@@ -39,6 +45,7 @@ def node_id(row: int, col: int) -> int:
 
 GRID_NODES = [node_id(r, c) for r in range(N) for c in range(N)]
 MOTORWAY_NODES = (100, 101)
+SLIP_ROAD = (node_id(0, 4), MOTORWAY_NODES[0])
 
 RESIDENTIAL = {"highway": "residential", "maxspeed": "30 mph"}
 FOOTWAY = frozenset({node_id(1, 2), node_id(2, 2)})
@@ -69,44 +76,79 @@ DIAGONAL = [(X0 + 200.5, Y0 + 200), (X0 + 300, Y0 + 300)]
 ROAD_TO_MOTORWAY = [(X0 - 50, Y0 + 150), (X0 + 600, Y0 + 150)]
 
 
-def synthetic_graph() -> nx.MultiDiGraph:
-    """The grid above, shaped like ox.graph_from_bbox(simplify=False) output."""
+# no_left_turn: (from segment, via node, to segment). Driving east along
+# row 3 you may not turn left (north) at node 18.
+NO_LEFT_TURN = ((node_id(3, 1), node_id(3, 2)), node_id(3, 2), (node_id(3, 2), node_id(4, 2)))
+RESTRICTION_ID = 9001
+
+
+def _street_ways(lines: list[tuple[str, list[int]]], breaks: set[int]) -> list[dict]:
+    """
+    Each line of nodes as OSM ways: one way for as long as the tags stay
+    the same (as mappers draw streets), cut at `breaks` (the via node of
+    a turn restriction has to be a way end).
+    """
+    ways = []
+    for name, nodes in lines:
+        run, run_tags = [nodes[0]], None
+        for u, v in zip(nodes, nodes[1:], strict=False):
+            tags = SPECIAL_WAYS.get(frozenset({u, v}), RESIDENTIAL)
+            if run_tags is not None and (tags != run_tags or u in breaks):
+                ways.append((run, {**run_tags, "name": name}))
+                run = [u]
+            run.append(v)
+            run_tags = tags
+        ways.append((run, {**run_tags, "name": name}))
+    return [{"type": "way", "id": way_id, "nodes": nodes, "tags": tags}
+            for way_id, (nodes, tags) in enumerate(ways, start=1)]
+
+
+def grid_elements() -> list[dict]:
+    """The grid above as OSM data, shaped like an Overpass JSON response."""
     to_wgs84 = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True)
-    graph = nx.MultiDiGraph(crs="EPSG:4326")
-    utm_xy = {}
 
-    def add_node(nid, x, y):
+    def node(nid, x, y):
         lon, lat = to_wgs84.transform(x, y)
-        graph.add_node(nid, x=lon, y=lat, **NODE_TAGS.get(nid, {}))
-        utm_xy[nid] = (x, y)
+        return {"type": "node", "id": nid, "lon": lon, "lat": lat, "tags": NODE_TAGS.get(nid, {})}
 
-    way_ids = itertools.count(1)
+    nodes = [node(node_id(r, c), X0 + c * SPACING, Y0 + r * SPACING)
+             for r in range(N) for c in range(N)]
+    nodes += [node(MOTORWAY_NODES[0], X0 + 500, Y0), node(MOTORWAY_NODES[1], X0 + 500, Y0 + 400)]
 
-    def add_way(u, v, tags, oneway=False):
-        (x1, y1), (x2, y2) = utm_xy[u], utm_xy[v]
-        length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
-        osmid = next(way_ids)
-        directions = [(u, v, False)] if oneway else [(u, v, False), (v, u, True)]
-        for a, b, reversed_ in directions:
-            graph.add_edge(a, b, osmid=osmid, length=length,
-                           oneway=oneway, reversed=reversed_, **tags)
+    rows = [(f"Row {r} Street", [node_id(r, c) for c in range(N)]) for r in range(N)]
+    columns = [(f"Column {c} Avenue", [node_id(r, c) for r in range(N)]) for c in range(N)]
+    (from_u, from_v), via, (to_u, to_v) = NO_LEFT_TURN
+    ways = _street_ways(rows + columns, breaks={via})
+    ways.append({"type": "way", "id": len(ways) + 1, "nodes": list(MOTORWAY_NODES),
+                 "tags": {"highway": "motorway", "maxspeed": "70 mph", "oneway": "yes"}})
+    # Without a slip road the motorway is a separate piece of network,
+    # which is dropped on download (only the largest piece is kept).
+    ways.append({"type": "way", "id": len(ways) + 1, "nodes": list(SLIP_ROAD),
+                 "tags": {"highway": "motorway_link", "oneway": "yes"}})
 
-    for r in range(N):
-        for c in range(N):
-            add_node(node_id(r, c), X0 + c * SPACING, Y0 + r * SPACING)
+    def way_with(u, v):
+        return next(w["id"] for w in ways if any(
+            {a, b} == {u, v} for a, b in zip(w["nodes"], w["nodes"][1:], strict=False)))
 
-    for r in range(N):
-        for c in range(N):
-            for r2, c2 in ((r, c + 1), (r + 1, c)):
-                if r2 < N and c2 < N:
-                    u, v = node_id(r, c), node_id(r2, c2)
-                    add_way(u, v, SPECIAL_WAYS.get(frozenset({u, v}), RESIDENTIAL))
+    restriction = {
+        "type": "relation", "id": RESTRICTION_ID,
+        "tags": {"type": "restriction", "restriction": "no_left_turn"},
+        "members": [
+            {"type": "way", "ref": way_with(from_u, from_v), "role": "from"},
+            {"type": "node", "ref": via, "role": "via"},
+            {"type": "way", "ref": way_with(to_u, to_v), "role": "to"},
+        ],
+    }
+    return [*nodes, *ways, restriction]
 
-    add_node(MOTORWAY_NODES[0], X0 + 500, Y0)
-    add_node(MOTORWAY_NODES[1], X0 + 500, Y0 + 400)
-    add_way(*MOTORWAY_NODES, {"highway": "motorway", "maxspeed": "70 mph"}, oneway=True)
 
-    return graph
+def synthetic_graph() -> nx.MultiDiGraph:
+    """The grid as OSMnx builds a graph from it (simplify=False)."""
+    keep_mode_tags()
+    return _create_graph(
+        [{"elements": [e for e in grid_elements() if e["type"] != "relation"]}],
+        bidirectional=False,
+    )
 
 
 BBOX = gpd.GeoDataFrame(

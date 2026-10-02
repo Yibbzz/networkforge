@@ -7,6 +7,48 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+- OSM / PBF export writes the existing network as OpenStreetMap has it,
+  instead of one new 2-node way per edge. Every way keeps its id, its
+  nodes in order and all its tags (not only the tags NetworkForge lists),
+  tagged nodes keep all theirs, and turn restrictions and route relations
+  are kept. Where a custom line joins a street mid-way, the new junction
+  node is inserted into that way. Each custom line is one way (id above
+  every OSM way id). Measured with Valhalla on a Monaco extract: routes on
+  the "before" file used to differ from routes on the OSM data itself for
+  about a third of trips; car, bicycle, bus and truck routes are now
+  identical.
+- The `osmid` edge column (and GeoPackage field) is the OSM way id, empty
+  for custom edges. It used to be a row number.
+- The Overpass download and a local extract now share one code path, and
+  one further Overpass request fetches the area's turn restrictions.
+- More attributes of custom features are written as tags: time-dependent
+  access (`access:conditional`, ...), `taxi`, `hov`, `moped`, `emergency`,
+  `motorroad`, `maxaxles`, `hazmat`, `turn:lanes`, `destination`,
+  `alt_name`, `sidewalk` and others (see `networkforge info`).
+
+- Access rules now follow OSM's defaults where Valhalla showed they
+  didn't: cycling on `highway=pedestrian` needs a tag that allows it
+  (the `pedestrian_street` preset now sets `bicycle=yes`, so it still
+  allows cycling), and `motorroad=yes` closes a road to walking and
+  cycling.
+- A custom line only buses or other special vehicles may use (a busway,
+  `access=no` + `bus=yes`) is accepted with a note instead of rejected as
+  "unusable by every mode".
+- `bus`, `psv`, `hgv`, `goods`, `taxi`, `motorcycle`, `moped`,
+  `emergency`, `horse`, `hov` are checked like the other access tags, and
+  `maxheight`, `maxwidth`, `maxlength`, `maxweight`, `maxaxleload` must be
+  valid OSM limits (`networkforge info`: `tag_values`, `tag_patterns`).
+- GeoPackage `bike_direction` treats `cycleway=opposite*` as contraflow
+  cycling, like `oneway:bicycle=no`.
+
+### Fixed
+- A two-way street was written to the OSM / PBF file twice, once per
+  direction, which routers read as two parallel streets.
+- When a custom line ended on an existing junction, every street at that
+  junction gained a second, uncut copy of itself, which bypassed any new
+  junction on that street.
+
 ## [0.5.0] - 2026-10-01
 
 ### Changed
