@@ -96,8 +96,8 @@ def test_one_block_made_one_way(build, export):
     (changed,) = [w for w, (_, tags) in after.items() if tags.get("nf:modified") == "yes"]
     assert after[changed] == ([7, 8], {**before[ROW_1][1], "oneway": "yes",
                                        "nf:modified": "yes"})
-    assert [refs for refs, tags in after.values()
-            if tags.get("name") == "Row 1 Street"] == [[6, 7], [7, 8], [8, 9, 10]]
+    assert sorted(refs for refs, tags in after.values()
+                  if tags.get("name") == "Row 1 Street") == [[6, 7], [7, 8], [8, 9, 10]]
     assert changed > max(before)
 
     # The edge table: one edge east, none west; nothing else changed.
@@ -182,6 +182,25 @@ def test_changing_the_kind_of_street(build):
     result = build([(ONE_BLOCK, {"osm_id": ROW_1, "highway": "pedestrian"})])
     (edge, _) = edges_between(result.edges, 7, 8).to_dict("records")
     assert usable_modes({k: v for k, v in edge.items() if v == v and v is not None}) == ["walk"]
+
+
+def test_roundabout_counts_as_one_way_already(build, monkeypatch, caplog):
+    """
+    A roundabout is one-way without a oneway tag: a copy saying
+    oneway=yes changes nothing; oneway=no is a change.
+    """
+    elements = grid_elements()
+    row_1 = next(e for e in elements if e["type"] == "way" and e["id"] == ROW_1)
+    row_1["tags"] = {**row_1["tags"], "junction": "roundabout"}
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: elements)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(InputError, match="Nothing to build"):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, "oneway": "yes"})])
+    assert "change nothing" in caplog.text
+
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "oneway": "no"})])
+    assert len(edges_between(result.osm_edges, 7, 8)) == 1
+    assert len(edges_between(result.edges, 7, 8)) == 2
 
 
 # ---------------------------------------------------------------------

@@ -144,8 +144,8 @@ def edit_tags(row: pd.Series) -> dict[str, str]:
     tags = {}
     for key, value in row.items():
         text = _tag_value(value)
-        if key in KNOWN_TAG_KEYS and text not in (None, ""):
-            tags[key] = "yes" if text == "True" else "no" if text == "False" else text
+        if key in KNOWN_TAG_KEYS and text is not None:
+            tags[key] = text
     return tags
 
 
@@ -169,13 +169,19 @@ def check_edit_tags(edits_gdf: gpd.GeoDataFrame, strict: bool = True) -> None:
                     extra={"features": [i["feature"] for i in error.issues]})
 
 
-def _oneway_state(value: str | None) -> str:
-    """'forward', 'backward' or 'both', relative to the direction of the way's nodes."""
+def _oneway_state(value: str | None, tags: dict | None = None) -> str:
+    """
+    'forward', 'backward' or 'both', relative to the direction of the
+    way's nodes. With the way's `tags`: a roundabout is one-way without
+    saying so.
+    """
     text = (value or "").lower()
     if text in ONEWAY_FORWARD:
         return "forward"
     if text in ONEWAY_BACKWARD:
         return "backward"
+    if value is None and tags and tags.get("junction") in ("roundabout", "circular"):
+        return "forward"
     return "both"
 
 
@@ -251,7 +257,7 @@ def apply_edits(
                 state = _oneway_state(value)
                 if not along_way:
                     state = {"forward": "backward", "backward": "forward"}.get(state, state)
-                if state != _oneway_state(current.get("oneway")):
+                if state != _oneway_state(current.get("oneway"), current):
                     change[key] = {"forward": "yes", "backward": "-1", "both": "no"}[state]
             elif current.get(key) != value:
                 change[key] = value

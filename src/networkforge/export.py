@@ -323,11 +323,29 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         ways += [(way_id if way_id > 0 else None, list(refs), dict(tags), way_id)
                  for way_id, (refs, tags) in source.ferries.items()]
 
-    new_ids = iter(range(max((way[0] for way in ways if way[0]), default=0) + 1, 2**62))
+    # New ids start above every way id in the area's OSM data (the same
+    # in the before and after file), and go first to further pieces of
+    # existing ways in a fixed order, then to changed stretches, then to
+    # custom lines: a piece of a cropped way gets the same id in both
+    # files unless an edit changed the ways before it.
+    taken = [way[0] for way in ways if way[0]]
+    if source is not None:
+        taken += [*source.ways, *source.ferries]
+    new_ids = iter(range(max(taken, default=0) + 1, 2**62))
+
+    def allocation_order(way) -> tuple:
+        _, refs, tags, origin = way
+        kind = 2 if origin is None else 1 if MODIFIED_TAG in tags else 0
+        return (kind, origin or 0, refs[0], refs[-1]) if origin is not None else (kind,)
+
+    numbered = sorted((way for way in ways if not way[0]), key=allocation_order)
+    assigned = {id(way): next(new_ids) for way in numbered}
+
     pieces = defaultdict(list)  # OSM way id -> [(id written, refs)]
     osm_ways = []
-    for way_id, refs, tags, origin in ways:
-        way_id = way_id or next(new_ids)
+    for way in ways:
+        way_id, refs, tags, origin = way
+        way_id = way_id or assigned[id(way)]
         osm_ways.append((way_id, refs, tags))
         if origin is not None:
             pieces[origin].append((way_id, refs))

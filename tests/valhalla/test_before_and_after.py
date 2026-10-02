@@ -16,7 +16,14 @@ import pytest
 
 from networkforge import write_osm
 from networkforge.modes import load_graph
-from tests.integration.grid import FERRY_ID, GRID_NODES, grid_elements, grid_with_ferry
+from tests.integration.grid import (
+    FERRY_ID,
+    GRID_NODES,
+    ISLAND_NODES,
+    grid_elements,
+    grid_with_ferry,
+    grid_with_island,
+)
 from tests.valhalla.conftest import xy
 from tests.valhalla.harness import Router
 
@@ -75,6 +82,29 @@ def test_ferry_is_sailed_as_in_the_osm_data(scenario, tmp_path):
         assert on_foot.way_ids == (FERRY_ID,) and on_foot.names == ("Grid Ferry",)
         assert router.route(start, end, "auto", shortest=True).length_m == pytest.approx(
             400, abs=2)
+    for costing in COSTINGS:
+        assert built.before.matrix(grid_points(built.before), costing) == osm_itself.matrix(
+            grid_points(osm_itself), costing)
+
+
+def test_a_separate_piece_of_network_is_kept_and_routable(scenario, tmp_path):
+    """
+    Island Road joins nothing else (another island, or its link is
+    outside the area). It must be in both files as in OpenStreetMap, and
+    a new road to it must connect it.
+    """
+    write_grid_osm(tmp_path / "osm.osm.pbf", grid_with_island())
+    osm_itself = Router.from_pbf(tmp_path / "osm.osm.pbf", tmp_path / "tiles")
+    built = scenario([([xy(-0.8, 1), xy(0, 1)], ROAD)], elements=grid_with_island())
+    south, north = (built.before.node(node) for node in (ISLAND_NODES[0], ISLAND_NODES[-1]))
+    corner = built.before.node(25)
+
+    assert built.before.ways == osm_itself.ways
+    for router in (osm_itself, built.before, built.after):
+        along = router.route(south, north, "auto", shortest=True)
+        assert along.names == ("Island Road",) and along.length_m == pytest.approx(200, abs=2)
+    assert built.before.route(north, corner, "auto", shortest=True) is None
+    assert built.after.route(north, corner, "auto", shortest=True).uses(built.custom_ways[0])
     for costing in COSTINGS:
         assert built.before.matrix(grid_points(built.before), costing) == osm_itself.matrix(
             grid_points(osm_itself), costing)

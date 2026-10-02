@@ -112,6 +112,24 @@ def test_bus_only_feature_is_accepted_with_a_note(tags, caplog):
     assert "open only to buses" in caplog.text
 
 
+def test_boolean_and_empty_attributes_are_read_as_gis_layers_mean_them():
+    """
+    A boolean field is yes / no (NetworkForge's own GeoPackage stores
+    oneway that way), and empty text is "no value", as NULL is.
+    """
+    gdf = gpd.GeoDataFrame(
+        {"highway": ["residential", "residential", "residential"],
+         "oneway": [True, False, "True"], "maxspeed": ["", "  ", None], "name": ["", "A", "B"]},
+        geometry=[LINE, LINE, LINE], crs="EPSG:32630",
+    )
+    resolved = resolve_custom_tags(gdf, {})
+    check_custom_tags(resolved, "all")
+
+    assert resolved["oneway"].tolist() == ["yes", "no", "yes"]
+    assert resolved["maxspeed"].isna().all()
+    assert resolved["name"].tolist()[1:] == ["A", "B"] and resolved["name"].isna()[0]
+
+
 def test_reserved_column_rejected():
     with pytest.raises(ValueError, match="reserved column"):
         check(custom(u=5), {"highway": "primary"})

@@ -10,7 +10,12 @@ ids, access tags, mode isolation and before/after routing.
 import pytest
 from shapely.geometry import Point
 
+from networkforge import osm
 from networkforge.modes import usable_modes
+from networkforge.validation import (
+    assert_all_custom_edges_are_connected,
+    disconnected_custom_edges,
+)
 from tests.helpers import (
     ROUTING_MODES,
     assert_valid_osm_xml,
@@ -22,13 +27,19 @@ from tests.integration.grid import (
     BUS_GATE,
     DIAGONAL,
     FOOTWAY,
+    ISLAND_NODES,
+    ISLAND_WAY,
     ROAD_ACROSS,
     ROAD_TAGS,
     ROAD_TO_MOTORWAY,
+    TUNNEL_NODES,
+    TUNNEL_WAY,
     X0,
     Y0,
     N,
     all_pair_costs,
+    grid_with_island,
+    grid_with_tunnel,
     node_id,
 )
 
@@ -119,6 +130,75 @@ def test_line_crossing_itself_gets_a_junction_at_the_crossing(build):
 def test_bridge_crossing_itself_has_no_junction_there(build):
     result = build([(LOOP, {**ROAD_TAGS, "bridge": "yes", "layer": "1"})])
     assert (result.nodes.geometry.distance(Point(X0 + 350, Y0 + 350)) > 1).all()
+
+
+# ---------------------------------------------------------------------
+# A network in several pieces (islands) is kept whole
+# ---------------------------------------------------------------------
+
+@pytest.fixture
+def island(monkeypatch):
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_island())
+
+
+def test_every_piece_of_the_network_is_kept(build, island):
+    """OSMnx's default keeps only the largest piece; that dropped whole islands."""
+    result = build([(ROAD_ACROSS, ROAD_TAGS)])
+
+    assert set(ISLAND_NODES) <= set(result.osm_nodes.index)
+    assert set(ISLAND_NODES) <= set(result.nodes.index)
+    assert (result.edges["osmid"] == ISLAND_WAY).sum() == 4  # two stretches, both directions
+
+
+def test_line_joined_to_a_smaller_piece_is_not_called_disconnected(build, island, caplog):
+    onto_the_island = [(X0 - 80, Y0 + 200), (X0 - 60, Y0 + 250)]  # from node 402
+    result = build([(onto_the_island, ROAD_TAGS)])
+
+    assert "don't connect" not in caplog.text
+    assert not disconnected_custom_edges(result.edges).any()
+    assert_all_custom_edges_are_connected(result.edges)
+
+
+def test_line_touching_nothing_is_still_called_disconnected(build, island, caplog):
+    floating = [(X0 - 40, Y0 + 30), (X0 - 20, Y0 + 60)]
+    with caplog.at_level("WARNING"):
+        result = build([(ROAD_ACROSS, ROAD_TAGS), (floating, ROAD_TAGS)])
+
+    assert "don't connect" in caplog.text
+    assert disconnected_custom_edges(result.edges).sum() == 1
+
+
+def test_line_can_join_two_pieces_together(build, island):
+    """A new road from the island (node 401) to the grid (node 6)."""
+    link = [(X0 - 80, Y0 + 100), (X0, Y0 + 100)]
+    result = build([(link, ROAD_TAGS)])
+
+    walk = result.graph("custom", "walk")
+    assert route_cost(walk, ISLAND_NODES[2], node_id(4, 4), "walk") < float("inf")
+    assert route_cost(result.graph("baseline", "walk"), ISLAND_NODES[2], node_id(4, 4),
+                      "walk") == float("inf")
+
+
+def test_street_is_not_joined_to_a_tunnel_node_just_beneath_it(build, monkeypatch):
+    """
+    A path starts on a tunnel's node and at once crosses the street the
+    tunnel runs under, half a metre away. The path joins both - but the
+    street must not be given the tunnel's node, which would let traffic
+    turn between tunnel and street without using the path. (Found on a
+    real tunnel in Monaco.)
+    """
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_tunnel())
+    path = [(X0 + 250, Y0 + 300.5), (X0 + 250, Y0 + 270)]
+    edges = build([(path, {"highway": "footway"})]).edges
+
+    street = edges[(edges["osmid"] != TUNNEL_WAY) & (edges["custom"] != "yes")]
+    assert not ({*street.u, *street.v} & set(TUNNEL_NODES))
+
+    custom = edges[edges["custom"] == "yes"]
+    assert len(custom) == 2  # tunnel node -> crossing (0.5 m) -> end
+    assert TUNNEL_NODES[1] in {*custom.u, *custom.v}
+    crossing = ({*custom.u, *custom.v} & {*street.u, *street.v})
+    assert len(crossing) == 1 and not crossing & set(TUNNEL_NODES)
 
 
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):

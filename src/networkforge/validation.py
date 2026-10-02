@@ -29,6 +29,7 @@ import logging
 import re
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 from .errors import InvalidTagsError, NetworkIntegrityError
@@ -92,8 +93,10 @@ def assert_no_u_equals_v(edges_gdf: gpd.GeoDataFrame) -> None:
 
 def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]:
     """
-    (mask of custom edges outside the largest connected component,
-    number of components).
+    (mask of custom edges that reach no existing street: their connected
+    piece of network is made of custom edges only, number of pieces).
+    The existing network may itself be in several pieces (islands), so
+    "not in the largest piece" would be the wrong test.
     """
     nothing = pd.Series(False, index=edges_gdf.index)
 
@@ -122,10 +125,9 @@ def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]
     if len(sizes) <= 1:
         return nothing, len(sizes)
 
-    largest_root = max(sizes, key=sizes.get)
-
     custom = edges_gdf["custom"] == "yes"
-    stranded = edges_gdf.loc[custom, "u"].map(find) != largest_root
+    with_streets = set(edges_gdf.loc[~custom, "u"].map(find))
+    stranded = ~edges_gdf.loc[custom, "u"].map(find).isin(with_streets)
 
     return stranded.reindex(edges_gdf.index, fill_value=False), len(sizes)
 
@@ -133,8 +135,8 @@ def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]
 def disconnected_custom_edges(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
     Boolean mask over edges_gdf: custom edges (edges_gdf['custom'] ==
-    'yes') that aren't in the same connected component as the rest of
-    the network. They export and load without any error, but a router
+    'yes') that reach no existing street, directly or through other
+    custom edges. They export and load without any error, but a router
     can't reach them from anywhere.
 
     All False if edges_gdf has no 'custom' column.
@@ -144,27 +146,25 @@ def disconnected_custom_edges(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
 
 def assert_all_custom_edges_are_connected(edges_gdf: gpd.GeoDataFrame) -> None:
     """
-    Every custom-tagged edge (edges_gdf['custom'] == 'yes') must be in
-    the same connected component as the rest of the network. A custom
-    edge that only reaches an isolated island - which can happen if a
-    junction gets fragmented into several near-duplicate nodes that
-    never end up linked to each other - will export and load without
-    any error, but will never actually be used by a router, since a
-    router can't reach it from anywhere.
+    Every custom-tagged edge (edges_gdf['custom'] == 'yes') must reach
+    an existing street. A custom edge on an island of custom edges only
+    - which can happen if a junction gets fragmented into several
+    near-duplicate nodes that never end up linked to each other - will
+    export and load without any error, but will never actually be used
+    by a router, since a router can't reach it from anywhere.
 
     If edges_gdf has no 'custom' column, this is a no-op (nothing to
     check).
     """
-    mask, components = _stranded_custom_edges(edges_gdf)
+    mask, pieces = _stranded_custom_edges(edges_gdf)
     stranded_rows = edges_gdf[mask]
 
     if not stranded_rows.empty:
         stranded = sorted(int(n) for n in set(stranded_rows["u"]) | set(stranded_rows["v"]))
         raise NetworkIntegrityError(
-            f"{len(stranded)} custom-network node(s) are isolated from the "
-            f"main network component and will never be reachable by a "
-            f"router: {stranded}. The network has "
-            f"{components} disconnected components in total."
+            f"{len(stranded)} custom-network node(s) reach no existing street and "
+            f"will never be reachable by a router: {stranded}. The network is in "
+            f"{pieces} separate pieces in total."
         )
 
 
@@ -273,11 +273,21 @@ KNOWN_TAG_KEYS = mode_tag_keys() | set(BASE_WAY_TAGS) | set(ROUTING_WAY_TAGS)
 
 
 def _tag_value(value) -> str | None:
+    """
+    An attribute value as tag text; None if the feature has no value.
+    GIS layers hold "no value" as NULL or as empty text, and yes/no as a
+    boolean (as NetworkForge's own GeoPackage does for oneway).
+    """
     if value is None or (isinstance(value, float) and value != value):
         return None
+    if isinstance(value, bool | np.bool_):
+        return "yes" if value else "no"
     if isinstance(value, float) and value.is_integer():
         value = int(value)
-    return str(value)
+    text = str(value).strip()
+    if text in ("True", "False"):  # a boolean that went through a text field
+        return "yes" if text == "True" else "no"
+    return text or None
 
 
 def resolve_custom_tags(

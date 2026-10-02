@@ -94,7 +94,7 @@ def test_line_away_from_the_network_only_warns(build, caplog):
     stranded = result.edges[disconnected_custom_edges(result.edges)]
     assert len(stranded) == 1
     assert stranded.geometry.iloc[0].equals(LineString(inside_a_block))
-    with pytest.raises(NetworkIntegrityError, match="isolated"):
+    with pytest.raises(NetworkIntegrityError, match="reach no existing street"):
         assert_all_custom_edges_are_connected(result.edges)
 
 

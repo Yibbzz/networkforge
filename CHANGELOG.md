@@ -7,6 +7,36 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+Found by building on whole-country extracts (Liechtenstein, Andorra,
+Isle of Man, Malta, Faroe Islands, Seychelles, Maldives) and comparing
+with Valhalla on the raw data:
+
+- **Only the largest connected piece of the network was kept.** Other
+  islands, and streets whose link to the rest lies outside the area, were
+  dropped: all of Gozo in Malta, 89% of the Maldives. Every piece is now
+  kept. Leaving pieces out also changed Valhalla's speeds on the streets
+  that remained (it slows traffic where streets are dense).
+- **A new line could weld a tunnel or bridge to the street next to it.**
+  A junction point within the snap distance of an existing node was
+  merged into that node even when the node belonged to a tunnel or bridge
+  the point must not join; and a crossing that lay exactly on a tunnel or
+  bridge line joined it. Points now merge only with the node they are on,
+  and an existing way is only joined where it may be: at a custom line's
+  end, or at grade on the same layer.
+- **Boolean and empty attributes.** A boolean field (`oneway` = true) was
+  rejected as `oneway='True'`, and empty text (`maxspeed` = "") as an
+  invalid value. They are now read as yes / no and as "no value".
+- A roundabout counts as one-way when comparing a feature's `oneway`
+  with the street's.
+- A further piece of a cropped way gets the same new id in the "before"
+  and "after" file.
+
+### Changed
+- A custom line is reported as not connected when its piece of network
+  contains no existing street, rather than when it is outside the largest
+  piece (the existing network can itself be in several pieces).
+
 ## [0.8.0] - 2026-10-02
 
 ### Added

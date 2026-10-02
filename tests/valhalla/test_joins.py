@@ -11,6 +11,7 @@ import logging
 
 import pytest
 
+from tests.integration.grid import TUNNEL_NODES, grid_with_tunnel
 from tests.valhalla.conftest import AFTER_THE_TURN, at, turn_metres, xy
 
 ROAD = {"highway": "residential"}
@@ -220,6 +221,23 @@ def test_custom_bridge_over_a_custom_road(scenario):
 # ---------------------------------------------------------------------
 # What a line must not join, or must respect
 # ---------------------------------------------------------------------
+
+def test_path_from_a_tunnel_does_not_weld_the_tunnel_to_the_street_above(scenario):
+    """
+    A footpath starts on a node of a road tunnel and crosses the street
+    above it half a metre on. Walkers can now get from tunnel to street
+    by the path; cars must not be able to turn from one to the other.
+    """
+    path = [xy(2.5, 3.005), xy(2.5, 2.7)]
+    built = scenario([(path, {"highway": "footway"})], elements=grid_with_tunnel())
+    in_the_tunnel = built.after.node(TUNNEL_NODES[0])
+    on_the_street = at(3, 3)
+
+    assert shortest(built, in_the_tunnel, on_the_street, "auto") is None
+    walking = shortest(built, in_the_tunnel, on_the_street, "pedestrian")
+    assert walking.uses(built.custom_ways[0])
+    assert walking.length_m == pytest.approx(50 + 0.5 + 50, abs=2)
+
 
 def test_road_across_the_motorway_has_no_junction_with_it(scenario):
     built = scenario([([xy(4, 1.5), xy(6, 1.5)], ROAD)])

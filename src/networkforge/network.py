@@ -30,6 +30,7 @@ from .presets import preset_tags
 from .projection import get_analysis_crs
 from .tags import EDITS_ATTR, PART_COLUMN, REMOVED_ATTR
 from .topology import (
+    ON_NODE_TOLERANCE,
     assign_point_ids_to_lines,
     check_line_node_consistency,
     create_points_from_gdf,
@@ -380,10 +381,15 @@ def build_network(
     taken = [int(osm_nodes_gdf.index.max())]
     if source_data is not None:
         taken += list(source_data.ferry_nodes)
+    # Only points ON an existing node become that node. Snapping (steps 3
+    # and 5) has already moved every point that should join a node exactly
+    # onto it; a point merely near a node was left there on purpose - the
+    # node is on a bridge or tunnel, say, and the point on the street
+    # above. Merging by distance here joined such ways to each other.
     combined_points_gdf = remove_duplicates_and_combine_nodes(
-        custom_points_gdf,
+        custom_points_gdf[["geometry"]],
         nodes_gdf,
-        buffer_distance=snap_tolerance,
+        buffer_distance=ON_NODE_TOLERANCE,
         first_new_id=max(taken) + 1,
     )
 
@@ -406,10 +412,8 @@ def build_network(
 
     step(9, "Assigning node ids to line ends")
 
-    # Must match the dedup tolerance in step 7: a custom point removed
-    # there (within snap_tolerance of an OSM node) is replaced by that
-    # node, so line endpoints need to find it at the same distance -
-    # otherwise the segment is dropped and the custom line gets a gap.
+    # Each line end takes the nearest node within snap_tolerance: its
+    # own point from step 7, or the existing node that point was on.
     updated_lines = assign_point_ids_to_lines(
         osm_split_lines_gdf,
         combined_points_gdf,

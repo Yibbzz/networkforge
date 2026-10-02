@@ -60,7 +60,8 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   `NETWORKFORGE_OSMNX_CACHE`) or a local extract (`get_osm_data_from_file`, via `osm_source=`).
   Both produce Overpass-JSON "elements" (`_download_elements` / `_read_elements`), then one path
   (`_network_from_elements`): OSMnx's private `_create_graph` + the same steps as
-  ox.graph_from_polygon (truncate, largest component, street_count). Both attach an `OSMSource`
+  ox.graph_from_polygon with retain_all (truncate, street_count; EVERY piece of network is kept -
+  "largest component only" dropped Gozo and 89% of the Maldives and shifted Valhalla's speeds). Both attach an `OSMSource`
   (every way's nodes + ALL tags, tagged nodes, turn-restriction / route relations) as
   `edges.attrs[SOURCE_ATTR]`; build_network re-attaches it to its results and export writes the
   existing network from it. Ways cut at an extract's edge keep their known runs.
@@ -150,6 +151,17 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
 - modes.py vs Valhalla: bikes on `highway=pedestrian` need a bicycle tag; `motorroad=yes` closes
   walk/bike; lines open only to buses etc. (`open_to_other_vehicles`) are valid, with a note.
 - GeoPackage / OSMnx routing ignores node barriers and turn restrictions; Valhalla obeys both.
+- Junction points carry what they may join (`POINT_COLUMNS`: is_end, separated, layers). An OSM
+  line is only split at a point on it if the point is a custom line's END or the line is at grade
+  on that layer; and new points merge only with nodes they sit exactly ON (`ON_NODE_TOLERANCE`),
+  never by distance - both let a path near a tunnel/bridge node weld the tunnel to the street.
+- "A custom line is stranded" = its piece of network has no existing street (not "outside the
+  largest piece": the OSM network itself can be several pieces).
+- Attribute values: booleans -> yes/no, empty text -> no value (`validation._tag_value`).
+- New way ids start above every way id in the area's source; pieces of cropped ways are numbered
+  first, in a fixed order, so they match between the before and after file.
+- Valhalla's matrix is not exact: on big graphs a few cells differ from `route()` for the same
+  pair, and tiny density differences flip ties. Compare with `route()` before calling it a bug.
 - Valhalla 3.9 routes only on `highway=*` ways plus `route=ferry|shuttle_train`; NOT on piers,
   platforms or `area=yes` squares (tested), so OSMnx's "all" filter loses nothing but ferries.
   Ferries (`osm.is_ferry`, `OSMSource.ferries` / `ferry_nodes`, cropped to the bbox) bypass the

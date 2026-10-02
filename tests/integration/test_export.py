@@ -193,6 +193,37 @@ def test_cropped_way_is_written_as_the_part_inside(tmp_path, fake_osm):
     assert relations == {}  # the restriction's ways are outside the box
 
 
+def test_pieces_of_a_cropped_way_get_the_same_id_before_and_after(tmp_path, monkeypatch):
+    """
+    A box cutting Row 2 Street in the middle leaves two pieces of it. The
+    second needs a new id: the same one in both files, above every OSM
+    way id in the area, with custom lines numbered after it.
+    """
+    elements = grid_elements()
+    row_2 = next(e for e in elements if e["type"] == "way" and e["nodes"][:2] == [11, 12])
+    assert row_2["nodes"] == [11, 12, 13, 14]
+    # Cut out the middle: an L-shaped area can't be a box, so drop node 12's
+    # neighbour instead - the way now leaves the data and comes back.
+    far_away = next(e for e in elements if e["type"] == "node" and e["id"] == 13)
+    elements.append({**far_away, "id": 950, "lat": far_away["lat"] + 0.05, "tags": {}})
+    row_2["nodes"] = [11, 12, 950, 13, 14]
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: elements)
+
+    custom = gpd.GeoDataFrame([ROAD_TAGS], geometry=[LineString(ROAD_ACROSS)], crs=UTM)
+    result = build_and_export(BBOX, custom, tmp_path)
+    write_osm(result.osm_nodes, result.osm_edges, tmp_path / "before.osm.pbf")
+    write_osm(result.nodes, result.edges, tmp_path / "after.osm.pbf")
+    _, before, _, _ = read_with_osmium(tmp_path / "before.osm.pbf")
+    _, after, _, _ = read_with_osmium(tmp_path / "after.osm.pbf")
+
+    highest = max(e["id"] for e in elements if e["type"] == "way")
+    (piece,) = [way for way in before if way > highest]
+    assert before[row_2["id"]][0] == [11, 12] and before[piece][0] == [13, 14]
+    assert after[piece] == before[piece]
+    (custom_way,) = [way for way, (_, tags) in after.items() if "nf:custom" in tags]
+    assert custom_way > piece
+
+
 # ---------------------------------------------------------------------
 # Ferries: not streets, but written for routers
 # ---------------------------------------------------------------------

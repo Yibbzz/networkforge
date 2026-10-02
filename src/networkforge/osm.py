@@ -3,9 +3,10 @@ Getting the existing OSM network: from the Overpass API (small areas)
 or from a local OSM file such as a Geofabrik .osm.pbf extract (any size).
 
 Both return the same thing: nodes and edges GeoDataFrames in the
-analysis CRS, built exactly as ox.graph_from_bbox builds them (500 m
-buffer, largest component, cropped to the box), so a build from a local
-extract matches a build from Overpass for the same area and data.
+analysis CRS, built as ox.graph_from_bbox builds them with
+retain_all=True (500 m buffer, cropped to the box, every piece of
+network kept), so a build from a local extract matches a build from
+Overpass for the same area and data.
 
 Both also keep the OSM data itself (OSMSource: every way with its
 nodes and all its tags, tagged nodes, turn restrictions and route
@@ -171,10 +172,13 @@ def _network_from_elements(
                                  if e["type"] == "node" and e["id"] in on_streets]}],
         bidirectional=network_type in ox.settings.bidirectional_network_types,
     )
+    # Every piece of network in the area is kept (OSMnx's retain_all), not
+    # only the largest: other islands, streets that join the rest outside
+    # the area, isolated paths. They are part of OpenStreetMap, routers
+    # use them, and Valhalla sets speeds by how dense the streets around
+    # an edge are - leaving pieces out changed travel times on the rest.
     graph_buffered = ox.truncate.truncate_graph_polygon(graph_buffered, polygon_buffered)
-    graph_buffered = ox.truncate.largest_component(graph_buffered)
     graph = ox.truncate.truncate_graph_polygon(graph_buffered, polygon)
-    graph = ox.truncate.largest_component(graph)
     street_counts = ox.stats.count_streets_per_node(graph_buffered, nodes=graph.nodes)
     nx.set_node_attributes(graph, values=street_counts, name="street_count")
 

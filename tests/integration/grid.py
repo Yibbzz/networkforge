@@ -121,8 +121,7 @@ def grid_elements() -> list[dict]:
     ways = _street_ways(rows + columns, breaks={via})
     ways.append({"type": "way", "id": len(ways) + 1, "nodes": list(MOTORWAY_NODES),
                  "tags": {"highway": "motorway", "maxspeed": "70 mph", "oneway": "yes"}})
-    # Without a slip road the motorway is a separate piece of network,
-    # which is dropped on download (only the largest piece is kept).
+    # A slip road joins the motorway to the grid (the tests drive onto it).
     ways.append({"type": "way", "id": len(ways) + 1, "nodes": list(SLIP_ROAD),
                  "tags": {"highway": "motorway_link", "oneway": "yes"}})
 
@@ -158,6 +157,51 @@ def grid_with_ferry() -> list[dict]:
         {"type": "node", "id": FERRY_NODE, "lon": lon, "lat": lat, "tags": {}},
         {"type": "way", "id": FERRY_ID, "nodes": [node_id(0, 0), FERRY_NODE, node_id(2, 2)],
          "tags": {"route": "ferry", "foot": "yes", "motor_vehicle": "no", "name": "Grid Ferry"}},
+    ]
+
+
+ISLAND_NODES = (401, 402, 403)
+ISLAND_WAY = 800
+
+
+def grid_with_island() -> list[dict]:
+    """
+    grid_elements() plus a street that joins nothing else, 150 m west of
+    the grid: another island, or a street whose link to the rest lies
+    outside the area. Three nodes going north, "Island Road".
+    """
+    to_wgs84 = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True)
+    nodes = []
+    for number, nid in enumerate(ISLAND_NODES):
+        lon, lat = to_wgs84.transform(X0 - 80, Y0 + 100 + number * 100)
+        nodes.append({"type": "node", "id": nid, "lon": lon, "lat": lat, "tags": {}})
+    return [
+        *grid_elements(), *nodes,
+        {"type": "way", "id": ISLAND_WAY, "nodes": list(ISLAND_NODES),
+         "tags": {**RESIDENTIAL, "name": "Island Road"}},
+    ]
+
+
+TUNNEL_NODES = (501, 502, 503)
+TUNNEL_WAY = 810
+
+
+def grid_with_tunnel() -> list[dict]:
+    """
+    grid_elements() plus a road tunnel passing under Row 3 Street half
+    way between nodes 18 and 19. Its middle node sits half a metre north
+    of the street above: under it, not on it (as tunnel and bridge nodes
+    often do in real data).
+    """
+    to_wgs84 = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True)
+    nodes = []
+    for nid, y in zip(TUNNEL_NODES, (250, 300.5, 350), strict=True):
+        lon, lat = to_wgs84.transform(X0 + 250, Y0 + y)
+        nodes.append({"type": "node", "id": nid, "lon": lon, "lat": lat, "tags": {}})
+    return [
+        *grid_elements(), *nodes,
+        {"type": "way", "id": TUNNEL_WAY, "nodes": list(TUNNEL_NODES),
+         "tags": {**RESIDENTIAL, "tunnel": "yes", "layer": "-1", "name": "Tunnel Road"}},
     ]
 
 

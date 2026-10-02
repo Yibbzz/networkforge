@@ -16,6 +16,10 @@ log = logging.getLogger(__name__)
 ON_LINE_TOLERANCE = 1e-6
 
 
+# A point this close to a node (projected CRS units) is on it. Snapping
+# puts points exactly on nodes; this only allows for rounding.
+ON_NODE_TOLERANCE = 1e-3
+
 # Highway types that never have at-grade junctions. Trunk roads are left
 # out on purpose: many (e.g. UK A roads) have ordinary junctions.
 GRADE_SEPARATED_HIGHWAYS = {"motorway", "motorway_link"}
@@ -304,11 +308,35 @@ def snap_line_vertices_to_network(
     return lines[~collapsed]
 
 
+# What each junction point may join, carried with the points:
+#   is_end     it is an end of a custom line (ends may join anything)
+#   separated  every custom line it belongs to is a bridge / tunnel
+#   layers     the layers of the custom lines it belongs to
+POINT_COLUMNS = ["is_end", "separated", "layers"]
+
+
+def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
+    """One point per place, from rows of x, y and POINT_COLUMNS."""
+    if records.empty:
+        return gpd.GeoDataFrame({column: [] for column in POINT_COLUMNS}, geometry=[], crs=crs)
+    merged = records.groupby(["x", "y"], sort=False).agg(
+        is_end=("is_end", "any"),
+        separated=("separated", "all"),
+        layers=("layers", lambda values: tuple(sorted({layer for v in values for layer in v}))),
+    ).reset_index()
+    return gpd.GeoDataFrame(
+        merged[POINT_COLUMNS],
+        geometry=shapely.points(merged["x"].to_numpy(), merged["y"].to_numpy()),
+        crs=crs,
+    )
+
+
 def create_points_from_gdf(
     lines_gdf: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
     """
-    Create points from intersections and vertices of custom lines.
+    Create points from intersections and vertices of custom lines, each
+    with what it may join (POINT_COLUMNS).
 
     Only at-grade crossings become points (see crosses_at_grade): a
     custom line crossing a motorway, bridge or tunnel - or tagged as a
@@ -317,13 +345,14 @@ def create_points_from_gdf(
 
     validate_projected_crs(lines_gdf)
 
-    intersection_points = []
+    records = []  # (x, y, is_end, separated, layers)
 
     sindex = lines_gdf.sindex
 
     lines_with_nan = lines_gdf[lines_gdf["u"].isna()]
 
     for i, line1 in lines_with_nan.iterrows():
+        layer, separated = _layer(line1), is_grade_separated(line1)
         possible_matches_index = list(
             sindex.intersection(line1.geometry.bounds)
         )
@@ -341,29 +370,22 @@ def create_points_from_gdf(
                 )
 
                 if isinstance(intersection, Point):
-                    intersection_points.append(intersection)
-
+                    crossings = [intersection]
                 elif isinstance(intersection, MultiPoint):
-                    intersection_points.extend(intersection.geoms)
+                    crossings = list(intersection.geoms)
+                else:
+                    crossings = []
+                records += [(p.x, p.y, False, separated, (layer,)) for p in crossings]
 
-    for line in lines_with_nan.geometry:
-        if isinstance(line, LineString):
-            intersection_points.extend(
-                Point(coord) for coord in line.coords
-            )
+        parts = (line1.geometry.geoms if isinstance(line1.geometry, MultiLineString)
+                 else [line1.geometry])
+        for part in parts:
+            coords = list(part.coords)
+            records += [(x, y, position in (0, len(coords) - 1), separated, (layer,))
+                        for position, (x, y, *_) in enumerate(coords)]
 
-        elif isinstance(line, MultiLineString):
-            for part in line.geoms:
-                intersection_points.extend(
-                    Point(coord) for coord in part.coords
-                )
-
-    points_gdf = gpd.GeoDataFrame(
-        geometry=intersection_points,
-        crs=lines_gdf.crs,
-    )
-
-    return points_gdf.drop_duplicates().reset_index(drop=True)
+    return _merge_points(
+        pd.DataFrame(records, columns=["x", "y", *POINT_COLUMNS]), lines_gdf.crs)
 
 
 def snap_crossings_to_network(
@@ -389,7 +411,9 @@ def snap_crossings_to_network(
         points[~is_vertex], joinable_nodes, joinable_edges, tolerance
     )
 
-    return pd.concat([points[is_vertex], crossings]).drop_duplicates().reset_index(drop=True)
+    moved = pd.concat([points[is_vertex], crossings])
+    records = pd.DataFrame(moved[POINT_COLUMNS]).assign(x=moved.geometry.x, y=moved.geometry.y)
+    return _merge_points(records, points_gdf.crs)
 
 
 def split_lines_with_buffered_points(
@@ -426,7 +450,27 @@ def split_lines_with_buffered_points(
     distance = sjoin_lines.geometry.distance(
         points_gdf.geometry.loc[sjoin_lines["index_right"]].set_axis(sjoin_lines.index)
     )
-    pairs = sjoin_lines[~is_osm | (distance <= ON_LINE_TOLERANCE)]
+    # A line can be met by several points: work by position, not by label.
+    is_osm = is_osm.to_numpy()
+    on_line = is_osm & (distance.to_numpy() <= ON_LINE_TOLERANCE)
+    if on_line.any() and set(POINT_COLUMNS) <= set(points_gdf.columns):
+        # A point on an existing line only becomes a junction with it if
+        # the two may meet: the point is the end of a custom line, or the
+        # existing line is at grade on the custom line's layer. Otherwise a
+        # path crossing a street exactly above a tunnel would join the
+        # tunnel too.
+        rows = np.flatnonzero(on_line)
+        lines = sjoin_lines.iloc[rows]
+        points = points_gdf.loc[lines["index_right"]]
+        may_join = [
+            is_end or (not point_separated and not is_grade_separated(line)
+                       and _layer(line) in layers)
+            for (_, line), is_end, point_separated, layers in zip(
+                lines.iterrows(), points["is_end"], points["separated"], points["layers"],
+                strict=True)
+        ]
+        on_line[rows[~np.array(may_join, dtype=bool)]] = False
+    pairs = sjoin_lines[~is_osm | on_line]
 
     split_lines_gdf = _split_at_points(
         lines_gdf,
