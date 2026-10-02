@@ -36,6 +36,7 @@ from .topology import (
     remove_duplicates_and_combine_nodes,
     snap_crossings_to_network,
     snap_line_vertices_to_network,
+    split_at_self_crossings,
     split_lines_with_buffered_points,
     update_and_finalize_lines_gdf,
     validate_user_osm_intersection,
@@ -256,7 +257,7 @@ def build_network(
     # Custom vertices within snap_tolerance of the OSM network are moved
     # exactly onto it (nearest node, else nearest edge), so the line
     # joins the network itself rather than a point next to it.
-    custom_parts_gdf = custom_data_gdf.explode(index_parts=False)
+    custom_parts_gdf = split_at_self_crossings(custom_data_gdf.explode(index_parts=False))
     custom_data_gdf = snap_line_vertices_to_network(
         custom_parts_gdf,
         nodes_gdf,

@@ -7,6 +7,18 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- Valhalla tests (`tests/valhalla`, `uv run pytest -m valhalla`, CI job
+  "PBF in Valhalla"): the exported PBF is built into a Valhalla routing
+  graph with a pinned `pyvalhalla` and routed on. They cover every
+  feature of Esri's "Create a network dataset" tutorial, who Valhalla
+  lets onto each kind of custom line, every way a line can join the
+  network, and that the "before" file routes exactly like the OSM data.
+- `docs/network-analyst.md`: each ArcGIS Network Analyst feature, the
+  tag that replaces it, the test that proves it, and what isn't covered.
+- A custom line that crosses itself gets a junction at the crossing
+  (unless it is a bridge or tunnel).
+
 ### Changed
 - OSM / PBF export writes the existing network as OpenStreetMap has it,
   instead of one new 2-node way per edge. Every way keeps its id, its

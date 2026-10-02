@@ -143,6 +143,12 @@ OpenStreetMap itself. Your lines are added as new ways (tagged
 `nf:custom=yes`), and where one joins an existing street the junction is
 added to that street.
 
+The PBF is tested in [Valhalla](https://valhalla.github.io/valhalla/):
+one-way streets, footpaths, low bridges, unpaved roads, bus-only roads,
+bridges over roads and more are each routed on and checked. See
+[docs/network-analyst.md](docs/network-analyst.md), which compares the
+result with ArcGIS Network Analyst's network dataset feature by feature.
+
 A feature's own attributes win over a preset unless you pass
 `overwrite_tags=True`. Who may use each way follows OSM rules: the
 way type plus the access hierarchy (`motorcar` > `motor_vehicle` >

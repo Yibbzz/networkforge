@@ -70,14 +70,21 @@ dev = [
     "pytest",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.9",
+    # The router the QGIS Network Analyst plugin runs; tests/valhalla route
+    # on the exported PBF with it. Pinned: Valhalla's routing rules change
+    # between versions, so an upgrade is a deliberate step (re-run the
+    # tests, update tests/valhalla/harness.py VALHALLA_VERSION).
+    "pyvalhalla==3.9.0",
 ]
 
 [tool.pytest.ini_options]
 markers = [
     "network: downloads live OSM data (run with: uv run pytest -m network)",
+    "valhalla: routes on the exported PBF with Valhalla (tests/valhalla; needs pyvalhalla)",
 ]
-# Offline by default; `-m network` on the command line overrides this.
-addopts = "-m 'not network'"
+# Fast and offline by default; a `-m` on the command line overrides this:
+# `-m valhalla` (routing tests, a few minutes), `-m network` (live OSM).
+addopts = "-m 'not network and not valhalla'"
 
 [tool.ruff]
 line-length = 100

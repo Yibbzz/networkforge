@@ -28,6 +28,7 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      # The Valhalla tests have their own job below.
       - name: Offline tests with coverage
         run: uv run pytest --cov --cov-report=term --cov-report=xml
 
@@ -43,6 +44,29 @@ jobs:
         with:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  valhalla:
+    name: PBF in Valhalla
+    # Builds before / after networks, builds Valhalla's routing graph from
+    # each PBF (pyvalhalla, pinned in pyproject.toml - no server or Docker)
+    # and checks the routes: every tag rule and every way a custom line
+    # can join the network. See docs/network-analyst.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Route on the exported PBF with Valhalla
+        run: uv run pytest -m valhalla -v
 
   qgis:
     name: GeoPackage in QGIS ${{ matrix.qgis }}
@@ -95,4 +119,6 @@ jobs:
         if: always()
         env:
           HYPOTHESIS_PROFILE: thorough
-        run: uv run pytest tests/integration/test_properties.py -v
+        run: >
+          uv run pytest -m "not network"
+          tests/integration/test_properties.py tests/valhalla/test_random_lines.py -v

@@ -11,8 +11,15 @@ Releases: bump `version` in pyproject.toml + CHANGELOG.md section, then push tag
 `.github/workflows/release.yml` checks, tests, builds and publishes a GitHub Release.
 No QGIS code in this repo - a plugin will live in a separate repo and call the CLI/API.
 
-Tests: `uv run pytest` runs the offline suite (~30 s). `uv run pytest -m network` runs the live
-tests (download OSM; ~5 min). Offline is the default via `addopts` in pyproject.toml.
+Tests: `uv run pytest` runs the offline suite (~1 min). `uv run pytest -m valhalla` routes on the
+exported PBF with Valhalla (~3 min). `uv run pytest -m network` runs the live tests (download OSM;
+~5 min). Fast + offline is the default via `addopts` in pyproject.toml, so `-m valhalla` is needed
+even when naming a file in tests/valhalla.
+
+Goal (2026-10-02): match ArcGIS Network Analyst's "Create a network dataset" with OSM tags +
+Valhalla (run by routing.earth's QGIS Network Analyst plugin from our PBF). "The PBF routes
+correctly in Valhalla" is the output that matters most. docs/network-analyst.md maps each Esri
+feature to its tag and its test, and lists what is not covered; keep it in sync.
 Lint: `uv run ruff check .`. Coverage: `uv run pytest --cov`.
 The package is installed editable by `uv sync` (hatchling build-system), no PYTHONPATH needed.
 
@@ -90,13 +97,26 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   `--PROJECT_PATH` (an empty .qgs) BEFORE the `--` separator. Locally, run it with a clean env
   (`env -i PATH=/usr/bin:/bin ...`): this container's PYTHONPATH/venv break QGIS's Python.
   CI job `qgis` runs it in the qgis/qgis Docker image (ltr + latest).
+- `valhalla/` - `valhalla` marker; pyvalhalla is pinned (==) in the dev group: Valhalla's rules
+  change between versions, upgrade deliberately. `harness.py` = `Router.from_pbf()` (runs the wheel's
+  `valhalla_build_tiles`, ~1 s), `.route()` -> length/time/way ids/names, `.matrix()`, `.edges(way)`
+  (how Valhalla read a way, via /locate). `conftest.py`: session `scenario(features, **kwargs)` builds
+  before/after on the grid (cached), `at(col, row)` / `xy(col, row)` grid positions.
+  `test_esri_network_dataset.py` (one test per Esri tutorial feature), `test_tags_as_valhalla_reads_them.py`
+  (Valhalla access vs `usable_modes`; every disagreement must be listed in `DIFFERENCES`),
+  `test_joins.py` (topology edge cases), `test_before_and_after.py` (before == raw OSM exactly;
+  Valhalla == our OSMnx routing), `test_random_lines.py` (Hypothesis). Writing these tests: put the
+  line mid-route (Valhalla skips restrictions on the first/last edge), use `shortest=True` (default
+  costing prefers main roads / U-turns at dead ends), avoid equal-length alternatives on the grid.
+  Live: `tests/live/test_valhalla_real_data.py` (Monaco extract: vehicles identical to raw OSM).
 - `conftest.py` - Hypothesis profiles via `HYPOTHESIS_PROFILE`: dev (20), ci (50), thorough (500).
 - `tests/data/` - demo inputs (extent + custom lines, used by test_structural_invariants). Build the
   demo network with the CLI: `networkforge build --extent tests/data/extent.geojson --custom
   tests/data/custom_road_test.geojson --preset primary_road --out ... --baseline-out ...`.
 - `tests/commands.txt` - the user's own notes; leave it alone.
 - CI: `.github/workflows/tests.yml` - ruff + offline tests with coverage (`fail_under` in
-  pyproject) and the QGIS check on push/PR/nightly; live tests + thorough Hypothesis nightly.
+  pyproject), the Valhalla job and the QGIS check on push/PR/nightly; live tests + thorough
+  Hypothesis nightly.
 
 Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes, recipes, errors);
 `docs/osm-data.md` covers Overpass vs local extracts. Error `guide=` is a tagging-guide anchor or
@@ -104,6 +124,16 @@ Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes,
 Keep it in sync with presets.py/validation.py when tags or messages change.
 
 ## Gotchas
+- Overpass path makes two requests: OSMnx's own ways+nodes query, then relations (`rel(bw.w)`) for
+  restrictions/routes. `overpass-api.de` sometimes refuses connections from this container.
+- A piece left without two end nodes after splitting (zero-length offcut where a line is cut at
+  its own end) must be dropped (network.py step 10): it kept the parent's u/v and became a second,
+  uncut copy of the street.
+- A custom line crossing itself is cut at the crossing first (`split_at_self_crossings`) so it gets
+  a junction there; grade-separated lines are left whole.
+- modes.py vs Valhalla: bikes on `highway=pedestrian` need a bicycle tag; `motorroad=yes` closes
+  walk/bike; lines open only to buses etc. (`open_to_other_vehicles`) are valid, with a note.
+- GeoPackage / OSMnx routing ignores node barriers and turn restrictions; Valhalla obeys both.
 - OSMnx drops way tags not in `ox.settings.useful_tags_way`; add `nf:custom` before `graph_from_xml`.
 - Unitless `maxspeed` is km/h. UK data usually wants `"50 mph"`.
 - Design: build once with every mode (`network_type="all"`), filter by mode at routing time. Loading

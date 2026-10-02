@@ -219,6 +219,26 @@ def snap_points_to_network(
     return snap_points_to_edges(near_node, edges_gdf, tolerance)
 
 
+def split_at_self_crossings(lines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Cut each (single-part) line that crosses itself into parts that end
+    at the crossing, so the crossing becomes a junction like any other
+    place two lines cross at-grade. Lines that are grade-separated
+    (a bridge looping over itself) are left whole. Parts keep the line's
+    index label and attributes.
+    """
+    crossing = ~lines_gdf.geometry.is_simple.to_numpy()
+    if crossing.any():
+        separated = np.array([is_grade_separated(row) for _, row in lines_gdf[crossing].iterrows()])
+        crossing[np.flatnonzero(crossing)[separated]] = False
+    if not crossing.any():
+        return lines_gdf
+
+    geometries = lines_gdf.geometry.to_numpy().copy()
+    geometries[crossing] = shapely.node(geometries[crossing])
+    return lines_gdf.set_geometry(geometries, crs=lines_gdf.crs).explode(index_parts=False)
+
+
 def snap_line_vertices_to_network(
     lines_gdf: gpd.GeoDataFrame,
     nodes_gdf: gpd.GeoDataFrame,

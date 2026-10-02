@@ -8,6 +8,7 @@ ids, access tags, mode isolation and before/after routing.
 """
 
 import pytest
+from shapely.geometry import Point
 
 from networkforge.modes import usable_modes
 from tests.helpers import (
@@ -99,6 +100,25 @@ def test_line_ending_on_a_node_leaves_no_second_copy_of_the_streets_there(build)
     assert (edges.geometry.length > 0).all()
     footway = edges[(edges["highway"] == "footway")]
     assert not ((footway["u"] == node_id(1, 2)) & (footway["v"] == node_id(2, 2))).any()
+
+
+LOOP = [(X0 + 300, Y0 + 300), (X0 + 400, Y0 + 400), (X0 + 400, Y0 + 350), (X0 + 300, Y0 + 350)]
+
+
+def test_line_crossing_itself_gets_a_junction_at_the_crossing(build):
+    """LOOP's last stretch runs back across its first one at (350, 350)."""
+    result = build([(LOOP, ROAD_TAGS)])
+    custom = result.edges[result.edges["custom"] == "yes"]
+
+    crossing = result.nodes[result.nodes.geometry.distance(Point(X0 + 350, Y0 + 350)) < 0.01]
+    assert len(crossing) == 1
+    touching = (custom["u"] == crossing.index[0]) | (custom["v"] == crossing.index[0])
+    assert touching.sum() == 4  # two stretches in, two out
+
+
+def test_bridge_crossing_itself_has_no_junction_there(build):
+    result = build([(LOOP, {**ROAD_TAGS, "bridge": "yes", "layer": "1"})])
+    assert (result.nodes.geometry.distance(Point(X0 + 350, Y0 + 350)) > 1).all()
 
 
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
