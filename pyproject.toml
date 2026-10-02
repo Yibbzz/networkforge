@@ -1,6 +1,6 @@
 [project]
 name = "networkforge"
-version = "0.5.0"
+version = "0.6.0"
 description = "Build routable networks from OpenStreetMap and proposed infrastructure"
 readme = "README.md"
 license-files = ["LICENSE"]

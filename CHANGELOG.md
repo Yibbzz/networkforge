@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-02
+
 ### Added
 - Valhalla tests (`tests/valhalla`, `uv run pytest -m valhalla`, CI job
   "PBF in Valhalla"): the exported PBF is built into a Valhalla routing
@@ -174,7 +176,8 @@ minor version may include breaking changes).
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Yibbzz/networkforge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Yibbzz/networkforge/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Yibbzz/networkforge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Yibbzz/networkforge/compare/v0.2.0...v0.3.0
