@@ -91,19 +91,18 @@ def differing(a, b, tolerance=0.01):
     return differ / len(pairs)
 
 
-@pytest.mark.parametrize("costing", ["auto", "bus", "truck", "bicycle"])
-def test_before_routes_vehicles_exactly_like_the_extract(routers, points, costing):
+@pytest.mark.parametrize("costing", ["auto", "bus", "truck", "bicycle", "pedestrian"])
+def test_before_routes_exactly_like_the_extract(routers, points, costing):
+    """Walking too: Monaco's harbour ferry (route=ferry) is kept in the file."""
     assert routers["before"].matrix(points, costing) == routers["osm"].matrix(points, costing)
 
 
-def test_before_routes_walkers_almost_like_the_extract(routers, points):
-    """
-    Not exactly: squares mapped as areas, platforms and the like are not
-    part of NetworkForge's network (OSMnx's filter), and Valhalla walks
-    along them. Fewer than one trip in ten may differ by over 1%.
-    """
-    assert differing(routers["before"].matrix(points, "pedestrian"),
-                     routers["osm"].matrix(points, "pedestrian")) < 0.10
+def test_the_ferry_is_in_both_files(routers):
+    ferries = {way: value for way, value in routers["osm"].ways.items()
+               if value[1].get("route") == "ferry" and "highway" not in value[1]}
+    assert ferries
+    for which in ("before", "after"):
+        assert {way: routers[which].ways.get(way) for way in ferries} == ferries
 
 
 @pytest.mark.parametrize("costing", ["auto", "bus", "truck", "bicycle"])

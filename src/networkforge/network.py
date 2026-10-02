@@ -28,7 +28,7 @@ from .osm import (
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
-from .tags import EDITS_ATTR, PART_COLUMN
+from .tags import EDITS_ATTR, PART_COLUMN, REMOVED_ATTR
 from .topology import (
     assign_point_ids_to_lines,
     check_line_node_consistency,
@@ -258,27 +258,36 @@ def build_network(
 
     # The untouched network is the "before"; changes to existing streets
     # go into a copy, which the new lines are then joined to.
-    osm_edges_gdf, changes = edges_gdf, {}
+    osm_nodes_gdf, osm_edges_gdf, changes, removed = nodes_gdf, edges_gdf, {}, 0
     if not edits_gdf.empty:
-        edges_gdf, changes = apply_edits(
+        edges_gdf, changes, removed = apply_edits(
             osm_edges_gdf, nodes_gdf, edits_gdf, source_data, snap_tolerance,
             bidirectional=is_bidirectional(network_type), strict=strict,
         )
-        log.info("Changed %d existing edge(s)", int(edges_gdf.get("modified", pd.Series()).eq(
-            "yes").sum()))
+        log.info("Changed %d existing edge(s), removed %d",
+                 int(edges_gdf.get("modified", pd.Series()).eq("yes").sum()), removed)
+    if removed:
+        # Nodes only removed streets used are gone too: a new line must
+        # not be joined to a junction that is no longer there.
+        in_use = set(edges_gdf["u"]) | set(edges_gdf["v"])
+        nodes_gdf = nodes_gdf[nodes_gdf.index.isin(in_use)]
 
     def finish(nodes, edges):
         if source_data is not None:
             edges.attrs[SOURCE_ATTR] = source_data
             osm_edges_gdf.attrs[SOURCE_ATTR] = source_data
         edges.attrs[EDITS_ATTR] = changes
-        return (nodes, edges, nodes_gdf, osm_edges_gdf) if return_source_osm else (nodes, edges)
+        edges.attrs[REMOVED_ATTR] = removed
+        if return_source_osm:
+            return nodes, edges, osm_nodes_gdf, osm_edges_gdf
+        return nodes, edges
 
     if custom_data_gdf.empty:
-        if not changes:
-            raise InputError("Nothing to build: no new lines, and no feature changes an "
-                             "existing street.", guide="changing-existing-streets")
-        log.info("No new lines: the network is OSM with %d change(s)", len(changes))
+        if not changes and not removed:
+            raise InputError("Nothing to build: no new lines, and no feature changes or "
+                             "removes an existing street.", guide="changing-existing-streets")
+        log.info("No new lines: the network is OSM with %d change(s) and %d edge(s) removed",
+                 len(changes), removed)
         return finish(nodes_gdf, edges_gdf)
 
     # =========================================================
@@ -366,10 +375,16 @@ def build_network(
 
     step(7, "Combining OSM and new nodes")
 
+    # New ids go above every id in the area's OSM data, including nodes
+    # that aren't in nodes_gdf: those of removed streets and of ferries.
+    taken = [int(osm_nodes_gdf.index.max())]
+    if source_data is not None:
+        taken += list(source_data.ferry_nodes)
     combined_points_gdf = remove_duplicates_and_combine_nodes(
         custom_points_gdf,
         nodes_gdf,
         buffer_distance=snap_tolerance,
+        first_new_id=max(taken) + 1,
     )
 
     log.debug("Combined nodes: %d (%d new)",

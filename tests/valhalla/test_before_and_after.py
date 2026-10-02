@@ -16,7 +16,7 @@ import pytest
 
 from networkforge import write_osm
 from networkforge.modes import load_graph
-from tests.integration.grid import GRID_NODES, grid_elements
+from tests.integration.grid import FERRY_ID, GRID_NODES, grid_elements, grid_with_ferry
 from tests.valhalla.conftest import xy
 from tests.valhalla.harness import Router
 
@@ -29,10 +29,10 @@ def grid_points(router):
     return [router.node(node) for node in GRID_NODES]
 
 
-def write_grid_osm(path) -> None:
+def write_grid_osm(path, elements=None) -> None:
     """The grid's OSM data as a file, written by pyosmium (not by NetworkForge)."""
     writer = osmium.SimpleWriter(str(path))
-    for element in grid_elements():
+    for element in elements or grid_elements():
         if element["type"] == "node":
             writer.add_node(osmium.osm.mutable.Node(
                 id=element["id"], location=(element["lon"], element["lat"]),
@@ -61,6 +61,23 @@ def test_before_routes_exactly_like_the_osm_data(scenario, osm_itself, costing):
     before = scenario([(SHORTCUT, ROAD)]).before
     assert before.matrix(grid_points(before), costing) == osm_itself.matrix(
         grid_points(osm_itself), costing)
+
+
+def test_ferry_is_sailed_as_in_the_osm_data(scenario, tmp_path):
+    """A foot ferry from node 1 to node 13 (no highway tag): 283 m, or 400 m by street."""
+    write_grid_osm(tmp_path / "osm.osm.pbf", grid_with_ferry())
+    osm_itself = Router.from_pbf(tmp_path / "osm.osm.pbf", tmp_path / "tiles")
+    built = scenario([(SHORTCUT, {"highway": "footway"})], elements=grid_with_ferry())
+    start, end = built.before.node(1), built.before.node(13)
+
+    for router in (osm_itself, built.before, built.after):
+        on_foot = router.route(start, end, "pedestrian", shortest=True)
+        assert on_foot.way_ids == (FERRY_ID,) and on_foot.names == ("Grid Ferry",)
+        assert router.route(start, end, "auto", shortest=True).length_m == pytest.approx(
+            400, abs=2)
+    for costing in COSTINGS:
+        assert built.before.matrix(grid_points(built.before), costing) == osm_itself.matrix(
+            grid_points(osm_itself), costing)
 
 
 @pytest.mark.parametrize("costing", ["auto", "bus", "truck", "bicycle"])

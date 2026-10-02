@@ -72,6 +72,13 @@ ROUTING_NODE_KEYS = (
 RELATION_TYPES = ("restriction", "connectivity")
 ROUTE_RELATIONS = ("road", "bicycle", "mtb", "foot", "hiking")
 
+# Ways without a `highway` tag that routers travel on: ferries and car
+# shuttle trains (`route=`). They are not part of NetworkForge's own
+# network (edge table, GeoPackage), but are written to the OSM file as
+# they are, so a router can use them. Valhalla routes on nothing else
+# without a highway tag (not piers, platforms or squares mapped as areas).
+FERRY_ROUTES = ("ferry", "shuttle_train")
+
 # The column marking custom features, and the tag it's exported as.
 CUSTOM_COLUMN = "custom"
 CUSTOM_TAG = "nf:custom"
@@ -81,6 +88,11 @@ CUSTOM_TAG = "nf:custom"
 # layers have `osm_id`; NetworkForge's GeoPackage has `osmid`.
 EDIT_ID_COLUMNS = ("osm_id", "osmid")
 EDIT_ID_COLUMN = "osm_id"
+
+# On a feature with an OSM way id: `remove=yes` takes the stretch of the
+# way it lies along out of the network altogether.
+REMOVE_COLUMN = "remove"
+REMOVED_ATTR = "networkforge_removed_edges"
 
 # Marks edges (and, as a tag, ways) whose tags an edit changed, and
 # which edit; the tag changes travel in edges.attrs[EDITS_ATTR].

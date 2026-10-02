@@ -253,6 +253,12 @@ What happens:
 - **Tags are set, not removed.** Close a street with `access=no` (or
   `motor_vehicle=no` for motor traffic only); open a bus gate with
   `motor_vehicle=yes`; make a one-way street two-way with `oneway=no`.
+- **`remove=yes` takes the street out altogether.** Add a `remove`
+  attribute to the layer and set it to `yes` on the copied feature. The
+  stretch is then in neither the "after" GeoPackage nor the OSM file
+  (its other attributes are ignored), and new lines don't join it. Use
+  it for a demolished road, or to replace a street with a line of your
+  own. To keep the street on the map but stop traffic, use `access=no`.
 - **The "before" network is never changed.**
 - Presets and `--tag` apply to new lines only.
 
@@ -264,7 +270,8 @@ changed street still apply.
 |---|---|
 | `OSM way N is not in this network` | The id isn't a street inside the area: it is outside the box, isn't a routable way, or OpenStreetMap changed since the layer was made. Copy the street from the "before" layer of a fresh build. |
 | `doesn't lie along OSM way N` | The feature's line isn't on that street. Its geometry must follow the street (within the snap tolerance). |
-| `overlaps feature X on OSM way N` | Two features change the same stretch. Put both changes on one feature. |
+| `overlaps feature X on OSM way N with a different change` | Two features ask for different things on the same stretch. Put both changes on one feature. |
+| `remove= is for existing streets` | A feature has `remove` set but no OSM id, so there is nothing to remove. |
 | `change nothing` (warning) | The feature's tags are all the same as OpenStreetMap's. |
 
 ## Recipes
@@ -276,6 +283,7 @@ changed street still apply.
 | Shared walking and cycling path | `preset="shared_path"` |
 | Make an existing street one-way | copy it from the "before" layer, set `oneway=yes` ([changing existing streets](#changing-existing-streets)) |
 | Close an existing street | copy it, set `access=no` |
+| Remove an existing street | copy it, set `remove=yes` |
 | Pedestrianise a street | `preset="pedestrian_street"` (cycling allowed), or `highway=pedestrian` for walking only |
 | Filtered street / bus gate | `preset="car_free_street"` |
 | Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |

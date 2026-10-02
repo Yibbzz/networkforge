@@ -14,7 +14,7 @@ JSON events (a stable interface: other tools depend on these shapes):
     {"event": "progress", "step": 2, "total": 13, "message": "Downloading OSM network"}
     {"event": "warning", "message": "...", "features": [3, 7]}        # features/fields optional
     {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...,
-     "custom_edges": 12, "modified_edges": 3}
+     "custom_edges": 12, "modified_edges": 3, "removed_edges": 2}
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
      "issues": [{"feature": 3, "message": "maxspeed='fast' is not a valid OSM speed"}],
      "problems": ["feature 3: maxspeed='fast' is not a valid OSM speed"]}
@@ -60,7 +60,7 @@ from .modes import MODES, usable_modes
 from .network import build_network
 from .osm import NETWORK_TYPES
 from .presets import PRESETS, preset_tags
-from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, MODIFIED_COLUMN
+from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, MODIFIED_COLUMN, REMOVE_COLUMN, REMOVED_ATTR
 from .validation import (
     ACCESS_KEYS,
     ACCESS_VALUES,
@@ -146,10 +146,13 @@ def cmd_build(args, emit) -> int:
     custom_edges = int((edges["custom"] == "yes").sum()) if "custom" in edges else 0
     modified_edges = (int((edges[MODIFIED_COLUMN] == "yes").sum())
                       if MODIFIED_COLUMN in edges else 0)
+    removed_edges = int(edges.attrs.get(REMOVED_ATTR, 0))
     emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(edges),
-          "custom_edges": custom_edges, "modified_edges": modified_edges},
+          "custom_edges": custom_edges, "modified_edges": modified_edges,
+          "removed_edges": removed_edges},
          text=f"Done: {len(nodes):,} nodes, {len(edges):,} edges ({custom_edges:,} custom, "
-              f"{modified_edges:,} changed). Wrote {', '.join(outputs.values())}")
+              f"{modified_edges:,} changed, {removed_edges:,} removed). "
+              f"Wrote {', '.join(outputs.values())}")
     return EXIT_OK
 
 
@@ -200,6 +203,7 @@ def cmd_info(args, emit) -> int:
         "osm_formats": [".osm", ".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2"],
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
         "edit_id_fields": list(EDIT_ID_COLUMNS),
+        "remove_field": REMOVE_COLUMN,
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "highway": sorted(KNOWN_HIGHWAYS),

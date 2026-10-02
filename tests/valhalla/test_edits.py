@@ -177,3 +177,37 @@ def test_new_line_joins_a_changed_street(scenario):
     assert metres(built, "after", top, at(1, 1), "auto") > 150
     assert built.after.route(at(1, 1), top, "auto", shortest=True).uses(road)
     assert metres(built, "after", at(1, 1), top, "auto") == 100
+
+
+# ---------------------------------------------------------------------
+# Removing existing streets: remove=yes
+# ---------------------------------------------------------------------
+
+def test_street_removed(scenario):
+    built = scenario([(BLOCK, {"osm_id": ROW_1, "remove": "yes"})])
+
+    for costing in EVERYONE:
+        assert metres(built, "before", WEST, EAST, costing) == 300
+        assert metres(built, "after", WEST, EAST, costing) == 500, costing
+    # Not just closed: the stretch isn't in the file, so nothing snaps to it.
+    assert not any(refs == [7, 8] for refs, _ in built.after.ways.values())
+    assert sorted(refs for refs, tags in built.after.ways.values()
+                  if tags.get("name") == "Row 1 Street") == [[6, 7], [8, 9, 10]]
+
+
+def test_removed_street_replaced_by_a_new_line(scenario):
+    """Take out a block and draw a footpath where it was: walkers only."""
+    built = scenario([(BLOCK, {"osm_id": ROW_1, "remove": "yes"}),
+                      (BLOCK, {"highway": "footway"})])
+    (path,) = built.custom_ways
+
+    on_foot = built.after.route(WEST, EAST, "pedestrian", shortest=True)
+    assert on_foot.uses(path) and round(on_foot.length_m) == 300
+    assert metres(built, "after", WEST, EAST, "auto") == 500
+
+
+def test_rest_of_the_network_is_untouched_by_a_removal(scenario):
+    built = scenario([(BLOCK, {"osm_id": ROW_1, "remove": "yes"})])
+    unchanged = {way: value for way, value in built.before.ways.items() if way != ROW_1}
+    assert {way: built.after.ways.get(way) for way in unchanged} == unchanged
+    assert turn_metres(built.after, "auto") == pytest.approx(300, abs=2)

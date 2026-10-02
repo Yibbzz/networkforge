@@ -17,8 +17,11 @@ from networkforge.errors import InputError
 from networkforge.modes import add_travel_times, load_graph
 from tests.helpers import ROUTING_MODES, build_and_export
 from tests.integration.grid import (
+    BBOX,
     BOLLARD_NODE,
     CYCLE_LANE_TAGS,
+    FERRY_ID,
+    FERRY_NODE,
     NO_ACCESS,
     RESTRICTION_ID,
     ROAD_ACROSS,
@@ -29,6 +32,7 @@ from tests.integration.grid import (
     N,
     all_pair_costs,
     grid_elements,
+    grid_with_ferry,
     synthetic_graph,
 )
 
@@ -187,6 +191,71 @@ def test_cropped_way_is_written_as_the_part_inside(tmp_path, fake_osm):
     assert ways[1][0] == [1, 2, 3]  # Row 0 Street, five nodes long in OSM
     assert all(ref in nodes for refs, _ in ways.values() for ref in refs)
     assert relations == {}  # the restriction's ways are outside the box
+
+
+# ---------------------------------------------------------------------
+# Ferries: not streets, but written for routers
+# ---------------------------------------------------------------------
+
+def write_elements(elements, path):
+    writer = osmium.SimpleWriter(str(path))
+    for element in elements:
+        if element["type"] == "node":
+            writer.add_node(osmium.osm.mutable.Node(
+                id=element["id"], location=(element["lon"], element["lat"]),
+                tags=element["tags"]))
+        elif element["type"] == "way":
+            writer.add_way(osmium.osm.mutable.Way(
+                id=element["id"], nodes=element["nodes"], tags=element["tags"]))
+    writer.close()
+
+
+@pytest.fixture(params=["download", "extract"])
+def ferry_build(request, tmp_path, monkeypatch):
+    """A build on the grid with a ferry, from Overpass (faked) or a local extract."""
+    custom = gpd.GeoDataFrame([ROAD_TAGS], geometry=[LineString(ROAD_ACROSS)], crs=UTM)
+    if request.param == "extract":
+        write_elements(grid_with_ferry(), tmp_path / "grid.osm.pbf")
+        result = build_and_export(BBOX, custom, tmp_path, osm_source=tmp_path / "grid.osm.pbf")
+    else:
+        monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_ferry())
+        result = build_and_export(BBOX, custom, tmp_path)
+    write_osm(result.osm_nodes, result.osm_edges, tmp_path / "before.osm.pbf")
+    write_osm(result.nodes, result.edges, tmp_path / "after.osm.pbf")
+    return result, tmp_path
+
+
+def test_ferry_is_written_to_both_files_as_it_is(ferry_build):
+    result, folder = ferry_build
+    ferry = next(e for e in grid_with_ferry() if e["id"] == FERRY_ID)
+
+    for name in ("before.osm.pbf", "after.osm.pbf"):
+        nodes, ways, _, order = read_with_osmium(folder / name)
+        assert ways[FERRY_ID] == (ferry["nodes"], ferry["tags"])
+        assert FERRY_NODE in nodes
+        ids = [obj_id for kind, obj_id in order if kind == "n"]
+        assert ids == sorted(ids)
+
+
+def test_ferry_is_not_part_of_the_street_network(ferry_build):
+    result, _ = ferry_build
+    assert FERRY_NODE not in result.nodes.index
+    assert FERRY_ID not in set(result.edges["osmid"].dropna())
+    assert len(result.osm_edges) == len(ox.graph_to_gdfs(synthetic_graph(), nodes=False))
+
+
+def test_ferry_is_cropped_to_the_area(tmp_path, monkeypatch):
+    """A box around the bottom-left block: the ferry's far end (node 13) is outside."""
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_ferry())
+    corner = gpd.GeoDataFrame(geometry=[box(X0 - 10, Y0 - 10, X0 + 150, Y0 + 150)], crs=UTM)
+    street = LineString([(X0 + 50, Y0), (X0 + 50, Y0 + 100)])
+    line = gpd.GeoDataFrame([ROAD_TAGS], geometry=[street], crs=UTM)
+    result = build_and_export(corner, line, tmp_path)
+    write_osm(result.nodes, result.edges, tmp_path / "after.osm.pbf")
+    nodes, ways, _, _ = read_with_osmium(tmp_path / "after.osm.pbf")
+
+    assert ways[FERRY_ID][0] == [1, FERRY_NODE]
+    assert all(ref in nodes for refs, _ in ways.values() for ref in refs)
 
 
 def test_tables_without_a_source_are_still_written(tmp_path):

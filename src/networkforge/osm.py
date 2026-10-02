@@ -25,6 +25,7 @@ import networkx as nx
 import osmium
 import osmnx as ox
 import requests
+import shapely
 from osmnx import _overpass
 from osmnx._errors import InsufficientResponseError, ResponseStatusCodeError
 from osmnx.graph import _create_graph
@@ -33,7 +34,7 @@ from shapely.geometry import box
 
 from .errors import InputError, OSMDownloadError
 from .modes import _passes_osmnx_filter, keep_mode_tags
-from .tags import RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
+from .tags import FERRY_ROUTES, RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -85,12 +86,17 @@ class OSMSource:
                 (barriers, signals, crossings ... see ROUTING_NODE_KEYS)
     relations:  (id, tags, [(member type "n"/"w"/"r", ref, role), ...])
                 for turn restrictions and routes that use a kept way
+    ferries:    way id -> (node ids, all tags) of ferry routes inside the
+                area (see FERRY_ROUTES): written to OSM files as they are
+    ferry_nodes: node id -> (lon, lat) of the ferries' nodes
     """
 
     ways: dict[int, tuple[list[int], dict[str, str]]] = field(default_factory=dict)
     node_tags: dict[int, dict[str, str]] = field(default_factory=dict)
     relations: list[tuple[int, dict[str, str], list[tuple[str, int, str]]]] = field(
         default_factory=list)
+    ferries: dict[int, tuple[list[int], dict[str, str]]] = field(default_factory=dict)
+    ferry_nodes: dict[int, tuple[float, float]] = field(default_factory=dict)
 
     # pandas deep-copies .attrs on most operations; the source is
     # read-only, so share it rather than copy a whole city each time.
@@ -108,22 +114,41 @@ def _keeps_relation(tags: dict[str, str]) -> bool:
     return kind == "route" and tags.get("route") in ROUTE_RELATIONS
 
 
-def _source_from_elements(elements: list[dict]) -> OSMSource:
+def is_ferry(tags: dict[str, str]) -> bool:
+    """A ferry or shuttle-train route: a way routers use that isn't a highway."""
+    return "highway" not in tags and tags.get("route") in FERRY_ROUTES
+
+
+def _source_from_elements(elements: list[dict], polygon) -> OSMSource:
+    """`polygon`: the area itself (not buffered); ferries are cropped to it."""
     ways, node_tags, relations = {}, {}, []
+    ferries, ferry_nodes, locations = {}, {}, {}
     for element in elements:
         tags = element.get("tags") or {}
-        if element["type"] == "way":
+        if element["type"] == "way" and not is_ferry(tags):
             ways[element["id"]] = (list(element["nodes"]), dict(tags))
         elif element["type"] == "node":
+            locations[element["id"]] = (element["lon"], element["lat"])
             if any(key in tags for key in ROUTING_NODE_KEYS):
                 node_tags[element["id"]] = dict(tags)
+
+    extra_ids = iter(range(-(10**15), 0))  # for further pieces of a cropped ferry
+    for element in elements:
+        if element["type"] != "way" or not is_ferry(element.get("tags") or {}):
+            continue
+        inside = [(ref, locations[ref]) if ref in locations and shapely.contains_xy(
+            polygon, *locations[ref]) else (ref, None) for ref in element["nodes"]]
+        for number, run in enumerate(_known_runs(inside)):
+            way_id = element["id"] if number == 0 else next(extra_ids)
+            ferries[way_id] = ([ref for ref, _ in run], dict(element["tags"]))
+            ferry_nodes.update(run)
     for element in elements:
         if element["type"] != "relation" or not _keeps_relation(element.get("tags") or {}):
             continue
         members = [(m["type"][0], m["ref"], m.get("role", "")) for m in element["members"]]
         if any(kind == "w" and ref in ways for kind, ref, _ in members):
             relations.append((element["id"], dict(element["tags"]), members))
-    return OSMSource(ways, node_tags, relations)
+    return OSMSource(ways, node_tags, relations, ferries, ferry_nodes)
 
 
 def _network_from_elements(
@@ -137,8 +162,13 @@ def _network_from_elements(
     Nodes and edges from OSM elements covering `polygon_buffered`: the
     same steps as ox.graph_from_polygon (what graph_from_bbox uses).
     """
+    # The street network: every way but the ferries, and those ways' nodes.
+    streets = [e for e in elements
+               if e["type"] == "way" and not is_ferry(e.get("tags") or {})]
+    on_streets = {ref for way in streets for ref in way["nodes"]}
     graph_buffered = _create_graph(
-        [{"elements": [e for e in elements if e["type"] != "relation"]}],
+        [{"elements": streets + [e for e in elements
+                                 if e["type"] == "node" and e["id"] in on_streets]}],
         bidirectional=network_type in ox.settings.bidirectional_network_types,
     )
     graph_buffered = ox.truncate.truncate_graph_polygon(graph_buffered, polygon_buffered)
@@ -150,7 +180,7 @@ def _network_from_elements(
 
     nodes, edges = ox.graph_to_gdfs(graph)
     nodes, edges = nodes.to_crs(analysis_crs), edges.to_crs(analysis_crs).reset_index()
-    edges.attrs[SOURCE_ATTR] = _source_from_elements(elements)
+    edges.attrs[SOURCE_ATTR] = _source_from_elements(elements, polygon)
     return nodes, edges
 
 
@@ -201,7 +231,8 @@ def _download_elements(polygon, network_type: str) -> list[dict]:
     """
     Every way OSMnx's filter for `network_type` matches inside `polygon`,
     with its nodes (OSMnx's own query), plus the turn restrictions and
-    routes those ways belong to (a second query). Overpass JSON elements.
+    routes those ways belong to, and the ferry routes in the area with
+    their nodes (a second query). Overpass JSON elements.
     """
     elements = [
         element
@@ -213,11 +244,14 @@ def _download_elements(polygon, network_type: str) -> list[dict]:
     way_filter = _overpass._get_network_filter(network_type)
     kinds = "|".join(RELATION_TYPES)
     routes = "|".join(ROUTE_RELATIONS)
+    ferries = "|".join(FERRY_ROUTES)
     for coords in _overpass._make_overpass_polygon_coord_strs(polygon):
         query = (
             f"{settings};way{way_filter}(poly:{coords!r})->.w;"
+            f'way["route"~"^({ferries})$"]["highway"!~"."](poly:{coords!r})->.f;'
             f'(rel(bw.w)["type"~"^({kinds})(:|$)"];'
-            f'rel(bw.w)["type"="route"]["route"~"^({routes})$"];);out;'
+            f'rel(bw.w)["type"="route"]["route"~"^({routes})$"];'
+            f".f;node(w.f););out;"
         )
         elements += _overpass._overpass_request(OrderedDict(data=query))["elements"]
 
@@ -251,7 +285,8 @@ def get_osm_data_from_file(
     _check_file_covers(path, polygon)
 
     elements = _read_elements(path, polygon_buffered.bounds, network_type)
-    if not any(element["type"] == "way" for element in elements):
+    if not any(element["type"] == "way" and not is_ferry(element["tags"])
+               for element in elements):
         raise InputError(
             f"{path.name} has no {network_type!r} ways inside the bounding box. "
             "Check the file covers the area.",
@@ -303,7 +338,7 @@ def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
     processor = (
         osmium.FileProcessor(str(path))
         .with_locations()
-        .with_filter(osmium.filter.KeyFilter("highway", "type", *ROUTING_NODE_KEYS))
+        .with_filter(osmium.filter.KeyFilter("highway", "type", "route", *ROUTING_NODE_KEYS))
     )
     try:
         for obj in processor:
@@ -324,7 +359,9 @@ def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
             if not obj.is_way():
                 continue
 
-            if "highway" not in tags or not _passes_osmnx_filter(tags, network_type):
+            if not is_ferry(tags) and (
+                "highway" not in tags or not _passes_osmnx_filter(tags, network_type)
+            ):
                 continue
             nodes = [(n.ref, (n.location.lon, n.location.lat)) if n.location.valid()
                      else (n.ref, None) for n in obj.nodes]

@@ -126,7 +126,7 @@ class Router:
         """The OSM ways a route shape runs along (Valhalla's map matching)."""
         matched = self.actor.trace_attributes({
             "encoded_polyline": shape,
-            "shape_match": "edge_walk",
+            "shape_match": "walk_or_snap",
             "costing": costing,
             "costing_options": {costing: options},
             "filters": {"attributes": ["edge.way_id"], "action": "include"},

@@ -62,9 +62,10 @@ layer or a QuickOSM layer, edit an attribute, add it to the custom layer
 | Add a height limit | `maxheight` | `test_height_limit_added_to_an_existing_street` |
 | Turn restrictions on a changed street still apply | | `test_turn_restriction_still_applies_when_its_way_is_changed` |
 | A new line joins a changed street | | `test_new_line_joins_a_changed_street` |
+| Remove a street altogether | `remove=yes` | `test_street_removed`, `test_removed_street_replaced_by_a_new_line` |
 
-Not possible yet: removing a tag, moving a street, deleting one outright
-(close it instead), and changing part of a stretch between two OSM nodes.
+Not possible yet: removing a single tag, moving a street, and changing
+or removing part of a stretch between two OSM nodes.
 
 ## What is not covered
 
@@ -130,7 +131,9 @@ Found while writing the tests:
 - Every junction costs a vehicle a second or two, including the junction
   a new footpath makes with a street. A new path can make a car trip a
   few seconds slower without changing its route.
-- Walking: squares mapped as areas (`area=yes`) and platforms are not in
-  NetworkForge's network, while Valhalla walks along them in raw
-  OpenStreetMap data. On the Monaco extract a few walking trips differ
-  for this reason; vehicle trips are identical.
+- Valhalla travels on ways with a `highway` tag, and on ferries
+  (`route=ferry`, `route=shuttle_train`). It does not route on piers,
+  platforms or squares mapped as areas. NetworkForge writes ferries to the
+  file as they are in OpenStreetMap, so a router can use them; they are
+  not in the GeoPackage. With them, every trip on the Monaco extract,
+  walking included, is the same as on raw OpenStreetMap.

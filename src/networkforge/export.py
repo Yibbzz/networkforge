@@ -287,13 +287,26 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         node_tags = _row_tags(nodes, {key: key for key in NODE_TAGS})
     else:
         node_tags = [source.node_tags.get(node_id, {}) for node_id in node_ids]
-    osm_nodes = sorted(zip(
+    osm_nodes = list(zip(
         node_ids,
         [round(x, 7) for x in nodes.geometry.x.tolist()],
         [round(y, 7) for y in nodes.geometry.y.tolist()],
         node_tags,
         strict=True,
     ))
+    if source is not None:
+        # Ferry routes aren't in the edge table: add the nodes only they use.
+        in_network = set(node_ids)
+        for node_id, (lon, lat) in source.ferry_nodes.items():
+            if node_id not in in_network:
+                node_ids.append(node_id)
+                osm_nodes.append((node_id, round(lon, 7), round(lat, 7),
+                                  source.node_tags.get(node_id, {})))
+        if source.ferry_nodes:
+            lons, lats = zip(*source.ferry_nodes.values(), strict=True)
+            bounds = (min(bounds[0], round(min(lons), 7)), min(bounds[1], round(min(lats), 7)),
+                      max(bounds[2], round(max(lons), 7)), max(bounds[3], round(max(lats), 7)))
+    osm_nodes.sort()
 
     is_custom = (edges_gdf[CUSTOM_COLUMN] == "yes" if CUSTOM_COLUMN in edges_gdf
                  else pd.Series(False, index=edges_gdf.index))
@@ -306,6 +319,9 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
     # OSM way it is a piece of, or None)
     ways = _existing_ways(existing, source, edges_gdf.attrs.get(EDITS_ATTR) or {})
     ways += _custom_ways(edges_gdf[is_custom])
+    if source is not None:
+        ways += [(way_id if way_id > 0 else None, list(refs), dict(tags), way_id)
+                 for way_id, (refs, tags) in source.ferries.items()]
 
     new_ids = iter(range(max((way[0] for way in ways if way[0]), default=0) + 1, 2**62))
     pieces = defaultdict(list)  # OSM way id -> [(id written, refs)]

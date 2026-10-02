@@ -19,17 +19,23 @@ from networkforge.cli import EXIT_INPUT, EXIT_OK, main
 from networkforge.errors import InputError, InvalidTagsError
 from networkforge.export import analysis_edges
 from networkforge.modes import usable_modes
+from networkforge.tags import REMOVED_ATTR
 from tests.helpers import build_and_export, route_cost
 from tests.integration.grid import (
     BBOX,
+    FERRY_ID,
+    FERRY_NODE,
+    MOTORWAY_NODES,
     NO_LEFT_TURN,
     RESTRICTION_ID,
+    ROAD_ACROSS,
     ROAD_TAGS,
     SLIP_ROAD,
     UTM,
     X0,
     Y0,
     grid_elements,
+    grid_with_ferry,
 )
 
 
@@ -389,3 +395,142 @@ def test_cli_reports_an_edit_that_cannot_be_placed(fake_osm, files, capsys):
 def test_info_lists_the_edit_id_fields(capsys):
     main(["info", "--json"])
     assert json.loads(capsys.readouterr().out)["edit_id_fields"] == ["osm_id", "osmid"]
+
+
+# ---------------------------------------------------------------------
+# Removing existing streets: remove=yes
+# ---------------------------------------------------------------------
+
+def test_one_block_removed(build, export):
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "yes"})])
+    before, after = export(result)
+
+    assert edges_between(result.edges, 7, 8).empty
+    assert len(result.edges) == len(result.osm_edges) - 2  # both directions
+    assert result.edges.attrs[REMOVED_ATTR] == 2
+
+    # The file: the street's two remaining parts, nothing between 7 and 8.
+    assert sorted(refs for refs, tags in after.values()
+                  if tags.get("name") == "Row 1 Street") == [[6, 7], [8, 9, 10]]
+    assert after[ROW_1][0] == [6, 7]
+    assert not any(tags.get("nf:modified") for _, tags in after.values())
+    assert before[ROW_1][0] == [6, 7, 8, 9, 10]
+    assert len(edges_between(result.osm_edges, 7, 8)) == 2
+
+
+def test_removal_ignores_the_features_other_attributes(build):
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "yes", "maxspeed": "20 mph"})])
+    assert edges_between(result.edges, 7, 8).empty
+    assert "modified" not in result.edges.columns
+
+
+@pytest.mark.parametrize("value", ["no", "false", "0", None])
+def test_remove_no_is_an_ordinary_change(build, value):
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": value, "maxspeed": "20 mph"})])
+    assert set(edges_between(result.edges, 7, 8).maxspeed) == {"20 mph"}
+
+
+def test_nodes_only_the_removed_streets_used_go_too(build, export):
+    """Remove the motorway and its slip road: nodes 100 and 101 have nothing left."""
+    motorway = way_id(*MOTORWAY_NODES)
+    result = build([
+        ([(X0 + 500, Y0), (X0 + 500, Y0 + 400)], {"osm_id": motorway, "remove": "yes"}),
+        (block(0, 4, 5), {"osm_id": SLIP, "remove": "yes"}),
+    ])
+    before, after = export(result)
+
+    assert not set(MOTORWAY_NODES) & set(result.nodes.index)
+    assert set(MOTORWAY_NODES) <= set(result.osm_nodes.index)
+    assert motorway not in after and SLIP not in after
+    assert motorway in before and SLIP in before
+
+
+def test_new_line_does_not_join_a_removed_street(build):
+    """
+    Row 1 Street's block 7-8 is removed and a new road is drawn across
+    where it was, on to Row 2 Street: it joins Row 2 Street only.
+    """
+    crossing = [(X0 + 150, Y0 + 50), (X0 + 150, Y0 + 250)]
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "yes"}), (crossing, ROAD_TAGS)])
+
+    custom = result.edges[result.edges["custom"] == "yes"]
+    existing = result.edges[result.edges["custom"] != "yes"]
+    shared = {*custom.u, *custom.v} & {*existing.u, *existing.v}
+    assert len(shared) == 1
+    assert result.nodes.geometry.loc[list(shared)].y.round().tolist() == [Y0 + 200]
+
+
+def test_turn_restriction_goes_with_a_removed_way(build, tmp_path):
+    (_, _), _, (to_u, to_v) = NO_LEFT_TURN
+    result = build([([(X0 + 200, Y0 + 300), (X0 + 200, Y0 + 400)],
+                     {"osm_id": way_id(to_u, to_v), "remove": "yes"})])
+    write_osm(result.nodes, result.edges, tmp_path / "after.osm.pbf")
+    write_osm(result.osm_nodes, result.osm_edges, tmp_path / "before.osm.pbf")
+
+    assert relations_of(tmp_path / "after.osm.pbf") == {}
+    assert RESTRICTION_ID in relations_of(tmp_path / "before.osm.pbf")
+
+
+def test_removing_and_changing_the_same_stretch_is_refused(build):
+    with pytest.raises(InputError, match="overlaps feature 0 .* different change"):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "yes"}),
+               (ONE_BLOCK, {"osm_id": ROW_1, "maxspeed": "20 mph"})])
+
+
+def test_remove_on_a_new_line_is_refused(build):
+    with pytest.raises(InputError, match="remove= is for existing streets") as info:
+        build([(ONE_BLOCK, {**ROAD_TAGS, "remove": "yes"})])
+    assert info.value.issues == [{"feature": 0, "message": "remove set, but no OSM id"}]
+
+
+def test_remove_must_be_yes_or_no(build, fake_osm):
+    with pytest.raises(InvalidTagsError, match="remove='maybe' must be yes or no"):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "maybe"})])
+    assert fake_osm == []
+
+
+def test_remove_attribute_does_not_reach_new_lines(build):
+    """One layer with both: the `remove` column is not an attribute of the new line."""
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove": "yes"}),
+                    ([(X0 + 300, Y0 + 300), (X0 + 400, Y0 + 400)], ROAD_TAGS)])
+    assert "remove" not in result.edges.columns
+    assert (result.edges["custom"] == "yes").sum() == 1
+
+
+def test_cli_reports_removed_edges(fake_osm, files, capsys):
+    gpd.GeoDataFrame({"osmid": [ROW_1], "remove": ["yes"]},
+                     geometry=[LineString(ONE_BLOCK)], crs=UTM).to_file(files / "custom.gpkg")
+    code = main(["build", "--extent", str(files / "extent.gpkg"),
+                 "--custom", str(files / "custom.gpkg"), "--gpkg", str(files / "after.gpkg"),
+                 "--baseline-gpkg", str(files / "before.gpkg"), "--json"])
+    done = json.loads(capsys.readouterr().out.splitlines()[-1])
+
+    assert code == EXIT_OK
+    assert (done["custom_edges"], done["modified_edges"], done["removed_edges"]) == (0, 0, 2)
+    before = gpd.read_file(files / "before.gpkg", layer="edges")
+    after = gpd.read_file(files / "after.gpkg", layer="edges")
+    assert len(before) - len(after) == 1  # one row per street in the GeoPackage
+
+
+def test_info_names_the_remove_field(capsys):
+    main(["info", "--json"])
+    assert json.loads(capsys.readouterr().out)["remove_field"] == "remove"
+
+
+def test_new_nodes_never_reuse_an_id_from_the_osm_data(build, export, monkeypatch):
+    """
+    New junction ids start above every node id in the area: also those of
+    removed streets (100, 101) and of a ferry's own nodes (FERRY_NODE).
+    """
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_ferry())
+    result = build([
+        ([(X0 + 500, Y0), (X0 + 500, Y0 + 400)],
+         {"osm_id": way_id(*MOTORWAY_NODES), "remove": "yes"}),
+        (block(0, 4, 5), {"osm_id": SLIP, "remove": "yes"}),
+        (ROAD_ACROSS, ROAD_TAGS),
+    ])
+    new = set(result.nodes.index) - set(result.osm_nodes.index)
+
+    assert new and min(new) > FERRY_NODE
+    _, after = export(result)
+    assert after[FERRY_ID][0][1] == FERRY_NODE

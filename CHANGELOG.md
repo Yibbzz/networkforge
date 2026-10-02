@@ -7,6 +7,23 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- **Removing existing streets.** A feature with an OSM way id and
+  `remove=yes` takes the stretch it lies along out of the "after" network:
+  it is in neither the GeoPackage nor the OSM file, new lines don't join
+  it, and a turn restriction that needs it goes with it. `--json`: the
+  `done` event has `removed_edges`; `info` has `remove_field`.
+- **Ferries.** Ferry and shuttle-train routes (`route=ferry`,
+  `route=shuttle_train`, ways with no `highway` tag) are written to the OSM
+  file as they are in OpenStreetMap, so routers can use them. They are not
+  part of the edge table or the GeoPackage. On the Monaco extract this was
+  the whole difference between walking routes on the "before" file and on
+  raw OpenStreetMap; they are now identical.
+
+### Fixed
+- New junction nodes get ids above every node id in the area's OSM data,
+  including nodes that are only on ferries or on removed streets.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

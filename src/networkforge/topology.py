@@ -492,6 +492,7 @@ def remove_duplicates_and_combine_nodes(
     custom_points_gdf: gpd.GeoDataFrame,
     nodes_gdf: gpd.GeoDataFrame,
     buffer_distance: float = 1.0,
+    first_new_id: int | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Remove duplicate points from custom points and combine with nodes.
@@ -501,6 +502,9 @@ def remove_duplicates_and_combine_nodes(
         buffer_distance (float): distance (in the projected CRS's units,
             normally metres) within which a custom point is considered
             a duplicate of an existing node.
+        first_new_id: the id of the first new node (default: one above
+            the highest id in nodes_gdf). Pass it when ids outside
+            nodes_gdf are also taken.
 
     Returns:
         gpd.GeoDataFrame: Combined GeoDataFrame of unique nodes and custom points.
@@ -551,7 +555,8 @@ def remove_duplicates_and_combine_nodes(
     # 0 collided with real low OSM ids, giving duplicate <node> ids on
     # export that silently moved existing streets.
     custom_points_gdf_cleaned = custom_points_gdf_cleaned.reset_index(drop=True)
-    first_new_id = int(nodes_gdf.index.max()) + 1 if len(nodes_gdf) else 1
+    if first_new_id is None:
+        first_new_id = int(nodes_gdf.index.max()) + 1 if len(nodes_gdf) else 1
     custom_points_gdf_cleaned.index = custom_points_gdf_cleaned.index + first_new_id
 
     # Concatenate the two GeoDataFrames, making sure the nodes_gdf index is not overwritten

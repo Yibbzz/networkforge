@@ -51,6 +51,9 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   number); tag changes travel in `edges.attrs[EDITS_ATTR]`. Export writes each edited run as its
   own way (`nf:modified=yes`), the way id staying with the first unchanged run; `_relations` remaps
   restriction members to the piece holding the via node. Edits-only builds return after step 2.
+  `remove=yes` (`REMOVE_COLUMN`) on such a feature drops the edges instead; the nodes only they
+  used leave `nodes_gdf` (so new lines can't snap to them) but stay in the before nodes; export
+  needs nothing special (a missing stretch splits the way, like cropping).
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
@@ -147,6 +150,10 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
 - modes.py vs Valhalla: bikes on `highway=pedestrian` need a bicycle tag; `motorroad=yes` closes
   walk/bike; lines open only to buses etc. (`open_to_other_vehicles`) are valid, with a note.
 - GeoPackage / OSMnx routing ignores node barriers and turn restrictions; Valhalla obeys both.
+- Valhalla 3.9 routes only on `highway=*` ways plus `route=ferry|shuttle_train`; NOT on piers,
+  platforms or `area=yes` squares (tested), so OSMnx's "all" filter loses nothing but ferries.
+  Ferries (`osm.is_ferry`, `OSMSource.ferries` / `ferry_nodes`, cropped to the bbox) bypass the
+  edge table and are written verbatim by export; new node ids must start above ferry node ids.
 - OSMnx drops way tags not in `ox.settings.useful_tags_way`; add `nf:custom` before `graph_from_xml`.
 - Unitless `maxspeed` is km/h. UK data usually wants `"50 mph"`.
 - Design: build once with every mode (`network_type="all"`), filter by mode at routing time. Loading

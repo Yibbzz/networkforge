@@ -142,6 +142,25 @@ def grid_elements() -> list[dict]:
     return [*nodes, *ways, restriction]
 
 
+FERRY_ID, FERRY_NODE = 700, 300
+
+
+def grid_with_ferry() -> list[dict]:
+    """
+    grid_elements() plus a foot ferry from node 1 to node 13, by way of
+    a node of its own in the middle of a block. No `highway` tag: it is
+    not a street, but routers sail it.
+    """
+    to_wgs84 = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True)
+    lon, lat = to_wgs84.transform(X0 + 130, Y0 + 70)
+    return [
+        *grid_elements(),
+        {"type": "node", "id": FERRY_NODE, "lon": lon, "lat": lat, "tags": {}},
+        {"type": "way", "id": FERRY_ID, "nodes": [node_id(0, 0), FERRY_NODE, node_id(2, 2)],
+         "tags": {"route": "ferry", "foot": "yes", "motor_vehicle": "no", "name": "Grid Ferry"}},
+    ]
+
+
 def synthetic_graph() -> nx.MultiDiGraph:
     """The grid as OSMnx builds a graph from it (simplify=False)."""
     keep_mode_tags()
