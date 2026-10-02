@@ -243,6 +243,64 @@ def split_at_self_crossings(lines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return lines_gdf.set_geometry(geometries, crs=lines_gdf.crs).explode(index_parts=False)
 
 
+def snap_line_ends_together(
+    lines_gdf: gpd.GeoDataFrame,
+    tolerance: float,
+    every_vertex: bool = False,
+) -> gpd.GeoDataFrame:
+    """
+    Where ends of different (single-part) lines lie within `tolerance`
+    of each other without touching, move them onto one point: the end of
+    the first of those lines. Two lines drawn to meet end to end, but a
+    few centimetres apart, then share a node - instead of each being bent
+    to reach the other's end, which joined them with a doubled-back stub.
+
+    every_vertex: do the same for all vertices, not only the ends (for
+    networks whose lines join wherever they share a vertex).
+    """
+    geometries = lines_gdf.geometry.to_numpy()
+    if len(geometries) < 2:
+        return lines_gdf
+
+    coords, line = shapely.get_coordinates(geometries, return_index=True)
+    if every_vertex:
+        candidates = np.arange(len(coords))
+    else:
+        starts = np.flatnonzero(np.r_[True, line[1:] != line[:-1]])
+        stops = np.flatnonzero(np.r_[line[1:] != line[:-1], True])
+        candidates = np.unique(np.r_[starts, stops])
+
+    points = shapely.points(coords[candidates])
+    a, b = shapely.STRtree(points).query(points, predicate="dwithin", distance=tolerance)
+    a, b = candidates[a], candidates[b]
+    near = (a < b) & (line[a] != line[b]) & (coords[a] != coords[b]).any(axis=1)
+    if not near.any():
+        return lines_gdf
+
+    # Group the points that are near each other; each group takes the
+    # position of its first member.
+    group = np.arange(len(coords))
+
+    def find(i: int) -> int:
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+
+    for i, j in zip(a[near].tolist(), b[near].tolist(), strict=True):
+        first, second = sorted((find(i), find(j)))
+        group[second] = first
+    involved = np.unique(np.r_[a[near], b[near]])
+    target = coords.copy()
+    target[involved] = coords[[find(i) for i in involved.tolist()]]
+
+    new_geometries = geometries.copy()
+    moved = np.unique(line[(target != coords).any(axis=1)])
+    for number in moved.tolist():
+        new_geometries[number] = shapely.linestrings(target[line == number])
+    return lines_gdf.set_geometry(new_geometries, crs=lines_gdf.crs)
+
+
 def snap_line_vertices_to_network(
     lines_gdf: gpd.GeoDataFrame,
     nodes_gdf: gpd.GeoDataFrame,
@@ -333,6 +391,7 @@ def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
 
 def create_points_from_gdf(
     lines_gdf: gpd.GeoDataFrame,
+    crossings: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Create points from intersections and vertices of custom lines, each
@@ -341,6 +400,9 @@ def create_points_from_gdf(
     Only at-grade crossings become points (see crosses_at_grade): a
     custom line crossing a motorway, bridge or tunnel - or tagged as a
     bridge/tunnel itself - passes over/under without a junction.
+
+    crossings=False: vertices only. Lines then join where they share a
+    vertex, and merely crossing is not a junction.
     """
 
     validate_projected_crs(lines_gdf)
@@ -355,7 +417,7 @@ def create_points_from_gdf(
         layer, separated = _layer(line1), is_grade_separated(line1)
         possible_matches_index = list(
             sindex.intersection(line1.geometry.bounds)
-        )
+        ) if crossings else []
 
         possible_matches = lines_gdf.iloc[possible_matches_index]
 
@@ -420,6 +482,7 @@ def split_lines_with_buffered_points(
     lines_gdf: gpd.GeoDataFrame,
     points_gdf: gpd.GeoDataFrame,
     buffer_distance: float = 1.0,
+    own_vertices_only: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Split lines at points.
@@ -429,6 +492,9 @@ def split_lines_with_buffered_points(
     snapped junction. Existing OSM lines are only split at points that
     lie ON them: splitting at a nearby point would bend the existing
     street sideways and can create shortcuts that don't exist.
+
+    own_vertices_only: a custom line is only split at its own vertices
+    (it then joins another line only where both have a vertex).
     """
 
     validate_projected_crs(lines_gdf)
@@ -470,7 +536,13 @@ def split_lines_with_buffered_points(
                 strict=True)
         ]
         on_line[rows[~np.array(may_join, dtype=bool)]] = False
-    pairs = sjoin_lines[~is_osm | on_line]
+    custom = ~is_osm
+    if own_vertices_only and custom.any():
+        rows = np.flatnonzero(custom)
+        vertices = shapely.extract_unique_points(sjoin_lines.geometry.to_numpy()[rows])
+        points = points_gdf.geometry.loc[sjoin_lines["index_right"].iloc[rows]].to_numpy()
+        custom[rows[shapely.distance(vertices, points) > ON_NODE_TOLERANCE]] = False
+    pairs = sjoin_lines[custom | on_line]
 
     split_lines_gdf = _split_at_points(
         lines_gdf,

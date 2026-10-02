@@ -7,6 +7,31 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- **Standalone networks**: `networkforge build --no-osm` (Python:
+  `build_network(None, lines, standalone=True)`) builds a network from the
+  custom lines alone, with no OpenStreetMap, no area and no download.
+  Tags, presets and checks work as usual. `--join-at crossings` (default)
+  joins lines wherever they cross; `--join-at vertices` only where they
+  share a vertex, for data that already has a vertex at every junction.
+  A warning names the features outside the largest connected piece.
+  `networkforge info` reports `standalone` and `join_at`.
+- Line ends that stop within the snap distance of each other without
+  touching now share one node (also when adding lines to OpenStreetMap).
+
+### Changed
+- The package description and README now say what the tool has become:
+  building and editing street networks, not only adding proposed lines.
+- `build` no longer requires `--extent` / `--bbox` on the command line
+  when `--no-osm` is given (it still does otherwise; exit code 2).
+
+### Fixed
+- An area or layer in a world-wide projection such as Web Mercator
+  (EPSG:3857) was measured in that projection, where a metre on the map
+  is not a metre on the ground (79% too long in Scotland): lengths in the
+  GeoPackage and the snap distance were wrong. A local UTM zone is now
+  used unless the CRS is a regional one.
+
 ## [0.9.0] - 2026-10-02
 
 ### Fixed

@@ -21,6 +21,7 @@ Contents:
 [Presets](#presets) ·
 [Attributes](#attributes) ·
 [Changing existing streets](#changing-existing-streets) ·
+[A network of your own lines](#a-network-of-your-own-lines) ·
 [Recipes](#recipes) ·
 [Fixing tag errors](#fixing-tag-errors)
 
@@ -274,10 +275,54 @@ changed street still apply.
 | `remove= is for existing streets` | A feature has `remove` set but no OSM id, so there is nothing to remove. |
 | `change nothing` (warning) | The feature's tags are all the same as OpenStreetMap's. |
 
+## A network of your own lines
+
+If you already have a street network as a line layer (council
+centrelines, a survey, a design for a new town), you can turn it into a
+routable network without OpenStreetMap:
+
+```bash
+networkforge build --no-osm --custom streets.gpkg --out network.osm.pbf --gpkg network.gpkg
+```
+
+```python
+nodes, edges = build_network(None, streets, standalone=True)
+```
+
+There is no area to give (it comes from the data), nothing is
+downloaded, and there is no "before" network. Everything else works as
+when adding to OpenStreetMap: each feature's attributes are its tags, a
+preset can fill the gaps or set them all, and the values are checked.
+Every feature needs a `highway` type, from its own attribute or from a
+preset.
+
+**Where lines join** is the one thing to decide (`--join-at`, or
+`join_at=` in Python):
+
+| | Lines join | Use it when |
+|---|---|---|
+| `crossings` (default) | wherever they cross or touch, unless one is a `bridge`, a `tunnel` or on another `layer` | the lines were drawn without thought for junctions |
+| `vertices` | only where two lines share a vertex; lines that merely cross are not joined | the data already has a vertex at every junction: GIS street centrelines, or data taken from OpenStreetMap, where flyovers cross without a shared point |
+
+In both, points within the snap distance (1 m; `--snap-tolerance`) count
+as the same place, so ends that stop a few centimetres apart still join.
+
+If the result is not one connected network, a warning says how many
+separate pieces there are and names the features outside the largest
+one. These are most often lines that stop short of the street they
+should meet: extend them, or raise the snap distance.
+
+What a line layer can't carry: turn restrictions, and things that live
+on points in OpenStreetMap (traffic signals, bollards, gates). Private
+and closed streets (`access=private`, `access=no`) are kept as they are.
+An `osm_id` attribute is ignored here: there are no existing streets to
+change.
+
 ## Recipes
 
 | You want | Tags |
 |---|---|
+| Turn a street layer into a routable network | `networkforge build --no-osm` ([a network of your own lines](#a-network-of-your-own-lines)) |
 | New 40 mph bypass | `preset="primary_road"`, `network_tags={"maxspeed": "40 mph"}` |
 | Segregated cycle route | `preset="cycleway"` |
 | Shared walking and cycling path | `preset="shared_path"` |

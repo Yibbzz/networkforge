@@ -29,6 +29,17 @@ def test_projected_bbox_keeps_its_crs():
     assert get_analysis_crs(bbox).to_epsg() == 27700
 
 
+@pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:3395", "EPSG:3035"])
+def test_world_or_continent_wide_projection_is_not_used_for_measuring(crs):
+    """
+    Web Mercator (the default of many web maps and QGIS projects)
+    stretches distances by 1/cos(latitude): 79% too long in Edinburgh.
+    Lengths and the snap distance must come from a local CRS instead.
+    """
+    bbox = bbox_around(-3.19, 55.95).to_crs(crs)
+    assert get_analysis_crs(bbox).to_epsg() == 32630
+
+
 def test_bbox_without_crs_is_rejected():
     with pytest.raises(ValueError, match="must have a CRS"):
         get_analysis_crs(gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)]))

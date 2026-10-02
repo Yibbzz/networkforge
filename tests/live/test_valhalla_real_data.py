@@ -20,6 +20,7 @@ import pytest
 from shapely.geometry import LineString, box
 
 from networkforge import build_network, write_gpkg, write_osm
+from networkforge.validation import KNOWN_HIGHWAYS, KNOWN_TAG_KEYS
 
 pytest.importorskip("valhalla", reason="pyvalhalla is not installed (uv sync installs it)")
 
@@ -79,13 +80,16 @@ def points(routers):
     return [routers["before"].node(refs[len(refs) // 2]) for _, refs in chosen]
 
 
-def differing(a, b, tolerance=0.01):
-    """Share of trips whose distance differs by more than `tolerance` (or exists in one only)."""
+def differing(a, b, tolerance=0.01, metres=0.0):
+    """
+    Share of trips whose distance differs by more than `tolerance` and
+    by more than `metres` (or that exist in one matrix only).
+    """
     pairs = [(x, y) for row_a, row_b in zip(a, b, strict=True)
              for x, y in zip(row_a, row_b, strict=True)]
     differ = sum(
         (x is None) != (y is None)
-        or (x is not None and abs(x[0] - y[0]) > tolerance * max(x[0], 1))
+        or (x is not None and abs(x[0] - y[0]) > max(metres, tolerance * max(x[0], 1)))
         for x, y in pairs
     )
     return differ / len(pairs)
@@ -183,3 +187,62 @@ def test_closing_one_street_leaves_the_rest_of_the_file_alone(closed_street):
 
     assert {w: v for w, v in after.ways.items() if w not in changed and w != way} == {
         w: v for w, v in before.ways.items() if w != way}
+
+
+# ---------------------------------------------------------------------
+# A standalone network: real streets given as plain lines
+# ---------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def streets_as_lines(extract, tmp_path_factory):
+    """
+    Monaco's streets as a user might hold them: one line per street with
+    its tags as attributes, and no OpenStreetMap behind it. Built
+    standalone (join_at="vertices": the data has a vertex at every
+    junction, and its many flyovers must not become junctions).
+
+    Returns (Valhalla on that network, Valhalla on the extract reduced
+    to what lines can carry: the same streets and tags, without
+    relations, node tags or ferries).
+    """
+    folder = tmp_path_factory.mktemp("lines")
+    location = {node.id: (node.location.lon, node.location.lat)
+                for node in osmium.FileProcessor(str(extract), osmium.osm.NODE)}
+    rows, geometries = [], []
+    for way in osmium.FileProcessor(str(extract), osmium.osm.WAY):
+        tags = dict(way.tags)
+        if tags.get("highway") in KNOWN_HIGHWAYS and tags.get("area") != "yes":
+            rows.append({"osm_id": way.id,
+                         **{k: v for k, v in tags.items() if k in KNOWN_TAG_KEYS}})
+            geometries.append(LineString([location[n.ref] for n in way.nodes]))
+    lines = gpd.GeoDataFrame(rows, geometry=geometries, crs="EPSG:4326")
+
+    nodes, edges = build_network(None, lines, standalone=True, join_at="vertices")
+    write_osm(nodes, edges, folder / "lines.osm.pbf")
+
+    writer = osmium.SimpleWriter(str(folder / "reduced.osm.pbf"))
+    kept = set(lines["osm_id"])
+    for obj in osmium.FileProcessor(str(extract)):
+        if obj.is_node():
+            writer.add_node(osmium.osm.mutable.Node(id=obj.id, location=obj.location))
+        elif obj.is_way() and obj.id in kept:
+            writer.add_way(osmium.osm.mutable.Way(
+                id=obj.id, nodes=[n.ref for n in obj.nodes],
+                tags={k: v for k, v in dict(obj.tags).items() if k in KNOWN_TAG_KEYS}))
+    writer.close()
+
+    return (Router.from_pbf(folder / "lines.osm.pbf", folder / "lines"),
+            Router.from_pbf(folder / "reduced.osm.pbf", folder / "reduced"))
+
+
+@pytest.mark.parametrize("costing", ["auto", "bicycle", "pedestrian"])
+def test_streets_given_as_lines_route_like_the_same_streets_in_osm(streets_as_lines, points,
+                                                                   costing):
+    from_lines, reduced = streets_as_lines
+    built = from_lines.matrix(points, costing, shortest=True)
+    expected = reduced.matrix(points, costing, shortest=True)
+
+    # Valhalla keeps each edge's length in whole metres, and the two files
+    # cut the streets into edges at the same junctions but number them
+    # differently: a trip can come out a metre or two apart.
+    assert differing(built, expected, tolerance=0.005, metres=3) == 0

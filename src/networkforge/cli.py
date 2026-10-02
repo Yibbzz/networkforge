@@ -57,7 +57,7 @@ from .inputs import (
     drop_reserved_columns,
 )
 from .modes import MODES, usable_modes
-from .network import build_network
+from .network import JOIN_AT, build_network
 from .osm import NETWORK_TYPES
 from .presets import PRESETS, preset_tags
 from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, MODIFIED_COLUMN, REMOVE_COLUMN, REMOVED_ATTR
@@ -82,6 +82,8 @@ log = logging.getLogger("networkforge.cli")
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(_join_negative_bbox(sys.argv[1:] if argv is None else argv))
+    if args.command is cmd_build:
+        _check_build_arguments(parser, args)
     emit = _emitter(args.json)
     _configure_logging(args.verbose, args.quiet, emit if args.json else None)
 
@@ -107,7 +109,7 @@ def cmd_build(args, emit) -> int:
     if not (args.out or args.gpkg or args.baseline_out or args.baseline_gpkg):
         raise InputError("Nothing to write: give --out, --gpkg, --baseline-out or --baseline-gpkg.")
 
-    bbox = _read_extent(args)
+    bbox = None if args.no_osm else _read_extent(args)
     custom = _read_custom(args)
     baseline = bool(args.baseline_out or args.baseline_gpkg)
 
@@ -125,6 +127,8 @@ def cmd_build(args, emit) -> int:
         preset=args.preset,
         overwrite_tags=args.overwrite_tags,
         osm_source=args.osm_source,
+        standalone=args.no_osm,
+        join_at=args.join_at,
         progress=progress,
     )
     nodes, edges = result[:2]
@@ -204,6 +208,8 @@ def cmd_info(args, emit) -> int:
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
         "edit_id_fields": list(EDIT_ID_COLUMNS),
         "remove_field": REMOVE_COLUMN,
+        "standalone": True,
+        "join_at": list(JOIN_AT),
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "highway": sorted(KNOWN_HIGHWAYS),
@@ -238,7 +244,9 @@ def cmd_presets(args, emit) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="networkforge",
-        description="Integrate custom roads, cycleways and paths into OpenStreetMap networks.",
+        description="Build and edit routable street networks: add your own roads, cycleways "
+                    "and paths to OpenStreetMap, change or remove existing streets, or "
+                    "build a network from your own lines alone.",
         epilog="Tagging guide: docs/tagging-guide.md. Large areas: docs/osm-data.md.",
     )
     parser.add_argument("--version", action="version",
@@ -252,9 +260,16 @@ def _parser() -> argparse.ArgumentParser:
 
     build = commands.add_parser("build", parents=[common],
                                 help="build the combined network and write it out",
-                                description="Build the OSM + custom network.")
-    _add_extent(build, required=True)
+                                description="Build the OSM + custom network, or with --no-osm "
+                                            "a network of the custom lines alone.")
+    _add_extent(build, required=False)
     _add_custom(build)
+    build.add_argument("--no-osm", action="store_true",
+                       help="build a network from the custom lines alone, without "
+                            "OpenStreetMap: no area, download or before network")
+    build.add_argument("--join-at", choices=JOIN_AT, default="crossings",
+                       help="with --no-osm, where lines join each other: wherever they "
+                            "cross (default), or only at vertices they share")
     build.add_argument("--osm-source", type=Path, metavar="FILE",
                        help="local OSM extract (.osm.pbf etc.) instead of the Overpass API; "
                             "required for areas over 1,000 km2")
@@ -316,6 +331,23 @@ def _add_custom(parser) -> None:
                         help="blanket tags replace features' own values instead of filling gaps")
     parser.add_argument("--network-type", choices=NETWORK_TYPES, default="all",
                         help="OSM network to download (default all: every mode)")
+
+
+def _check_build_arguments(parser, args) -> None:
+    """build needs an area unless --no-osm, which in turn has no OSM options."""
+    if not args.no_osm:
+        if not (args.extent or args.bbox):
+            parser.error("one of the arguments --extent --bbox is required (or --no-osm)")
+        if args.join_at != "crossings":
+            parser.error("--join-at is for --no-osm networks")
+        return
+    for given, flag in ((args.extent or args.bbox, "--extent / --bbox"),
+                        (args.osm_source, "--osm-source"),
+                        (args.baseline_out, "--baseline-out"),
+                        (args.baseline_gpkg, "--baseline-gpkg")):
+        if given:
+            parser.error(f"{flag} can't be used with --no-osm (there is no OpenStreetMap "
+                         "network or before network)")
 
 
 # ---------------------------------------------------------------- helpers

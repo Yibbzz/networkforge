@@ -84,12 +84,17 @@ def check_bbox(bbox_gdf, local_source: bool = False) -> None:
 
 def clean_custom_data(
     custom_gdf,
-    bbox_gdf: gpd.GeoDataFrame,
+    bbox_gdf: gpd.GeoDataFrame | None,
     strict: bool = True,
+    edits: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Check the custom data and return a cleaned copy: only line
     features with geometry that reach into the bounding box, in 2D.
+
+    bbox_gdf None: there is no box (a standalone network), so nothing
+    is outside it. edits False: an OSM id attribute is not read as
+    "change this existing street" (there are no existing streets).
     """
 
     if not isinstance(custom_gdf, gpd.GeoDataFrame):
@@ -107,17 +112,20 @@ def clean_custom_data(
         )
 
     check_feature_ids(custom_gdf)
-    custom = take_edit_ids(custom_gdf)
+    custom = take_edit_ids(custom_gdf) if edits else custom_gdf
     custom = drop_reserved_columns(custom.copy(), quiet=EDIT_ID_COLUMN in custom.columns)
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty
     not_a_line = ~no_geometry & ~geometry.geom_type.isin(LINE_TYPES)
 
-    bbox_area = bbox_gdf.to_crs(custom.crs).union_all()
     usable = ~no_geometry & ~not_a_line
-    outside = usable & ~geometry.intersects(bbox_area)
-    partly_outside = usable & ~outside & ~geometry.within(bbox_area)
+    if bbox_gdf is None:
+        outside = partly_outside = usable & False
+    else:
+        bbox_area = bbox_gdf.to_crs(custom.crs).union_all()
+        outside = usable & ~geometry.intersects(bbox_area)
+        partly_outside = usable & ~outside & ~geometry.within(bbox_area)
 
     problems, issues = [], []
     types = geometry[not_a_line].geom_type

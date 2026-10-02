@@ -16,7 +16,7 @@ def get_analysis_crs(
 
     bbox_crs = CRS.from_user_input(bbox.crs)
 
-    if bbox_crs.is_projected:
+    if bbox_crs.is_projected and _is_local(bbox_crs):
         return bbox_crs
 
     bbox_wgs84 = bbox.to_crs("EPSG:4326")
@@ -35,6 +35,20 @@ def get_analysis_crs(
     )
 
     return CRS.from_epsg(epsg)
+
+def _is_local(crs: CRS) -> bool:
+    """
+    True for a projected CRS made for one region (a UTM zone, a national
+    grid), where a metre on the map is a metre on the ground. Not for
+    world-wide projections such as Web Mercator (EPSG:3857, the default
+    of many web maps), which stretches distances by 1/cos(latitude):
+    lengths and the snap distance would be wrong by 80% in Scotland.
+    """
+    area = crs.area_of_use
+    if area is None:
+        return True  # a custom CRS: trust it
+    return (area.east - area.west) < 30
+
 
 def convert_to_wgs84_and_add_xy(
     gdf: gpd.GeoDataFrame,

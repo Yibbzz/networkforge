@@ -16,10 +16,11 @@ import numpy as np
 import pandas as pd
 import shapely
 from pyproj import CRS
+from shapely.geometry import box
 
 from .edits import apply_edits, check_edit_tags, is_bidirectional, split_edits
 from .errors import InputError, NetworkIntegrityError
-from .inputs import check_bbox, clean_custom_data
+from .inputs import MAX_LISTED, check_bbox, clean_custom_data
 from .osm import (
     NETWORK_TYPES,
     SOURCE_ATTR,
@@ -28,7 +29,7 @@ from .osm import (
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
-from .tags import EDITS_ATTR, PART_COLUMN, REMOVED_ATTR
+from .tags import EDITS_ATTR, PART_COLUMN, REMOVE_COLUMN, REMOVED_ATTR
 from .topology import (
     ON_NODE_TOLERANCE,
     assign_point_ids_to_lines,
@@ -37,6 +38,7 @@ from .topology import (
     filter_split_lines,
     remove_duplicates_and_combine_nodes,
     snap_crossings_to_network,
+    snap_line_ends_together,
     snap_line_vertices_to_network,
     split_at_self_crossings,
     split_lines_with_buffered_points,
@@ -49,6 +51,7 @@ from .validation import (
     assert_no_u_equals_v,
     check_custom_tags,
     disconnected_custom_edges,
+    network_pieces,
     resolve_custom_tags,
 )
 
@@ -58,6 +61,9 @@ log = logging.getLogger(__name__)
 ProgressCallback = Callable[[int, int, str], None]
 
 TOTAL_STEPS = 13
+
+# Where the lines of a standalone network join each other (join_at=).
+JOIN_AT = ("crossings", "vertices")
 
 
 def combine_custom_lines_with_osm_edges(
@@ -112,18 +118,70 @@ def _warn_about_disconnected_features(
     stranded = edges_gdf[disconnected_custom_edges(edges_gdf)]
     if stranded.empty:
         return
-
-    # Edges don't carry their feature's id: find the custom line each
-    # stranded edge was cut from by its midpoint.
-    midpoints = shapely.line_interpolate_point(stranded.geometry.to_numpy(), 0.5, normalized=True)
-    tree = shapely.STRtree(custom_gdf.geometry.to_numpy())
-    _, line_pos = tree.query_nearest(midpoints, max_distance=snap_tolerance)
-    features = list(dict.fromkeys(custom_gdf.index[np.unique(line_pos)]))
+    features = _features_of(stranded, custom_gdf, snap_tolerance)
 
     log.warning("%d custom feature(s) don't connect to the rest of the network, so a "
                 "router can never reach them (features %s). They are kept in the "
                 "output; extend them to meet a street if they should connect.",
                 len(features), ", ".join(map(str, features)), extra={"features": features})
+
+
+def _features_of(
+    edges: gpd.GeoDataFrame,
+    custom_gdf: gpd.GeoDataFrame,
+    snap_tolerance: float,
+) -> list:
+    """
+    The features (custom_gdf index values) these custom edges were cut
+    from: PART_COLUMN numbers the custom lines in custom_gdf's order.
+    """
+    if PART_COLUMN in edges and edges[PART_COLUMN].notna().all():
+        parts = pd.unique(edges[PART_COLUMN].astype(int))
+        return list(dict.fromkeys(custom_gdf.index[parts]))
+
+    # Edges without the number: match each to the line its midpoint is on.
+    midpoints = shapely.line_interpolate_point(edges.geometry.to_numpy(), 0.5, normalized=True)
+    tree = shapely.STRtree(custom_gdf.geometry.to_numpy())
+    _, line_pos = tree.query_nearest(midpoints, max_distance=snap_tolerance)
+    return list(dict.fromkeys(custom_gdf.index[np.unique(line_pos)]))
+
+
+def _warn_about_separate_pieces(
+    edges_gdf: gpd.GeoDataFrame,
+    custom_gdf: gpd.GeoDataFrame,
+    snap_tolerance: float,
+) -> None:
+    """
+    A standalone network should usually be one connected whole. Warn,
+    naming the features, about lines outside its largest piece: most
+    often lines that stop just short of the street they should meet.
+    """
+    piece = network_pieces(edges_gdf)
+    sizes = piece.value_counts()
+    if len(sizes) <= 1:
+        return
+    outside = edges_gdf[piece != sizes.index[0]]
+    features = _features_of(outside, custom_gdf, snap_tolerance)
+    listed = ", ".join(map(str, features[:MAX_LISTED]))
+    more = f" and {len(features) - MAX_LISTED} more" if len(features) > MAX_LISTED else ""
+    log.warning("The network is in %d separate pieces. %d feature(s) are not joined to "
+                "the largest one, so no route can pass between them and it (features "
+                "%s%s). Lines join where they cross, or end within %s m of each other; "
+                "extend the ones that should meet.", len(sizes), len(features), listed,
+                more, snap_tolerance, extra={"features": features})
+
+
+def _no_network(crs) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Empty OSM nodes and edges, with the columns the pipeline reads."""
+    nodes = gpd.GeoDataFrame(
+        {"y": pd.Series(dtype=float), "x": pd.Series(dtype=float)},
+        geometry=gpd.GeoSeries([], crs=crs), index=pd.Index([], dtype="int64", name="osmid"))
+    edges = gpd.GeoDataFrame(
+        {"u": pd.Series(dtype=float), "v": pd.Series(dtype=float),
+         "key": pd.Series(dtype=float), "osmid": pd.Series(dtype=float),
+         "highway": pd.Series(dtype=object)},
+        geometry=gpd.GeoSeries([], crs=crs))
+    return nodes, edges
 
 
 def build_network(
@@ -138,6 +196,8 @@ def build_network(
     preset: str | None = None,
     overwrite_tags: bool = False,
     osm_source: str | Path | None = None,
+    standalone: bool = False,
+    join_at: str = "crossings",
     progress: ProgressCallback | None = None,
 ) -> tuple[
     gpd.GeoDataFrame,
@@ -152,6 +212,10 @@ def build_network(
     Download the OSM network in `bbox_gdf` and merge the custom lines
     into it, following OSM access and grade-separation rules.
 
+    With standalone=True there is no OSM network: the custom lines are
+    the whole network, joined to each other by the same rules (see
+    "A network of your own lines" in docs/tagging-guide.md).
+
     Tags (see docs/tagging-guide.md):
         Each custom feature's own attributes (highway, maxspeed, ...)
         are its tags. The blanket options add to them:
@@ -162,7 +226,7 @@ def build_network(
                          replaces feature values for every key it sets.
 
     Args:
-        bbox_gdf: area to download; any CRS.
+        bbox_gdf: area to download; any CRS. None with standalone.
         custom_data_gdf: custom LineString/MultiLineString features; any CRS.
         network_type: OSMnx download filter. Keep "all" to route any mode later.
         return_source_osm: also return the untouched OSM nodes and edges
@@ -176,6 +240,17 @@ def build_network(
             extract, to read the existing network from instead of the
             Overpass API. Required for boxes over MAX_OVERPASS_AREA_KM2
             (see docs/osm-data.md).
+        standalone: build from the custom lines alone, without
+            OpenStreetMap. No download, no "before" network, and an OSM id
+            attribute is just an attribute. A warning names features that
+            end up outside the largest connected piece of the network.
+        join_at: (standalone only) where the lines join each other.
+            "crossings" (default): wherever they cross or touch, unless one
+            is a bridge, a tunnel or on another layer - for lines drawn
+            without thought for junctions. "vertices": only where two lines
+            share a vertex; lines that merely cross do not join - for data
+            that already has a vertex at every junction (street centrelines
+            from a GIS, data taken from OpenStreetMap).
         progress: optional callback(step, total_steps, description).
 
     Returns:
@@ -206,21 +281,43 @@ def build_network(
     if not snap_tolerance > 0:
         raise InputError(f"snap_tolerance must be positive, got {snap_tolerance!r}")
 
-    check_bbox(bbox_gdf, local_source=osm_source is not None)
-    custom_data_gdf = clean_custom_data(custom_data_gdf, bbox_gdf, strict=strict)
+    if join_at not in JOIN_AT:
+        raise InputError(f"Unknown join_at {join_at!r}. Choose one of: {', '.join(JOIN_AT)}")
+    if join_at != "crossings" and not standalone:
+        raise InputError("join_at is for standalone networks: lines added to OpenStreetMap "
+                         "join the streets they cross.", guide="a-network-of-your-own-lines")
+    at_vertices = join_at == "vertices"
+
+    if standalone:
+        if osm_source is not None or return_source_osm:
+            raise InputError("A standalone network has no OpenStreetMap data: it can't "
+                             "take an osm_source or return a before network.",
+                             guide="a-network-of-your-own-lines")
+        custom_data_gdf = clean_custom_data(custom_data_gdf, None, strict=strict, edits=False)
+        bbox_gdf = gpd.GeoDataFrame(
+            geometry=[box(*custom_data_gdf.total_bounds)], crs=custom_data_gdf.crs)
+    else:
+        check_bbox(bbox_gdf, local_source=osm_source is not None)
+        custom_data_gdf = clean_custom_data(custom_data_gdf, bbox_gdf, strict=strict)
 
     analysis_crs = get_analysis_crs(bbox_gdf)
     custom_data_gdf = custom_data_gdf.to_crs(analysis_crs)
 
     # Features with an OSM way id change that existing way (edits.py);
     # the rest are new lines. Blanket tags are for new lines only.
-    custom_data_gdf, edits_gdf = split_edits(custom_data_gdf)
+    # In a standalone network every feature is a line of the network.
+    if standalone:
+        edits_gdf = custom_data_gdf.iloc[:0]
+        custom_data_gdf = custom_data_gdf.drop(columns=[REMOVE_COLUMN], errors="ignore")
+    else:
+        custom_data_gdf, edits_gdf = split_edits(custom_data_gdf)
 
     blanket_tags = {**(preset_tags(preset) if preset else {}), **(network_tags or {})}
     if not custom_data_gdf.empty:
         custom_data_gdf = resolve_custom_tags(
             custom_data_gdf, blanket_tags, overwrite=overwrite_tags)
-        check_custom_tags(custom_data_gdf, network_type, strict=strict)
+        check_custom_tags(custom_data_gdf, network_type, strict=strict,
+                          require_usable=not standalone)
     check_edit_tags(edits_gdf, strict=strict)
 
     log.info("New lines: %d | changes to existing streets: %d | analysis CRS: %s | "
@@ -235,7 +332,10 @@ def build_network(
     # 2. Get the existing OSM network
     # =========================================================
 
-    if osm_source is not None:
+    if standalone:
+        step(2, "No OpenStreetMap network (standalone)")
+        nodes_gdf, edges_gdf = _no_network(analysis_crs)
+    elif osm_source is not None:
         step(2, f"Reading OSM network from {Path(osm_source).name}")
         nodes_gdf, edges_gdf = get_osm_data_from_file(
             osm_source,
@@ -300,7 +400,11 @@ def build_network(
     # Custom vertices within snap_tolerance of the OSM network are moved
     # exactly onto it (nearest node, else nearest edge), so the line
     # joins the network itself rather than a point next to it.
-    custom_parts_gdf = split_at_self_crossings(custom_data_gdf.explode(index_parts=False))
+    custom_parts_gdf = custom_data_gdf.explode(index_parts=False)
+    if not at_vertices:
+        custom_parts_gdf = split_at_self_crossings(custom_parts_gdf)
+    custom_parts_gdf = snap_line_ends_together(
+        custom_parts_gdf, snap_tolerance, every_vertex=at_vertices)
     custom_data_gdf = snap_line_vertices_to_network(
         custom_parts_gdf,
         nodes_gdf,
@@ -329,11 +433,12 @@ def build_network(
 
     step(4, "Checking custom lines reach the OSM network")
 
-    validate_user_osm_intersection(
-        edges_gdf,
-        custom_data_gdf,
-        buffer_distance=snap_tolerance,
-    )
+    if not standalone:
+        validate_user_osm_intersection(
+            edges_gdf,
+            custom_data_gdf,
+            buffer_distance=snap_tolerance,
+        )
 
     # =========================================================
     # 5. Find network topology points
@@ -342,7 +447,8 @@ def build_network(
     step(5, "Finding junctions")
 
     custom_points_gdf = create_points_from_gdf(
-        combined_gdf
+        combined_gdf,
+        crossings=not at_vertices,
     )
 
     # Crossings near an OSM node are moved onto it before splitting.
@@ -366,6 +472,7 @@ def build_network(
         combined_gdf,
         custom_points_gdf,
         buffer_distance=snap_tolerance,
+        own_vertices_only=at_vertices,
     )
 
     log.debug("Split lines: %d (%d custom)", len(split_lines_gdf), _count_custom(split_lines_gdf))
@@ -378,7 +485,7 @@ def build_network(
 
     # New ids go above every id in the area's OSM data, including nodes
     # that aren't in nodes_gdf: those of removed streets and of ferries.
-    taken = [int(osm_nodes_gdf.index.max())]
+    taken = [int(osm_nodes_gdf.index.max()) if len(osm_nodes_gdf) else 0]
     if source_data is not None:
         taken += list(source_data.ferry_nodes)
     # Only points ON an existing node become that node. Snapping (steps 3
@@ -481,7 +588,7 @@ def build_network(
             raise
         log.warning("strict=False, continuing anyway: %s", exc)
 
-    _warn_about_disconnected_features(
+    (_warn_about_separate_pieces if standalone else _warn_about_disconnected_features)(
         final_lines_gdf,
         custom_data_gdf.set_axis(custom_feature_ids),
         snap_tolerance,

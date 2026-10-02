@@ -1,8 +1,9 @@
 # NetworkForge
 
-Goal: merge user-supplied custom road/path geometry (e.g. proposed infrastructure) into an
-existing OpenStreetMap network so routing engines (Valhalla/GraphHopper via OSM PBF) and QGIS
-(via GeoPackage) can compare "before" vs "after". Planned: a separate QGIS plugin repo, later a
+Goal: build and edit routable street networks from GIS line layers - add custom road/path
+geometry to an existing OpenStreetMap network, change or remove existing streets, or build a
+network from the user's lines alone (`standalone`) - so routing engines (Valhalla/GraphHopper via
+OSM PBF) and QGIS (via GeoPackage) can route on it and compare "before" vs "after". Planned: a separate QGIS plugin repo, later a
 web app with hosted Valhalla - both use this engine via the CLI/API; no QGIS code here.
 
 Python >= 3.12, managed with `uv`. Run things with `uv run python ...` / `uv run pytest`.
@@ -54,6 +55,12 @@ The package is installed editable by `uv sync` (hatchling build-system), no PYTH
   `remove=yes` (`REMOVE_COLUMN`) on such a feature drops the edges instead; the nodes only they
   used leave `nodes_gdf` (so new lines can't snap to them) but stay in the before nodes; export
   needs nothing special (a missing stretch splits the way, like cropping).
+- Standalone (`build_network(None, lines, standalone=True)`, CLI `--no-osm`): no download, empty
+  OSM tables (`network._no_network`), bbox = the data's extent, OSM ids / `remove` ignored, private
+  streets allowed (`check_custom_tags(require_usable=False)`), node ids from 1, a warning naming
+  features outside the largest piece (`_warn_about_separate_pieces`). `join_at`: "crossings"
+  (default pipeline) or "vertices" (no crossing points, lines split only at their own vertices,
+  all vertices within snap_tolerance clustered) - the latter reproduces OSM-derived data exactly.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
@@ -157,6 +164,10 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   never by distance - both let a path near a tunnel/bridge node weld the tunnel to the street.
 - "A custom line is stranded" = its piece of network has no existing street (not "outside the
   largest piece": the OSM network itself can be several pieces).
+- `snap_line_ends_together` runs before OSM snapping: custom line ends within snap_tolerance of
+  each other move onto one point (else each line bent to the other's end: doubled-back stubs).
+- `projection.get_analysis_crs` only keeps a projected CRS if it is regional (`_is_local`, under
+  30 degrees wide); EPSG:3857 etc. are replaced by the UTM zone - map units there aren't metres.
 - Attribute values: booleans -> yes/no, empty text -> no value (`validation._tag_value`).
 - New way ids start above every way id in the area's source; pieces of cropped ways are numbered
   first, in a fixed order, so they match between the before and after file.

@@ -20,7 +20,7 @@ another file is named.
 
 | Esri | Here | Test |
 |---|---|---|
-| **Sources**: Streets and Walking_Pathways feature classes | OpenStreetMap has both; your lines are added with a `highway` type | `test_a_new_street_is_used_by_every_travel_mode`, `test_a_walking_path_is_used_on_foot_only` |
+| **Sources**: Streets and Walking_Pathways feature classes | OpenStreetMap has both; your lines are added with a `highway` type. Or your own line layers alone, with `--no-osm` | `test_a_new_street_is_used_by_every_travel_mode`, `test_a_walking_path_is_used_on_foot_only` |
 | **Vertical connectivity**: `F_ZLEV`, `T_ZLEV` elevation fields | Lines join where they cross, unless one is a `bridge`, a `tunnel`, a motorway or on another `layer` | `test_a_bridge_or_tunnel_crosses_a_junction_without_joining_it`; `test_joins.py` |
 | **Cost: Miles** (length) | Measured from the geometry | `test_distance_cost_is_the_length_of_the_line` |
 | **Cost: Minutes** (`FT_Minutes`, `TF_Minutes`) | `maxspeed`, or a default for the `highway` class | `test_time_cost_follows_the_speed_limit`, `test_without_a_speed_limit_the_road_class_sets_the_speed` |
@@ -41,6 +41,27 @@ another file is named.
 
 Turn restrictions are not part of that tutorial, but OpenStreetMap has
 them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_after`.
+
+## A network from your own data only
+
+ArcGIS builds a network from any street feature class. `networkforge
+build --no-osm` does the same from a line layer, with no OpenStreetMap
+([how](tagging-guide.md#a-network-of-your-own-lines)). ArcGIS's
+**connectivity policy** is `--join-at`:
+
+| ArcGIS | Here | Test |
+|---|---|---|
+| Any Vertex connectivity | `--join-at vertices`: lines join where they share a vertex | `tests/valhalla/test_standalone.py`: `test_joining_at_vertices_gives_the_same_network_for_clean_data`, `test_flyover_without_a_bridge_tag_only_stays_apart_when_joining_at_vertices` |
+| (no equivalent: ArcGIS never joins lines that only cross) | `--join-at crossings` (default): lines join wherever they cross, unless bridge, tunnel or another layer | `test_routes_like_the_same_network_in_osm`, `test_rules_in_the_attributes_are_obeyed` |
+| End Point connectivity (lines join only at their ends) | not offered; `vertices` is the nearest | |
+| Elevation fields | `bridge`, `tunnel`, `layer` | `tests/integration/test_standalone.py`: `test_bridge_crosses_without_joining` |
+
+On real data: Monaco's streets given as plain lines with their tags as
+attributes route exactly like the same streets in OpenStreetMap
+(`tests/live/test_valhalla_real_data.py`:
+`test_streets_given_as_lines_route_like_the_same_streets_in_osm`). What
+is lost against full OpenStreetMap is what lines can't carry: turn
+restrictions, barriers on nodes, ferries.
 
 ## Changing the existing network
 

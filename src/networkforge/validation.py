@@ -132,6 +132,25 @@ def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]
     return stranded.reindex(edges_gdf.index, fill_value=False), len(sizes)
 
 
+def network_pieces(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
+    """
+    For each edge, a label of the connected piece of network it is in
+    (edges joined through shared nodes, whatever their direction).
+    """
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for u, v in zip(edges_gdf["u"], edges_gdf["v"], strict=True):
+        parent[find(u)] = find(v)
+    return edges_gdf["u"].map(find)
+
+
 def disconnected_custom_edges(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
     Boolean mask over edges_gdf: custom edges (edges_gdf['custom'] ==
@@ -370,6 +389,7 @@ def check_custom_tags(
     custom_gdf: gpd.GeoDataFrame,
     network_type: str,
     strict: bool = True,
+    require_usable: bool = True,
 ) -> None:
     """
     Check every custom feature's (already resolved) tags follow OSM
@@ -378,6 +398,11 @@ def check_custom_tags(
     Logs which modes the features support. Problems raise
     InvalidTagsError when strict, otherwise are logged as warnings.
     Problems name features by the custom data's index.
+
+    require_usable=False: a feature nobody may use (access=private, say)
+    is noted, not a problem. Adding such a line to OpenStreetMap is
+    almost always a mistake; in a whole network of your own, private and
+    closed streets are simply part of the data.
     """
     issues = []  # (feature id or None, message)
     notes = set()
@@ -432,6 +457,9 @@ def check_custom_tags(
                 notes.add("some features are open only to buses or other special "
                           "vehicles: the car / bike / walk columns leave them out, "
                           "routers use them for those vehicles")
+            elif not modes and not require_usable:
+                notes.add("some features are closed to every mode (e.g. access=private "
+                          "or access=no); they are kept as they are")
             elif not modes:
                 issues.append((index, "tags make it unusable by every mode"))
             elif not allows_mode(tags, network_type):
