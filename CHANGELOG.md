@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-05
+
 ### Changed
 - **`--json` edge counts are streets, not edges.** The `done` event's
   `edges`, `custom_edges`, `modified_edges` and `removed_edges` count one
@@ -315,7 +317,8 @@ with Valhalla on the raw data:
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Yibbzz/networkforge/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Yibbzz/networkforge/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Yibbzz/networkforge/compare/v0.7.0...v0.8.0
