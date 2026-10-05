@@ -33,3 +33,9 @@ def build(fake_osm, tmp_path):
         )
         return build_and_export(BBOX, custom, tmp_path, **build_kwargs)
     return _build
+
+
+@pytest.fixture(autouse=True)
+def no_download_retry_waits(monkeypatch):
+    """A failing download is retried after a pause; the tests needn't wait."""
+    monkeypatch.setattr(osm, "DOWNLOAD_RETRY_WAITS", (0, 0))

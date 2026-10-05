@@ -125,3 +125,23 @@ def test_download_failures_become_osm_download_errors(monkeypatch, failure, mess
 
     with pytest.raises(OSMDownloadError, match=message):
         build_network(BBOX, custom)
+
+
+def test_overpass_that_cannot_be_reached_is_tried_again(build, monkeypatch, caplog):
+    """Overpass refuses connections for a while when busy: try again before giving up."""
+    from tests.integration.grid import grid_elements
+
+    attempts = []
+
+    def flaky_download(polygon, network_type):
+        attempts.append(network_type)
+        if len(attempts) < 3:
+            raise requests.ConnectionError("Connection refused")
+        return grid_elements()
+
+    monkeypatch.setattr(osm, "_download_elements", flaky_download)
+    with caplog.at_level(logging.WARNING):
+        result = build([(ROAD_ACROSS, {"highway": "primary"})])
+
+    assert len(attempts) == 3 and len(result.edges) > 0
+    assert caplog.text.count("trying again") == 2

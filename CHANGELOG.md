@@ -7,6 +7,41 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+- **`--json` edge counts are streets, not edges.** The `done` event's
+  `edges`, `custom_edges`, `modified_edges` and `removed_edges` count one
+  per street, as the GeoPackage has rows. They used to count OSMnx's
+  edges, which hold a two-way street as two (45 "edges" for a layer of
+  24 rows).
+- **GeoPackage `oneway` is always OSM text** (`yes`, `no`, `-1`). Existing
+  streets came out as booleans and new or changed lines as text, so a
+  mixed build wrote `True`, `False` and `yes` in one column.
+- Standalone builds no longer mention OpenStreetMap in their progress
+  messages and log ("Checking custom lines reach the OSM network").
+
+### Fixed
+- A line drawn along an existing street joins it at every node it lies
+  on; it used to pass over the street's junctions without joining them.
+- When the Overpass API can't be reached (it refuses connections when
+  busy), the download is tried again after 10 s and 30 s before failing.
+
+### Tests
+- The nightly property test compared Valhalla's distance matrix with
+  NetworkForge's own routing. Valhalla 3.9.0's matrix can disagree with
+  its own route search on the same graph (229 m against 100 m), and its
+  default 5 m node snapping started trips on a nearby dead end; cells
+  that disagree are now measured with route(), locations aren't snapped,
+  and junctions another line passes within 0.5 m of are left out. The
+  cases found are kept as fixed examples.
+- The live city tests checked that each OSM tag was on as many exported
+  ways as downloaded edges, which no longer holds since the export writes
+  OSM ways as they are (v0.6.0); they now check the file holds the
+  downloaded ways and tags exactly.
+- The Overpass-versus-extract test allows up to 1% of rows to differ (a
+  day of OpenStreetMap edits between the two sources).
+- A live test whose Overpass download still fails after the retries is
+  skipped with the reason, not reported as an error.
+
 ## [0.10.0] - 2026-10-02
 
 ### Added

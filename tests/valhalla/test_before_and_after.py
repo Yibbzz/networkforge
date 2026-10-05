@@ -187,13 +187,18 @@ def test_valhalla_and_networkforge_measure_the_same_trips(scenario, tmp_path, wh
     graph = load_graph(str(xml), mode)
     own = dict(nx.all_pairs_dijkstra_path_length(graph, weight="length"))
 
-    valhalla = router.matrix(grid_points(router), costing, shortest=True)
+    def agrees(i, j, length):
+        expected = own.get(GRID_NODES[i], {}).get(GRID_NODES[j], math.inf)
+        return length == pytest.approx(expected, rel=0.002, abs=2)
+
+    # Cells where Valhalla's matrix disagrees are measured again with its
+    # route search (see Router.distances).
+    valhalla = router.distances(grid_points(router), costing, agrees_with=agrees, shortest=True)
     for i, origin in enumerate(GRID_NODES):
         for j, destination in enumerate(GRID_NODES):
             expected = own.get(origin, {}).get(destination, math.inf)
-            cell = valhalla[i][j]
-            found = math.inf if cell is None else cell[0]
-            assert found == pytest.approx(expected, rel=0.002, abs=2), (
+            found = valhalla[i][j]
+            assert agrees(i, j, found), (
                 f"{which} {mode} {origin}->{destination}: "
                 f"Valhalla {found:.0f} m, NetworkForge {expected:.0f} m")
 

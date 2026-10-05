@@ -15,6 +15,8 @@ JSON events (a stable interface: other tools depend on these shapes):
     {"event": "warning", "message": "...", "features": [3, 7]}        # features/fields optional
     {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...,
      "custom_edges": 12, "modified_edges": 3, "removed_edges": 2}
+    (edge counts are streets, one per GeoPackage row: a two-way street is
+    one edge, not one each way)
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
      "issues": [{"feature": 3, "message": "maxspeed='fast' is not a valid OSM speed"}],
      "problems": ["feature 3: maxspeed='fast' is not a valid OSM speed"]}
@@ -49,7 +51,7 @@ from .errors import (
     OSMDownloadError,
     feature_id,
 )
-from .export import GPKG_ANALYSIS_COLUMNS, write_gpkg, write_osm
+from .export import GPKG_ANALYSIS_COLUMNS, reverse_copies, write_gpkg, write_osm
 from .inputs import (
     MAX_OVERPASS_AREA_KM2,
     check_feature_ids,
@@ -147,14 +149,17 @@ def cmd_build(args, emit) -> int:
         write_gpkg(result[2], result[3], args.baseline_gpkg)
         outputs["baseline_gpkg"] = str(args.baseline_gpkg)
 
-    custom_edges = int((edges["custom"] == "yes").sum()) if "custom" in edges else 0
-    modified_edges = (int((edges[MODIFIED_COLUMN] == "yes").sum())
-                      if MODIFIED_COLUMN in edges else 0)
+    # One per street, as in the GeoPackage: OSMnx holds a two-way street
+    # as two edges, one each way.
+    streets = edges[~reverse_copies(edges)]
+    custom_edges = int((streets["custom"] == "yes").sum()) if "custom" in streets else 0
+    modified_edges = (int((streets[MODIFIED_COLUMN] == "yes").sum())
+                      if MODIFIED_COLUMN in streets else 0)
     removed_edges = int(edges.attrs.get(REMOVED_ATTR, 0))
-    emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(edges),
+    emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(streets),
           "custom_edges": custom_edges, "modified_edges": modified_edges,
           "removed_edges": removed_edges},
-         text=f"Done: {len(nodes):,} nodes, {len(edges):,} edges ({custom_edges:,} custom, "
+         text=f"Done: {len(nodes):,} nodes, {len(streets):,} edges ({custom_edges:,} custom, "
               f"{modified_edges:,} changed, {removed_edges:,} removed). "
               f"Wrote {', '.join(outputs.values())}")
     return EXIT_OK

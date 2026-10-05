@@ -320,9 +320,13 @@ def build_network(
                           require_usable=not standalone)
     check_edit_tags(edits_gdf, strict=strict)
 
-    log.info("New lines: %d | changes to existing streets: %d | analysis CRS: %s | "
-             "network type: %s | snap tolerance: %s m", len(custom_data_gdf), len(edits_gdf),
-             analysis_crs.to_string(), network_type, snap_tolerance)
+    if standalone:
+        log.info("Lines: %d | analysis CRS: %s | snap tolerance: %s m | joining at %s",
+                 len(custom_data_gdf), analysis_crs.to_string(), snap_tolerance, join_at)
+    else:
+        log.info("New lines: %d | changes to existing streets: %d | analysis CRS: %s | "
+                 "network type: %s | snap tolerance: %s m", len(custom_data_gdf),
+                 len(edits_gdf), analysis_crs.to_string(), network_type, snap_tolerance)
     if blanket_tags:
         log.info("Blanket tags (%s): %s",
                  "replacing feature values" if overwrite_tags else "filling gaps",
@@ -351,7 +355,8 @@ def build_network(
             network_type=network_type,
         )
 
-    log.info("OSM network: %d nodes, %d edges", len(nodes_gdf), len(edges_gdf))
+    if not standalone:
+        log.info("OSM network: %d nodes, %d edges", len(nodes_gdf), len(edges_gdf))
 
     # OSM as it is (all tags, turn restrictions): export writes the
     # existing network from this. Re-attached to the results at the end.
@@ -395,7 +400,8 @@ def build_network(
     # 3. Combine OSM and custom network
     # =========================================================
 
-    step(3, "Snapping custom lines and combining with the OSM network")
+    step(3, "Joining line ends that nearly meet" if standalone
+         else "Snapping custom lines and combining with the OSM network")
 
     # Custom vertices within snap_tolerance of the OSM network are moved
     # exactly onto it (nearest node, else nearest edge), so the line
@@ -431,7 +437,8 @@ def build_network(
     # 4. Check the custom network reaches the OSM network
     # =========================================================
 
-    step(4, "Checking custom lines reach the OSM network")
+    step(4, "Checking the lines" if standalone
+         else "Checking custom lines reach the OSM network")
 
     if not standalone:
         validate_user_osm_intersection(
@@ -475,13 +482,17 @@ def build_network(
         own_vertices_only=at_vertices,
     )
 
-    log.debug("Split lines: %d (%d custom)", len(split_lines_gdf), _count_custom(split_lines_gdf))
+    if standalone:
+        log.debug("Split lines: %d", len(split_lines_gdf))
+    else:
+        log.debug("Split lines: %d (%d custom)",
+                  len(split_lines_gdf), _count_custom(split_lines_gdf))
 
     # =========================================================
     # 7. Combine OSM nodes and custom nodes
     # =========================================================
 
-    step(7, "Combining OSM and new nodes")
+    step(7, "Numbering junctions" if standalone else "Combining OSM and new nodes")
 
     # New ids go above every id in the area's OSM data, including nodes
     # that aren't in nodes_gdf: those of removed streets and of ferries.
@@ -594,7 +605,11 @@ def build_network(
         snap_tolerance,
     )
 
-    log.info("Network built: %d nodes, %d edges (%d custom)",
-             len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))
+    if standalone:
+        log.info("Network built: %d nodes, %d edges",
+                 len(combined_points_gdf), len(final_lines_gdf))
+    else:
+        log.info("Network built: %d nodes, %d edges (%d custom)",
+                 len(combined_points_gdf), len(final_lines_gdf), _count_custom(final_lines_gdf))
 
     return finish(combined_points_gdf, final_lines_gdf)

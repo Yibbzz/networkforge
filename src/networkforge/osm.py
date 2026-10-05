@@ -17,6 +17,7 @@ existing network from the source, so routers get OSM as it is.
 
 import logging
 import os
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,7 +216,7 @@ def get_osm_data_from_bbox(
     polygon_buffered = _buffered(polygon, bbox)
 
     try:
-        elements = _download_elements(polygon_buffered, network_type)
+        elements = _download_with_retries(polygon_buffered, network_type)
         return _network_from_elements(
             elements, polygon, polygon_buffered, network_type, analysis_crs)
     except (InsufficientResponseError, ValueError) as exc:
@@ -229,6 +230,25 @@ def get_osm_data_from_bbox(
             "Check your internet connection, or try again later - Overpass "
             "rate-limits heavy use."
         ) from exc
+
+
+# Seconds to wait before each new attempt when Overpass can't be reached
+# (it refuses connections for a while when busy).
+DOWNLOAD_RETRY_WAITS = (10, 30)
+
+
+def _download_with_retries(polygon, network_type: str) -> list[dict]:
+    """_download_elements, tried again after a pause if Overpass can't be reached."""
+    for wait in (*DOWNLOAD_RETRY_WAITS, None):
+        try:
+            return _download_elements(polygon, network_type)
+        except requests.ConnectionError as exc:
+            if wait is None:
+                raise
+            log.warning("Couldn't reach the Overpass API (%s); trying again in %d s.",
+                        type(exc).__name__, wait)
+            time.sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _download_elements(polygon, network_type: str) -> list[dict]:

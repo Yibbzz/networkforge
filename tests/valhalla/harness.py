@@ -13,6 +13,7 @@ bicycle, pedestrian, ...; keyword arguments are that costing's options
 """
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,29 @@ class Router:
             for row in result["sources_to_targets"]
         ]
 
+    def distances(self, points: list[LonLat], costing: str, agrees_with=None,
+                  **options) -> list[list[float]]:
+        """
+        Shortest-trip lengths (m; inf for no route) between every pair of
+        points: from the matrix, with any cell that disagrees with
+        `agrees_with(i, j, length)` measured again with route().
+
+        Valhalla's matrix is not always exact: in 3.9.0 it can return a
+        longer trip than its own route search finds on the same graph
+        (tests/valhalla/test_random_lines.py has a case: 229 m against
+        100 m). route() is the search a trip actually gets.
+        """
+        matrix = self.matrix(points, costing, **options)
+        lengths = [[math.inf if cell is None else cell[0] for cell in row] for row in matrix]
+        if agrees_with is None:
+            return lengths
+        for i, row in enumerate(lengths):
+            for j, length in enumerate(row):
+                if i != j and not agrees_with(i, j, length):
+                    route = self.route(points[i], points[j], costing, **options)
+                    row[j] = math.inf if route is None else route.length_m
+        return lengths
+
     # ------------------------------------------------------------ inspecting
 
     def edges(self, way_id: int) -> list[dict]:
@@ -189,7 +213,8 @@ class Router:
 
 def _location(point: LonLat) -> dict:
     # radius 0 / reachability 0: use the nearest edge, even on a tiny
-    # network where nothing is reachable from many nodes.
+    # network where nothing is reachable from many nodes. Valhalla's own
+    # node snapping (5 m) is left as users get it.
     return {"lon": point[0], "lat": point[1], "minimum_reachability": 0, "radius": 0}
 
 

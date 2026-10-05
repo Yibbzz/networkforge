@@ -148,6 +148,11 @@ Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes,
 Keep it in sync with presets.py/validation.py when tags or messages change.
 
 ## Gotchas
+- Overpass downloads retry on connection errors (`osm.DOWNLOAD_RETRY_WAITS`, zeroed in
+  tests/integration/conftest.py); tests/live/conftest.py turns a final OSMDownloadError into a skip.
+- Valhalla 3.9 quirks the tests work around: the matrix can disagree with route() on the same graph
+  (`Router.distances(agrees_with=...)` re-measures with route()); locations snap onto a node up to
+  5 m away (test_random_lines skips such ambiguous junctions).
 - Overpass path makes two requests: OSMnx's own ways+nodes query, then relations (`rel(bw.w)`) for
   restrictions/routes. `overpass-api.de` sometimes refuses connections from this container.
 - A piece left without two end nodes after splitting (zero-length offcut where a line is cut at

@@ -4,6 +4,7 @@ import json
 
 import geopandas as gpd
 import osmium
+import pandas as pd
 import pyogrio
 import pytest
 from shapely.geometry import LineString
@@ -112,3 +113,55 @@ def test_disconnected_feature_is_a_warning_event_not_a_failure(fake_osm, tmp_pat
     warnings = [e for e in log if e["event"] == "warning"]
     assert [w["features"] for w in warnings if "don't connect" in w["message"]] == [["island"]]
     assert log[-1]["event"] == "done"
+
+
+def test_done_event_counts_match_the_geopackage(fake_osm, tmp_path, capsys):
+    """
+    Edges are counted per street, as GeoPackage rows: OSMnx holds a
+    two-way street as two edges, which made the counts nearly double.
+    """
+    BBOX.to_file(tmp_path / "extent.gpkg")
+    row_1 = [(500_100.0, 6_200_100.0), (500_200.0, 6_200_100.0)]  # Row 1 Street, nodes 7-8
+    gpd.GeoDataFrame(
+        {"osm_id": [None, 2, 2], "highway": ["primary", None, None],
+         "oneway": [None, "yes", None], "remove": [None, None, "yes"]},
+        geometry=[LineString(ROAD_ACROSS), LineString(row_1),
+                  LineString([(500_300.0, 6_200_100.0), (500_400.0, 6_200_100.0)])],
+        crs=UTM,
+    ).to_file(tmp_path / "custom.gpkg")
+
+    code = main(["build", "--extent", str(tmp_path / "extent.gpkg"),
+                 "--custom", str(tmp_path / "custom.gpkg"),
+                 "--gpkg", str(tmp_path / "after.gpkg"),
+                 "--baseline-gpkg", str(tmp_path / "before.gpkg"), "--json"])
+    done = events(capsys)[-1]
+    after = gpd.read_file(tmp_path / "after.gpkg", layer="edges")
+
+    assert code == EXIT_OK
+    assert done["edges"] == len(after)
+    assert done["custom_edges"] == (after["custom"] == "yes").sum() > 0
+    assert done["modified_edges"] == (after["modified"] == "yes").sum() == 1
+    assert done["removed_edges"] == 1
+
+
+def test_oneway_is_osm_text_in_every_geopackage_row(fake_osm, tmp_path, capsys):
+    """Not a mix of booleans and text when new and changed lines join OSM streets."""
+    BBOX.to_file(tmp_path / "extent.gpkg")
+    gpd.GeoDataFrame(
+        {"osm_id": [None, 2], "highway": ["primary", None], "oneway": ["-1", "yes"]},
+        geometry=[LineString(ROAD_ACROSS),
+                  LineString([(500_100.0, 6_200_100.0), (500_200.0, 6_200_100.0)])],
+        crs=UTM,
+    ).to_file(tmp_path / "custom.gpkg")
+    main(["build", "--extent", str(tmp_path / "extent.gpkg"),
+          "--custom", str(tmp_path / "custom.gpkg"), "--gpkg", str(tmp_path / "after.gpkg"),
+          "--baseline-gpkg", str(tmp_path / "before.gpkg")])
+
+    for name in ("before", "after"):
+        layer = gpd.read_file(tmp_path / f"{name}.gpkg", layer="edges")
+        assert not pd.api.types.is_bool_dtype(layer["oneway"])
+        assert set(layer["oneway"]) <= {"yes", "no", "-1"}, set(layer["oneway"])
+    after = gpd.read_file(tmp_path / "after.gpkg", layer="edges")
+    assert set(after.loc[after.custom == "yes", "oneway"]) == {"-1"}
+    assert set(after.loc[after.modified == "yes", "oneway"]) == {"yes"}
+    assert "no" in set(after.loc[after.custom != "yes", "oneway"])

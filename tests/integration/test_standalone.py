@@ -303,6 +303,20 @@ def test_cli_no_osm(custom_file, capsys):
     assert [e["step"] for e in events if e["event"] == "progress"][:2] == [1, 2]
 
 
+def test_progress_and_log_say_nothing_about_openstreetmap(custom_file, capsys):
+    """There is no OSM in a standalone build, so the messages shouldn't mention it."""
+    main(["build", "--no-osm", "--custom", str(custom_file / "lines.gpkg"),
+          "--preset", "residential_street", "--out", str(custom_file / "n.osm.pbf"),
+          "--json", "-v"])
+    captured = capsys.readouterr()
+    progress = [json.loads(line)["message"] for line in captured.out.splitlines()
+                if json.loads(line)["event"] == "progress"]
+
+    assert len(progress) == 13
+    assert not [m for m in progress if "OSM" in m and "No OpenStreetMap" not in m], progress
+    assert "OSM network:" not in captured.err and "custom)" not in captured.err
+
+
 @pytest.mark.parametrize("extra, message", [
     (["--bbox", "1,2,3,4"], "--extent / --bbox can't be used with --no-osm"),
     (["--osm-source", "x.osm.pbf"], "--osm-source can't be used with --no-osm"),

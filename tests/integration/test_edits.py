@@ -426,7 +426,7 @@ def test_one_block_removed(build, export):
 
     assert edges_between(result.edges, 7, 8).empty
     assert len(result.edges) == len(result.osm_edges) - 2  # both directions
-    assert result.edges.attrs[REMOVED_ATTR] == 2
+    assert result.edges.attrs[REMOVED_ATTR] == 1  # one street (two edges, one each way)
 
     # The file: the street's two remaining parts, nothing between 7 and 8.
     assert sorted(refs for refs, tags in after.values()
@@ -525,7 +525,7 @@ def test_cli_reports_removed_edges(fake_osm, files, capsys):
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
 
     assert code == EXIT_OK
-    assert (done["custom_edges"], done["modified_edges"], done["removed_edges"]) == (0, 0, 2)
+    assert (done["custom_edges"], done["modified_edges"], done["removed_edges"]) == (0, 0, 1)
     before = gpd.read_file(files / "before.gpkg", layer="edges")
     after = gpd.read_file(files / "after.gpkg", layer="edges")
     assert len(before) - len(after) == 1  # one row per street in the GeoPackage

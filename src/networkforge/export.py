@@ -187,9 +187,13 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
 
     oneway = edges["oneway"] if "oneway" in edges else pd.Series(None, index=edges.index)
     car_direction = oneway.map(_direction)
-    if "reversed" in edges:
-        reverse_copy = (edges["reversed"] == True) & (car_direction == "both")  # noqa: E712
-        edges, car_direction = edges[~reverse_copy], car_direction[~reverse_copy]
+    reverse_copy = reverse_copies(edges)
+    edges, car_direction = edges[~reverse_copy], car_direction[~reverse_copy]
+    if "oneway" in edges:
+        # OSM text throughout: OSMnx stores yes / no as True / False on
+        # existing streets, while new and changed lines carry the tag text
+        # - mixed, the GeoPackage got True, False and yes in one column.
+        edges["oneway"] = edges["oneway"].map(_oneway_text)
 
     nodes = nodes_gdf.geometry
     edges = edges.set_geometry(
@@ -233,6 +237,27 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
 
     edges = edges.drop(columns=[c for c in INTERNAL_COLUMNS if c in edges.columns])
     return pd.concat([edges, analysis], axis=1).reset_index(drop=True)
+
+
+def reverse_copies(edges: pd.DataFrame) -> pd.Series:
+    """
+    The rows that are OSMnx's second copy of a two-way street (the same
+    street, drawn the other way). Without them there is one row per
+    street, as in the GeoPackage and in the counts the CLI reports.
+    """
+    if "reversed" not in edges:
+        return pd.Series(False, index=edges.index)
+    oneway = edges["oneway"] if "oneway" in edges else pd.Series(None, index=edges.index)
+    return (edges["reversed"] == True) & (oneway.map(_direction) == "both")  # noqa: E712
+
+
+def _oneway_text(value):
+    """An oneway value as OSM text (OSMnx's True / False become yes / no)."""
+    if isinstance(value, bool | np.bool_):
+        return "yes" if value else "no"
+    if value in ("True", "False"):
+        return "yes" if value == "True" else "no"
+    return value
 
 
 def _direction(oneway) -> str:

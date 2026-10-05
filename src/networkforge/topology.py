@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import shapely
 from pyproj import CRS
-from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
+from shapely.geometry import LineString, MultiLineString, Point
 
 from .errors import InputError, NetworkIntegrityError, NoIntersectionError
 
@@ -431,13 +431,11 @@ def create_points_from_gdf(
                     line2.geometry
                 )
 
-                if isinstance(intersection, Point):
-                    crossings = [intersection]
-                elif isinstance(intersection, MultiPoint):
-                    crossings = list(intersection.geoms)
-                else:
-                    crossings = []
-                records += [(p.x, p.y, False, separated, (layer,)) for p in crossings]
+                # Where the lines overlap (a line drawn along a street) the
+                # overlap's vertices are junctions too: the street's nodes
+                # along it, and where the two part.
+                shared = shapely.get_coordinates(intersection)
+                records += [(x, y, False, separated, (layer,)) for x, y in shared]
 
         parts = (line1.geometry.geoms if isinstance(line1.geometry, MultiLineString)
                  else [line1.geometry])

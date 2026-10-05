@@ -41,6 +41,7 @@ import pandas as pd
 import shapely
 
 from .errors import InputError, InvalidTagsError
+from .export import reverse_copies
 from .osm import OSMSource
 from .tags import (
     EDIT_COLUMN,
@@ -202,7 +203,7 @@ def apply_edits(
     MODIFIED_COLUMN="yes" and EDIT_COLUMN=n; changes[n] holds the tags
     edit n sets on its stretch of the way, as OSM tags of that way
     (oneway relative to the way's own direction). `removed` is the
-    number of edges taken out.
+    number of streets (GeoPackage rows) taken out.
 
     edits_gdf: features with EDIT_ID_COLUMN, in the edges' CRS.
     bidirectional: the network type holds every way in both directions
@@ -298,7 +299,8 @@ def apply_edits(
             log.info("Feature %s removes %d edge(s) of OSM way %d", features[number],
                      len(rows), int(edges.at[rows[0], "osmid"]))
             drop.append(rows)
-            removed += len(rows)
+            # Counted per street, as the GeoPackage has them.
+            removed += int((~reverse_copies(edges.loc[rows])).sum())
             continue
         changes[number] = change
         log.info("Feature %s changes %d edge(s) of OSM way %d: %s", features[number], len(rows),

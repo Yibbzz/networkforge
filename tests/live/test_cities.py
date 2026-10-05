@@ -34,7 +34,7 @@ from shapely.geometry import LineString, Point, box
 
 from networkforge.export import way_tag_columns
 from networkforge.modes import usable_modes
-from networkforge.tags import NODE_TAGS
+from networkforge.osm import SOURCE_ATTR
 from networkforge.validation import assert_all_custom_edges_are_connected
 from tests.helpers import (
     ROUTING_MODES,
@@ -149,26 +149,45 @@ def test_export_is_valid(case):
     assert_valid_osm_xml(case.build.custom_path)
 
 
-def test_routing_tags_survive_export(case):
-    """Every way and node tag export should write is written, as downloaded."""
-    way_tags, node_tags = [], []
+def test_osm_data_is_written_as_downloaded(case):
+    """
+    The before file holds OpenStreetMap as downloaded: each way with its
+    id and every one of its tags, each tagged node with its tags. And
+    every tag in the edge table (the GeoPackage's columns) is on the way
+    the edge belongs to.
+    """
+    source = case.build.osm_edges.attrs[SOURCE_ATTR]
+    ways, nodes = {}, {}
     for obj in osmium.FileProcessor(str(case.build.baseline_path)):
-        (node_tags if obj.is_node() else way_tags).append(dict(obj.tags))
+        if obj.is_way():
+            ways[obj.id] = ([n.ref for n in obj.nodes], dict(obj.tags))
+        elif obj.is_node():
+            nodes[obj.id] = dict(obj.tags)
 
-    checks = [
-        ("edges", case.build.osm_edges, way_tags,
-         [key for column, key in way_tag_columns().items() if column != "custom"]),
-        ("nodes", case.build.osm_nodes, node_tags, NODE_TAGS),
-    ]
-    for label, downloaded_gdf, exported, keys in checks:
-        for key in keys:
-            downloaded = (
-                int(downloaded_gdf[key].notna().sum()) if key in downloaded_gdf.columns else 0
-            )
-            written = sum(key in tags for tags in exported)
-            assert written == downloaded, (
-                f"{case.label}: {key} on {downloaded} downloaded {label} but {written} exported"
-            )
+    kept = [way for way in ways if way in source.ways or way in source.ferries]
+    assert len(kept) > 100, f"{case.label}: only {len(kept)} OSM ways in the file"
+    for way in kept:
+        expected = (source.ways.get(way) or source.ferries[way])[1]
+        assert ways[way][1] == expected, f"{case.label}: way {way} tags differ"
+    for node, tags in nodes.items():
+        assert tags == source.node_tags.get(node, {}), f"{case.label}: node {node} tags differ"
+
+    edges = case.build.osm_edges
+    columns = [(column, key) for column, key in way_tag_columns().items()
+               if column in edges.columns and column not in ("custom", "oneway")]
+    checked = 0
+    for row in edges.itertuples(index=False):
+        way = ways.get(int(row.osmid))
+        if way is None or row.u not in way[0] or row.v not in way[0]:
+            continue  # a further piece of a cropped way, under a new id
+        for column, key in columns:
+            value = getattr(row, column, None) if column.isidentifier() else None
+            if isinstance(value, str):
+                assert way[1].get(key) == value, (
+                    f"{case.label}: edge {row.u}-{row.v} has {key}={value!r}, "
+                    f"way {row.osmid} {way[1].get(key)!r}")
+                checked += 1
+    assert checked > 100
 
 
 @pytest.mark.parametrize("mode", ROUTING_MODES)

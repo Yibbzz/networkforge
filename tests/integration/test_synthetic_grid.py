@@ -201,6 +201,17 @@ def test_street_is_not_joined_to_a_tunnel_node_just_beneath_it(build, monkeypatc
     assert len(crossing) == 1 and not crossing & set(TUNNEL_NODES)
 
 
+def test_line_drawn_along_a_street_joins_every_node_it_passes(build):
+    """
+    Drawn on top of Row 0 Street from node 1 to node 3, with no vertex at
+    node 2: it is joined at node 2 as well, not laid over it.
+    """
+    edges = build([([(X0, Y0), (X0 + 200, Y0)], ROAD_TAGS)]).edges
+    custom = edges[edges["custom"] == "yes"]
+    assert sorted(map(sorted, zip(custom.u, custom.v, strict=True))) == [
+        [node_id(0, 0), node_id(0, 1)], [node_id(0, 1), node_id(0, 2)]]
+
+
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
     edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
 
