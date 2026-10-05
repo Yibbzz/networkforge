@@ -165,3 +165,36 @@ def test_reserved_attribute_names_are_set_aside(caplog):
     assert {"length", "key"}.isdisjoint(cleaned.columns)
     assert "highway" in cleaned.columns
     assert "Ignoring custom attribute(s) key, length" in caplog.text
+
+
+def test_attribute_names_in_other_letter_case_are_read_as_tags():
+    """ArcGIS and Shapefile layers often have HIGHWAY, MaxSpeed, OSM_ID."""
+    from networkforge.inputs import match_attribute_names
+
+    gdf = gpd.GeoDataFrame({"HIGHWAY": ["primary"], "MaxSpeed": ["30 mph"], "OSM_ID": [5],
+                            "Notes": ["x"]}, geometry=[LineString([(0, 0), (1, 1)])])
+    assert list(match_attribute_names(gdf).columns) == [
+        "highway", "maxspeed", "osm_id", "Notes", "geometry"]
+
+    both = gpd.GeoDataFrame({"highway": ["primary"], "HIGHWAY": ["footway"]},
+                            geometry=[LineString([(0, 0), (1, 1)])])
+    assert list(match_attribute_names(both).columns) == ["highway", "HIGHWAY", "geometry"]
+
+
+def test_coordinates_that_are_not_numbers_are_refused_not_a_crash():
+    gdf = gpd.GeoDataFrame({"highway": ["primary", "primary"]},
+                           geometry=[LineString([(0, 0), (float("nan"), 1), (2, 2)]),
+                                     LineString([(0, 0), (1, 1)])], crs="EPSG:4326")
+    bbox = gpd.GeoDataFrame(geometry=[box(-1, -1, 3, 3)], crs="EPSG:4326")
+    with pytest.raises(InputError, match="feature 0: has coordinates that aren't numbers"):
+        clean_custom_data(gdf, bbox)
+    assert len(clean_custom_data(gdf, bbox, strict=False)) == 1
+
+
+def test_everything_outside_the_box_suggests_checking_the_crs():
+    swapped = gpd.GeoDataFrame({"highway": ["primary"]},
+                               geometry=[LineString([(43.73, 7.42), (43.74, 7.43)])],
+                               crs="EPSG:4326")
+    bbox = gpd.GeoDataFrame(geometry=[box(7.41, 43.72, 7.44, 43.75)], crs="EPSG:4326")
+    with pytest.raises(InputError, match="aren't the wrong way round"):
+        clean_custom_data(swapped, bbox)

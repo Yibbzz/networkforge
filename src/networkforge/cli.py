@@ -57,6 +57,7 @@ from .inputs import (
     check_feature_ids,
     clean_custom_data,
     drop_reserved_columns,
+    match_attribute_names,
 )
 from .modes import MODES, usable_modes
 from .network import JOIN_AT, build_network
@@ -171,7 +172,7 @@ def cmd_check(args, emit) -> int:
         custom = clean_custom_data(custom, _read_extent(args), strict=True)
     else:
         check_feature_ids(custom)
-        custom = take_edit_ids(custom)
+        custom = take_edit_ids(match_attribute_names(custom))
         custom = drop_reserved_columns(custom, quiet=EDIT_ID_COLUMN in custom.columns)
 
     # Changes to existing streets are checked for valid values only: which

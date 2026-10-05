@@ -143,3 +143,16 @@ def test_routing_on_the_gpkg_matches_the_engine(result, edges, mode):
             else:
                 assert actual == pytest.approx(expected, rel=5e-3), f"{mode} {a}->{b}"
 
+
+
+def test_other_attributes_reach_the_geopackage_with_their_type(build, tmp_path):
+    """A surveyed travel time or a score stays a number, usable as a cost in QGIS."""
+    result = build([(ROAD_ACROSS, {**ROAD_TAGS, "survey_minutes": 1.5, "score": 7,
+                                   "note": "proposed"})])
+    write_gpkg(result.nodes, result.edges, tmp_path / "network.gpkg")
+    layer = gpd.read_file(tmp_path / "network.gpkg", layer="edges")
+    custom = layer[layer.custom == "yes"]
+
+    assert set(custom.survey_minutes) == {1.5} and set(custom.score) == {7}
+    assert set(custom.note) == {"proposed"}
+    assert set(custom.maxspeed) == {"30 mph"}  # tags are OSM text

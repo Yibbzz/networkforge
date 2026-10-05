@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import shapely
 from pyproj import CRS
-from shapely.geometry import LineString, MultiLineString, Point
 
 from .errors import InputError, NetworkIntegrityError, NoIntersectionError
 
@@ -50,6 +49,24 @@ def is_grade_separated(tags) -> bool:
         or _tag_present(tags.get("bridge"))
         or _tag_present(tags.get("tunnel"))
     )
+
+
+def _separated_mask(gdf: gpd.GeoDataFrame) -> np.ndarray:
+    """is_grade_separated for every row, at once."""
+    separated = np.zeros(len(gdf), dtype=bool)
+    if "highway" in gdf:
+        separated |= gdf["highway"].astype(str).isin(GRADE_SEPARATED_HIGHWAYS).to_numpy()
+    for key in ("bridge", "tunnel"):
+        if key in gdf:
+            separated |= gdf[key].map(_tag_present).to_numpy(dtype=bool)
+    return separated
+
+
+def _layers(gdf: gpd.GeoDataFrame) -> np.ndarray:
+    """_layer for every row, at once."""
+    if "layer" not in gdf:
+        return np.zeros(len(gdf), dtype=int)
+    return pd.to_numeric(gdf["layer"], errors="coerce").fillna(0).to_numpy().astype(int)
 
 
 def crosses_at_grade(tags_a, tags_b) -> bool:
@@ -321,18 +338,13 @@ def snap_line_vertices_to_network(
     feature_ids = lines_gdf.index  # for messages; work positionally below
     lines = lines_gdf.reset_index(drop=True)
 
-    line_numbers, vertices, is_end, line_separated = [], [], [], []
-    for number, (line, (_, row)) in enumerate(zip(lines.geometry, lines.iterrows(), strict=True)):
-        coords = list(line.coords)
-        for position, coord in enumerate(coords):
-            line_numbers.append(number)
-            vertices.append(Point(coord))
-            is_end.append(position in (0, len(coords) - 1))
-            line_separated.append(is_grade_separated(row))
-
+    # Every vertex, numbered by its line (vectorised: no loop over lines).
+    coords, line = shapely.get_coordinates(lines.geometry.to_numpy(), return_index=True)
+    new_line = np.r_[True, line[1:] != line[:-1]]
+    is_end = new_line | np.r_[line[1:] != line[:-1], True]
     points = gpd.GeoDataFrame(
-        {"line": line_numbers, "is_end": is_end, "separated": line_separated},
-        geometry=vertices,
+        {"line": line, "is_end": is_end, "separated": _separated_mask(lines)[line]},
+        geometry=shapely.points(coords),
         crs=lines.crs,
     )
 
@@ -347,13 +359,16 @@ def snap_line_vertices_to_network(
         points[middles], joinable_nodes, joinable_edges, tolerance
     ).geometry.values
 
-    new_geometries = []
-    for number in range(len(lines)):
-        coords = []
-        for point in points.geometry[points["line"] == number]:
-            if not coords or coords[-1] != (point.x, point.y):
-                coords.append((point.x, point.y))
-        new_geometries.append(LineString(coords) if len(coords) >= 2 else None)
+    # Rebuild the lines without vertices repeated by snapping.
+    xy = shapely.get_coordinates(points.geometry.to_numpy())
+    keep = new_line | np.r_[False, (xy[1:] != xy[:-1]).any(axis=1)]
+    long_enough = np.bincount(line[keep], minlength=len(lines)) >= 2
+    keep &= long_enough[line]
+    new_geometries = np.full(len(lines), None, dtype=object)
+    if keep.any():
+        # linestrings() wants indices without gaps (dropped lines leave some).
+        kept_lines, compact = np.unique(line[keep], return_inverse=True)
+        new_geometries[kept_lines] = shapely.linestrings(xy[keep], indices=compact)
 
     lines["geometry"] = new_geometries
     collapsed = lines.geometry.isna()
@@ -374,14 +389,18 @@ POINT_COLUMNS = ["is_end", "separated", "layers"]
 
 
 def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
-    """One point per place, from rows of x, y and POINT_COLUMNS."""
+    """
+    One point per place, from rows of x, y, is_end, separated and layer
+    (one layer per row; a place's `layers` are all its rows' layers).
+    """
     if records.empty:
         return gpd.GeoDataFrame({column: [] for column in POINT_COLUMNS}, geometry=[], crs=crs)
-    merged = records.groupby(["x", "y"], sort=False).agg(
-        is_end=("is_end", "any"),
-        separated=("separated", "all"),
-        layers=("layers", lambda values: tuple(sorted({layer for v in values for layer in v}))),
-    ).reset_index()
+    groups = records.groupby(["x", "y"], sort=False)
+    merged = groups.agg(is_end=("is_end", "any"), separated=("separated", "all"))
+    layers = (records.drop_duplicates(["x", "y", "layer"]).sort_values("layer", kind="stable")
+              .groupby(["x", "y"], sort=False)["layer"].agg(tuple))
+    merged["layers"] = layers.reindex(merged.index)
+    merged = merged.reset_index()
     return gpd.GeoDataFrame(
         merged[POINT_COLUMNS],
         geometry=shapely.points(merged["x"].to_numpy(), merged["y"].to_numpy()),
@@ -407,45 +426,43 @@ def create_points_from_gdf(
 
     validate_projected_crs(lines_gdf)
 
-    records = []  # (x, y, is_end, separated, layers)
+    geometries = lines_gdf.geometry.to_numpy()
+    separated, layers = _separated_mask(lines_gdf), _layers(lines_gdf)
+    custom = np.flatnonzero(lines_gdf["u"].isna().to_numpy())
+    frames = []
 
-    sindex = lines_gdf.sindex
+    if crossings and len(custom):
+        # Every (custom line, other line) pair that touches, at grade.
+        hit, other = shapely.STRtree(geometries).query(geometries[custom], predicate="intersects")
+        line = custom[hit]
+        at_grade = ((line != other) & ~separated[line] & ~separated[other]
+                    & (layers[line] == layers[other]))
+        line, other = line[at_grade], other[at_grade]
+        # Where the lines overlap (a line drawn along a street) the
+        # overlap's vertices are junctions too: the street's nodes along
+        # it, and where the two part.
+        shared, pair = shapely.get_coordinates(
+            shapely.intersection(geometries[line], geometries[other]), return_index=True)
+        frames.append(pd.DataFrame({
+            "x": shared[:, 0], "y": shared[:, 1], "is_end": False,
+            "separated": separated[line][pair], "layer": layers[line][pair],
+        }))
 
-    lines_with_nan = lines_gdf[lines_gdf["u"].isna()]
+    if len(custom):
+        # Every vertex of every custom line part; part ends are line ends.
+        parts, part_of = shapely.get_parts(geometries[custom], return_index=True)
+        coords, part = shapely.get_coordinates(parts, return_index=True)
+        first = np.r_[True, part[1:] != part[:-1]]
+        last = np.r_[part[1:] != part[:-1], True]
+        line = custom[part_of[part]]
+        frames.append(pd.DataFrame({
+            "x": coords[:, 0], "y": coords[:, 1], "is_end": first | last,
+            "separated": separated[line], "layer": layers[line],
+        }))
 
-    for i, line1 in lines_with_nan.iterrows():
-        layer, separated = _layer(line1), is_grade_separated(line1)
-        possible_matches_index = list(
-            sindex.intersection(line1.geometry.bounds)
-        ) if crossings else []
-
-        possible_matches = lines_gdf.iloc[possible_matches_index]
-
-        precise_matches = possible_matches[
-            possible_matches.intersects(line1.geometry)
-        ]
-
-        for j, line2 in precise_matches.iterrows():
-            if i != j and crosses_at_grade(line1, line2):
-                intersection = line1.geometry.intersection(
-                    line2.geometry
-                )
-
-                # Where the lines overlap (a line drawn along a street) the
-                # overlap's vertices are junctions too: the street's nodes
-                # along it, and where the two part.
-                shared = shapely.get_coordinates(intersection)
-                records += [(x, y, False, separated, (layer,)) for x, y in shared]
-
-        parts = (line1.geometry.geoms if isinstance(line1.geometry, MultiLineString)
-                 else [line1.geometry])
-        for part in parts:
-            coords = list(part.coords)
-            records += [(x, y, position in (0, len(coords) - 1), separated, (layer,))
-                        for position, (x, y, *_) in enumerate(coords)]
-
-    return _merge_points(
-        pd.DataFrame(records, columns=["x", "y", *POINT_COLUMNS]), lines_gdf.crs)
+    records = pd.concat(frames) if frames else pd.DataFrame(
+        columns=["x", "y", "is_end", "separated", "layer"])
+    return _merge_points(records, lines_gdf.crs)
 
 
 def snap_crossings_to_network(
@@ -472,7 +489,8 @@ def snap_crossings_to_network(
     )
 
     moved = pd.concat([points[is_vertex], crossings])
-    records = pd.DataFrame(moved[POINT_COLUMNS]).assign(x=moved.geometry.x, y=moved.geometry.y)
+    records = (pd.DataFrame(moved[POINT_COLUMNS]).assign(x=moved.geometry.x, y=moved.geometry.y)
+               .explode("layers").rename(columns={"layers": "layer"}))
     return _merge_points(records, points_gdf.crs)
 
 

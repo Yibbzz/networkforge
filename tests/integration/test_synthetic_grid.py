@@ -212,6 +212,17 @@ def test_line_drawn_along_a_street_joins_every_node_it_passes(build):
         [node_id(0, 0), node_id(0, 1)], [node_id(0, 1), node_id(0, 2)]]
 
 
+def test_line_that_collapses_between_others_is_dropped_alone(build, caplog):
+    """A line shorter than the snap distance, listed between two good ones."""
+    tiny = [(X0 + 0.2, Y0 + 0.1), (X0 + 0.4, Y0 + 0.1)]  # collapses onto node 1
+    with caplog.at_level("WARNING"):
+        result = build([(ROAD_ACROSS, ROAD_TAGS), (tiny, ROAD_TAGS), (DIAGONAL, ROAD_TAGS)])
+
+    assert "collapsed onto a single node" in caplog.text
+    custom = result.edges[result.edges["custom"] == "yes"]
+    assert set(custom.nf_part) == {0, 1}  # the two good lines
+
+
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
     edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
 

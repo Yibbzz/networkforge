@@ -322,7 +322,9 @@ def resolve_custom_tags(
     overwrite=True:  defaults replace the feature's value for every key
                      they set. Other attributes are kept.
 
-    All tag values are normalised to strings (50 -> "50").
+    Tag values (attributes named after a tag NetworkForge knows) are
+    normalised to strings (50 -> "50"); other attributes are left as
+    they are.
     """
     custom_gdf = custom_gdf.copy()
 
@@ -335,7 +337,10 @@ def resolve_custom_tags(
         else:
             custom_gdf.loc[custom_gdf[key].isna(), key] = value
 
-    tag_columns = [c for c in custom_gdf.columns if c != custom_gdf.geometry.name]
+    # Tags become OSM text. Other attributes keep their type: a number
+    # stays a number, for use as a cost in QGIS's network tools.
+    tag_columns = [c for c in custom_gdf.columns
+                   if c != custom_gdf.geometry.name and c in KNOWN_TAG_KEYS]
     for column in tag_columns:
         custom_gdf[column] = custom_gdf[column].map(_tag_value).astype(object)
 

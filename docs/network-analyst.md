@@ -98,7 +98,12 @@ or removing part of a stretch between two OSM nodes.
 | **Landmarks in directions** | Valhalla has a separate landmark database; NetworkForge doesn't write to it. |
 | **Street names in several languages** | Kept on existing streets. On your own lines only `name`, `alt_name`, `official_name`, `ref` and `int_ref` are written. |
 | **Live or historical traffic** | Not modelled. |
-| **Public transport** | Not modelled. |
+| **Public transport** (connectivity groups, multimodal networks, GTFS) | Not modelled. |
+| **End Point connectivity** and **elevation fields** (`F_ZLEV`, `T_ZLEV`) or **z coordinates** | A network of your own lines joins at crossings or at shared vertices, and keeps levels apart with `bridge`, `tunnel` and `layer`. Data prepared for ArcGIS with elevation fields needs those turned into `layer` (or bridges split out) first. |
+| **Cost and restriction attributes from your own fields** (`FT_Minutes`, `AR_AUTO = 'N'`, `ONEWAY = 'FT'`) | Routers read OSM tags, so fields have to be expressed as tags (`maxspeed`, `motor_vehicle=no`, `oneway=yes`), e.g. with QGIS's field calculator. Other attributes are kept, with their type, in the GeoPackage, where QGIS's network tools can use them as costs. |
+| **Points on the network**: barriers, gates, signals on your own lines | Kept from OpenStreetMap; can't be added to your own lines. |
+| **County- or country-sized networks** | Limited by memory: a 600 km2 area of Luxembourg (475,000 edges) takes about 3.5 GB and 80 s; the whole country (2,600 km2) needs more than 6 GB. ArcGIS builds national networks. |
+| **Solvers beyond routing**: closest facility with many facilities, vehicle routing with time windows and capacities, location-allocation | Not part of building the network. Valhalla (in the QGIS plugin) does routes, isochrones, matrices and optimised (travelling salesman) routes; QGIS adds service areas and shortest paths on the GeoPackage. |
 
 ## How the tests prove it
 

@@ -9,13 +9,15 @@ bounding box) raise when strict, or are dropped with a warning when not.
 import logging
 
 import geopandas as gpd
+import numpy as np
+import pandas as pd
 import shapely
 from shapely.geometry import box
 
 from .edits import take_edit_ids
 from .errors import InputError
-from .tags import EDIT_ID_COLUMN
-from .validation import RESERVED_COLUMNS
+from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, REMOVE_COLUMN
+from .validation import KNOWN_TAG_KEYS, RESERVED_COLUMNS
 
 log = logging.getLogger(__name__)
 
@@ -112,20 +114,31 @@ def clean_custom_data(
         )
 
     check_feature_ids(custom_gdf)
-    custom = take_edit_ids(custom_gdf) if edits else custom_gdf
+    custom = match_attribute_names(custom_gdf)
+    custom = take_edit_ids(custom) if edits else custom
     custom = drop_reserved_columns(custom.copy(), quiet=EDIT_ID_COLUMN in custom.columns)
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty
     not_a_line = ~no_geometry & ~geometry.geom_type.isin(LINE_TYPES)
 
-    usable = ~no_geometry & ~not_a_line
+    # Coordinates that aren't numbers (NaN, inf) break every geometry operation.
+    coords, owner = shapely.get_coordinates(geometry.to_numpy(), return_index=True)
+    bad_coordinates = pd.Series(False, index=custom.index)
+    bad_coordinates.iloc[np.unique(owner[~np.isfinite(coords).all(axis=1)])] = True
+
+    usable = ~no_geometry & ~not_a_line & ~bad_coordinates
     if bbox_gdf is None:
         outside = partly_outside = usable & False
     else:
+        # Only usable geometries: GEOS can't compare one with NaN coordinates.
         bbox_area = bbox_gdf.to_crs(custom.crs).union_all()
-        outside = usable & ~geometry.intersects(bbox_area)
-        partly_outside = usable & ~outside & ~geometry.within(bbox_area)
+        inside = pd.Series(False, index=custom.index)
+        within = pd.Series(False, index=custom.index)
+        inside[usable] = geometry[usable].intersects(bbox_area)
+        within[usable] = geometry[usable].within(bbox_area)
+        outside = usable & ~inside
+        partly_outside = usable & ~outside & ~within
 
     problems, issues = [], []
     types = geometry[not_a_line].geom_type
@@ -133,6 +146,7 @@ def clean_custom_data(
         (no_geometry, "no geometry"),
         (not_a_line, f"{'/'.join(sorted(set(types)))}, not a line (only LineString and "
                      "MultiLineString can be routed)"),
+        (bad_coordinates, "has coordinates that aren't numbers (NaN or infinite)"),
         (outside, "completely outside the bounding box"),
     ):
         if mask.any():
@@ -144,6 +158,9 @@ def clean_custom_data(
 
     if problems:
         message = "Some custom features can't be used - " + "; ".join(problems) + "."
+        if outside.any() and outside.sum() == usable.sum():
+            message += (" None of them is in the box: check the layer's CRS is set right (and, "
+                        "for longitude / latitude, that they aren't the wrong way round).")
         if strict:
             raise InputError(message, guide="preparing-your-data", issues=issues)
         log.warning("strict=False, dropping them: %s", message,
@@ -176,6 +193,26 @@ def check_feature_ids(custom_gdf: gpd.GeoDataFrame) -> None:
             f"Custom feature ids (the data's index / --id-field) must be unique; "
             f"repeated: {', '.join(map(str, duplicated))}."
         )
+
+
+def match_attribute_names(custom_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Read attributes named like a tag in other letter case - HIGHWAY,
+    MaxSpeed, as ArcGIS and Shapefile layers often have them - as that
+    tag. A layer that has both spellings keeps its exact one.
+    """
+    known = KNOWN_TAG_KEYS | set(EDIT_ID_COLUMNS) | {REMOVE_COLUMN}
+    by_lower = {key.lower(): key for key in known}
+    renames = {
+        column: by_lower[column.lower()] for column in custom_gdf.columns
+        if isinstance(column, str) and column not in known and column.lower() in by_lower
+        and by_lower[column.lower()] not in custom_gdf.columns
+    }
+    if renames:
+        log.info("Reading attribute(s) %s as the tag(s) %s.", ", ".join(renames),
+                 ", ".join(renames.values()))
+        custom_gdf = custom_gdf.rename(columns=renames)
+    return custom_gdf
 
 
 def drop_reserved_columns(custom_gdf: gpd.GeoDataFrame, quiet: bool = False) -> gpd.GeoDataFrame:
