@@ -7,6 +7,16 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- **New ferries.** A custom line with `route=ferry` (or
+  `route=shuttle_train`) and no `highway` tag is a ferry, as in
+  OpenStreetMap. It joins the streets only at its ends, passing over
+  streets it crosses. Everyone may use it unless an access tag closes
+  it (`motor_vehicle=no` for a foot ferry); `duration=hh:mm` sets the
+  crossing time, else 10 km/h - both as Valhalla reads them. In the
+  GeoPackage every mode takes the ferry's time. `info --json` lists
+  `tag_values.route` and `tag_patterns.duration`.
+
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)
   now applies to each part on its own: `oneway` follows the direction

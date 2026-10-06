@@ -83,7 +83,8 @@ attributes route exactly like the same streets in OpenStreetMap
 (`tests/live/test_valhalla_real_data.py`:
 `test_streets_given_as_lines_route_like_the_same_streets_in_osm`). What
 is lost against full OpenStreetMap is what lines can't carry: turn
-restrictions, barriers on nodes, ferries.
+restrictions and barriers on nodes - unless you draw them (turn
+restriction lines; ferries are lines with `route=ferry`).
 
 ## Changing the existing network
 
@@ -182,5 +183,9 @@ Found while writing the tests:
   (`route=ferry`, `route=shuttle_train`). It does not route on piers,
   platforms or squares mapped as areas. NetworkForge writes ferries to the
   file as they are in OpenStreetMap, so a router can use them; they are
-  not in the GeoPackage. With them, every trip on the Monaco extract,
+  not in the GeoPackage. New ferries drawn in the custom layer
+  (`route=ferry`, no `highway`) are in both (`tests/valhalla/test_ferries.py`):
+  Valhalla opens a ferry to every mode unless an access tag closes it,
+  sails it at 10 km/h or its `duration` (`hh:mm`; a plain number is
+  ignored), and truncates the speed to whole km/h. With them, every trip on the Monaco extract,
   walking included, is the same as on raw OpenStreetMap.

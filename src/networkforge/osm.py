@@ -35,7 +35,7 @@ from pyproj import CRS
 from shapely.geometry import box
 
 from .errors import InputError, OSMDownloadError
-from .modes import _passes_osmnx_filter, keep_mode_tags
+from .modes import _passes_osmnx_filter, is_ferry, keep_mode_tags
 from .tags import FERRY_ROUTES, RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
 
 log = logging.getLogger(__name__)
@@ -114,11 +114,6 @@ def _keeps_relation(tags: dict[str, str]) -> bool:
     if kind in RELATION_TYPES or kind.startswith("restriction:"):
         return True
     return kind == "route" and tags.get("route") in ROUTE_RELATIONS
-
-
-def is_ferry(tags: dict[str, str]) -> bool:
-    """A ferry or shuttle-train route: a way routers use that isn't a highway."""
-    return "highway" not in tags and tags.get("route") in FERRY_ROUTES
 
 
 def _source_from_elements(elements: list[dict], polygon) -> OSMSource:

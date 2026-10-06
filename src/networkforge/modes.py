@@ -31,7 +31,7 @@ import osmnx as ox
 from osmnx._overpass import _get_network_filter
 
 from .errors import InputError
-from .tags import BASE_WAY_TAGS, CUSTOM_TAG, NODE_TAGS, ROUTING_WAY_TAGS
+from .tags import BASE_WAY_TAGS, CUSTOM_TAG, FERRY_ROUTES, NODE_TAGS, ROUTING_WAY_TAGS
 
 # Routing modes a network can be filtered to. "all" / "all_public"
 # are download scopes rather than travel modes, so they're left out.
@@ -147,8 +147,18 @@ def effective_access(tags: dict, mode: str) -> tuple[str, str] | None:
     return None
 
 
+def is_ferry(tags: dict) -> bool:
+    """A ferry or shuttle-train route: a way routers use that isn't a highway."""
+    return _as_text(tags.get("highway")) is None and _as_text(tags.get("route")) in FERRY_ROUTES
+
+
 def allows_mode(tags: dict, mode: str) -> bool:
     """True if a way with these tags is usable by `mode`."""
+    if is_ferry(tags):
+        # Open to everyone unless an access tag closes it (as Valhalla
+        # reads it: route=ferry alone carries cars, bikes and walkers).
+        access = effective_access(tags, mode)
+        return access is None or access[1] not in DENIED_ACCESS
     if mode not in ACCESS_HIERARCHY:  # download scopes "all" / "all_public"
         return _passes_osmnx_filter(tags, mode)
 
@@ -263,6 +273,10 @@ DEFAULT_SPEEDS_KPH = {
 }
 
 
+# Ferry and shuttle-train speeds without a maxspeed or duration (Valhalla's).
+FERRY_SPEEDS_KPH = {"ferry": 10, "shuttle_train": 65}
+
+
 _SPEED = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(mph|knots)?\s*$")
 _TO_KPH = {None: 1.0, "mph": 1.609344, "knots": 1.852}
 
@@ -284,8 +298,12 @@ def car_speed_kph(tags: dict) -> float:
     """
     Car speed for a way: its maxspeed, else DEFAULT_SPEEDS_KPH for its
     highway type (30 km/h if unknown) - the same rule add_travel_times uses.
+    Ferries: FERRY_SPEEDS_KPH (a `duration` is applied per line, by
+    export.analysis_edges).
     """
     speed = maxspeed_kph(tags.get("maxspeed"))
+    if speed is None and is_ferry(tags):
+        speed = FERRY_SPEEDS_KPH[_as_text(tags.get("route"))]
     if speed is None:
         speed = DEFAULT_SPEEDS_KPH.get(_as_text(tags.get("highway")), 30.0)
     return float(speed)
@@ -296,6 +314,15 @@ def add_travel_times(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     Add speed_kph and travel_time (car speeds) to every edge. Edges
     keep their own maxspeed; untagged ones get DEFAULT_SPEEDS_KPH, so
     the same road gets the same speed in the baseline and custom graphs.
+    Ferries get FERRY_SPEEDS_KPH (a `duration` is not applied here).
     """
-    graph = ox.add_edge_speeds(graph, hwy_speeds=DEFAULT_SPEEDS_KPH, fallback=30)
+    # OSMnx needs a highway type to give a speed: lend ferries their route.
+    ferries = [(u, v, k) for u, v, k, data in graph.edges(keys=True, data=True)
+               if is_ferry(data)]
+    for edge in ferries:
+        graph.edges[edge]["highway"] = graph.edges[edge]["route"]
+    graph = ox.add_edge_speeds(graph, hwy_speeds={**DEFAULT_SPEEDS_KPH, **FERRY_SPEEDS_KPH},
+                               fallback=30)
+    for edge in ferries:
+        del graph.edges[edge]["highway"]
     return ox.add_edge_travel_times(graph)

@@ -147,7 +147,7 @@ the build (or are logged with `strict=False`).
 
 | Attribute | Values | What it does |
 |---|---|---|
-| `highway` | **Required.** Roads: `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `unclassified`, `residential`, `living_street`, `service`, `road`, and `*_link` slip roads. Paths: `cycleway`, `footway`, `path`, `pedestrian`, `bridleway`, `steps`, `track`, `corridor`. Buses: `busway`, `bus_guideway`. | The kind of way. Decides which modes may use it (see the preset table). |
+| `highway` | **Required** (except on a [ferry](#ferries)). Roads: `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `unclassified`, `residential`, `living_street`, `service`, `road`, and `*_link` slip roads. Paths: `cycleway`, `footway`, `path`, `pedestrian`, `bridleway`, `steps`, `track`, `corridor`. Buses: `busway`, `bus_guideway`. | The kind of way. Decides which modes may use it (see the preset table). |
 | `maxspeed` | `30 mph`, `50` (km/h), `20 knots`, `none`, `walk`, `signals`, `variable`, or a country code like `GB:nsl_single` | Car speed. **A number with no unit is km/h**, so write `mph` for UK limits. Without it, a default for the road type is used. |
 | `oneway` | `yes`, `no`, `-1` (against the drawn direction), `reversible`, `alternating` | One-way traffic. Direction = the direction the line was drawn. Walking ignores it. |
 | `lanes` | whole number ≥ 1 | Kept in the output for routing engines that use it. |
@@ -165,6 +165,8 @@ the build (or are logged with `strict=False`).
 | `tunnel` | `yes`, `building_passage`, ... (`no` = not a tunnel) | Passes **under** the ways it crosses instead of joining them. |
 | `layer` | whole number, e.g. `1`, `-1` (default `0`) | Ways on different layers cross without joining. |
 | `name`, `ref` | any text | Kept in the output. |
+| `route` | `ferry`, `shuttle_train` (with no `highway`) | A [ferry](#ferries) or car shuttle train. |
+| `duration` | `hh:mm` or `hh:mm:ss`, e.g. `00:25` | A ferry's crossing time, end to end. |
 
 Other tags routers use are kept and exported too, on custom features
 and on the OSM network: `oneway:bicycle` (contraflow cycling),
@@ -224,6 +226,24 @@ that's how you add a new slip road. Only crossings are skipped.
 
 Trunk roads are treated as ordinary roads (many have at-grade
 junctions); tag the custom line `bridge=yes` if it goes over one.
+
+### Ferries
+
+A line with `route=ferry` and **no** `highway` tag is a ferry, as in
+OpenStreetMap (`route=shuttle_train` is a car shuttle train). Draw it
+from pier to pier: it joins the streets only at its **ends** (end it on
+a street, or within `snap_tolerance` of one) and passes over any street
+it crosses on the way, like a bridge.
+
+- **Who may use it:** everyone, unless an access tag closes it -
+  `motor_vehicle=no` makes a foot and bike ferry. This is how Valhalla
+  reads ferries.
+- **Speed:** `duration=00:25` (hours:minutes, for the whole crossing)
+  sets the time; otherwise `maxspeed`, else 10 km/h (shuttle trains
+  65 km/h), as in Valhalla. In the GeoPackage every mode takes the
+  ferry's time. NetworkForge's own OSMnx routing uses the default speed
+  and ignores `duration`.
+- A line with both `highway` and `route=ferry` is a street.
 
 ## Changing existing streets
 
@@ -388,6 +408,7 @@ change.
 | Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |
 | Shared-use pavement (walk + cycle on a footway) | `highway=footway`, `bicycle=designated` |
 | Contraflow cycling on a one-way street | `highway=residential`, `oneway=yes`, `oneway:bicycle=no` (exported for routers like GraphHopper; NetworkForge's own OSMnx-based routing still treats the street as one-way for bikes) |
+| New ferry | `route=ferry`, `duration=00:20`, drawn pier to pier ([ferries](#ferries)) |
 | Road bridge over a railway or river | `highway=primary`, `bridge=yes`, `layer=1` |
 | Underpass for walking | `highway=footway`, `tunnel=yes`, `layer=-1` |
 | New motorway slip road | `highway=motorway_link`, `oneway=yes`, drawn in the direction of travel, ending on the motorway |
@@ -401,7 +422,8 @@ every problem, one per feature. What each message means:
 
 | Message | Fix |
 |---|---|
-| `no highway tag` | Give the feature a `highway` attribute, or use a preset. |
+| `no highway tag (or route=ferry for a ferry)` | Give the feature a `highway` attribute, or use a preset. A ferry needs `route=ferry`. |
+| `duration='...' must be hours and minutes` | Write `00:25` or `01:10:30`: routers ignore a plain number of minutes. |
 | `highway='...' is not a routable highway value` | Use a value from the [Attributes](#attributes) table. Planned or disused values (`proposed`, `construction`) can't be routed: tag what it *will* be. |
 | `maxspeed='...' is not a valid OSM speed` | Write a number with an optional unit: `30 mph`, `50`. |
 | `oneway='...' is not a valid OSM value` | Use `yes`, `no` or `-1`. |

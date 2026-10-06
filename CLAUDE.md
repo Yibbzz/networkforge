@@ -196,6 +196,9 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   platforms or `area=yes` squares (tested), so OSMnx's "all" filter loses nothing but ferries.
   Ferries (`osm.is_ferry`, `OSMSource.ferries` / `ferry_nodes`, cropped to the bbox) bypass the
   edge table and are written verbatim by export; new node ids must start above ferry node ids.
+  NEW ferries (custom `route=ferry`, no highway; `modes.is_ferry`) DO go in the edge table: open to
+  all modes unless access closes them, grade-separated (join only at their ends), 10 km/h or
+  `duration` over the whole line (`export._ferry_speeds`), as Valhalla reads them.
 - OSMnx drops way tags not in `ox.settings.useful_tags_way`; add `nf:custom` before `graph_from_xml`.
 - Unitless `maxspeed` is km/h. UK data usually wants `"50 mph"`.
 - Design: build once with every mode (`network_type="all"`), filter by mode at routing time. Loading

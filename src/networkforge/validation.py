@@ -36,6 +36,7 @@ from .errors import InvalidTagsError, NetworkIntegrityError
 from .modes import (
     OTHER_VEHICLE_KEYS,
     allows_mode,
+    is_ferry,
     mode_tag_keys,
     open_to_other_vehicles,
     usable_modes,
@@ -278,6 +279,9 @@ LIMIT_PATTERN = re.compile(
     r"""none|default|below_default|unsigned)$"""
 )
 
+# A ferry's crossing time: hh:mm or hh:mm:ss (Valhalla ignores "25").
+DURATION_PATTERN = re.compile(r"^\d+:[0-5]\d(:[0-5]\d)?$")
+
 # Columns the pipeline itself uses. A custom property with one of
 # these names would corrupt topology (e.g. a 'u' value stops the
 # feature being treated as custom).
@@ -381,6 +385,11 @@ def tag_value_problems(tags: dict[str, str]) -> tuple[list[str], set[str]]:
             problems.append(f"{key}={value!r} is not a valid OSM limit "
                             "(e.g. 3.5, '3.5 m', '12 ft', '7.5 t')")
 
+    duration = tags.get("duration")
+    if duration is not None and not DURATION_PATTERN.match(duration):
+        problems.append(f"duration={duration!r} must be hours and minutes, e.g. '00:25' "
+                        "or '01:10:30' (routers ignore a plain number)")
+
     layer = tags.get("layer")
     if layer is not None and not re.fullmatch(r"-?\d+", layer):
         problems.append(f"layer={layer!r} must be a whole number, e.g. 1 or -1")
@@ -433,9 +442,10 @@ def check_custom_tags(
         label = f"feature {index}"
         highway = tags.get("highway")
 
-        if highway is None:
-            issues.append((index, "no highway tag"))
-        elif highway not in KNOWN_HIGHWAYS:
+        ferry = is_ferry(tags)
+        if highway is None and not ferry:
+            issues.append((index, "no highway tag (or route=ferry for a ferry)"))
+        elif highway is not None and highway not in KNOWN_HIGHWAYS:
             issues.append((index, f"highway={highway!r} is not a routable highway value"))
 
         problems, value_notes = tag_value_problems(tags)
@@ -444,7 +454,8 @@ def check_custom_tags(
         maxspeed = tags.get("maxspeed")
 
         modes = usable_modes(tags)
-        if highway in KNOWN_HIGHWAYS:
+        routable = highway in KNOWN_HIGHWAYS or ferry
+        if routable:
             mode_counts[", ".join(modes) or "NOTHING"] += 1
         else:
             mode_counts["NOTHING (invalid highway)"] += 1
@@ -455,7 +466,7 @@ def check_custom_tags(
             notes.add("highway=bridleway: Valhalla only lets walkers and bikes use a "
                       "bridleway tagged foot=yes / bicycle=yes")
 
-        if highway in KNOWN_HIGHWAYS:
+        if routable:
             if not modes and open_to_other_vehicles(tags):
                 notes.add("some features are open only to buses or other special "
                           "vehicles: the car / bike / walk columns leave them out, "

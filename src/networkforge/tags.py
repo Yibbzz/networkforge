@@ -46,6 +46,8 @@ ROUTING_WAY_TAGS = (
     "segregated", "bicycle_road", "cyclestreet", "shoulder",
     # Surface and difficulty
     "smoothness", "tracktype", "sac_scale", "incline", "lit", "ford", "toll",
+    # Ferries and shuttle trains (route=ferry without a highway tag)
+    "route", "duration",
 )
 
 # Node tags routers use: barriers (bollards, gates), signals,
@@ -73,9 +75,10 @@ RELATION_TYPES = ("restriction", "connectivity")
 ROUTE_RELATIONS = ("road", "bicycle", "mtb", "foot", "hiking")
 
 # Ways without a `highway` tag that routers travel on: ferries and car
-# shuttle trains (`route=`). They are not part of NetworkForge's own
-# network (edge table, GeoPackage), but are written to the OSM file as
-# they are, so a router can use them. Valhalla routes on nothing else
+# shuttle trains (`route=`). Existing ones are not part of NetworkForge's
+# own network (edge table, GeoPackage), but are written to the OSM file
+# as they are, so a router can use them; new ones drawn in the custom
+# layer join the network at their ends. Valhalla routes on nothing else
 # without a highway tag (not piers, platforms or squares mapped as areas).
 FERRY_ROUTES = ("ferry", "shuttle_train")
 

@@ -65,6 +65,7 @@ from .presets import PRESETS, preset_tags
 from .tags import (
     EDIT_ID_COLUMN,
     EDIT_ID_COLUMNS,
+    FERRY_ROUTES,
     MODIFIED_COLUMN,
     REMOVE_COLUMN,
     REMOVED_ATTR,
@@ -74,6 +75,7 @@ from .turns import RESTRICTION_KEYS, TURN_VALUES, check_turn_tags, split_turns
 from .validation import (
     ACCESS_KEYS,
     ACCESS_VALUES,
+    DURATION_PATTERN,
     KNOWN_HIGHWAYS,
     KNOWN_TAG_KEYS,
     LIMIT_KEYS,
@@ -235,11 +237,12 @@ def cmd_info(args, emit) -> int:
         "tag_values": {
             "restriction": sorted(TURN_VALUES),
             "highway": sorted(KNOWN_HIGHWAYS),
+            "route": list(FERRY_ROUTES),
             "oneway": sorted(ONEWAY_VALUES),
             **{key: sorted(ACCESS_VALUES) for key in ACCESS_KEYS},
         },
         "tag_patterns": {"maxspeed": MAXSPEED_PATTERN.pattern, "lanes": r"^[1-9]\d*$",
-                         "layer": r"^-?\d+$",
+                         "layer": r"^-?\d+$", "duration": DURATION_PATTERN.pattern,
                          **{key: LIMIT_PATTERN.pattern for key in LIMIT_KEYS}},
     }
     emit(info, text=(

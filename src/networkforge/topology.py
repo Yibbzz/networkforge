@@ -7,6 +7,8 @@ import shapely
 from pyproj import CRS
 
 from .errors import InputError, NetworkIntegrityError, NoIntersectionError
+from .modes import is_ferry
+from .tags import FERRY_ROUTES
 
 log = logging.getLogger(__name__)
 
@@ -41,13 +43,15 @@ def _layer(tags) -> int:
 def is_grade_separated(tags) -> bool:
     """
     A way that other ways cross over/under rather than join: motorways
-    and their slip roads, bridges and tunnels. `tags` is a dict or a
-    row (Series) of tag values.
+    and their slip roads, bridges and tunnels - and ferries, which meet
+    the streets only at their ends. `tags` is a dict or a row (Series)
+    of tag values.
     """
     return (
         tags.get("highway") in GRADE_SEPARATED_HIGHWAYS
         or _tag_present(tags.get("bridge"))
         or _tag_present(tags.get("tunnel"))
+        or is_ferry(tags)
     )
 
 
@@ -59,6 +63,9 @@ def _separated_mask(gdf: gpd.GeoDataFrame) -> np.ndarray:
     for key in ("bridge", "tunnel"):
         if key in gdf:
             separated |= gdf[key].map(_tag_present).to_numpy(dtype=bool)
+    if "route" in gdf:
+        no_highway = gdf["highway"].isna() if "highway" in gdf else True
+        separated |= (no_highway & gdf["route"].isin(FERRY_ROUTES)).to_numpy(dtype=bool)
     return separated
 
 

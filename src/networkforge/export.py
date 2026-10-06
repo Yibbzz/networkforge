@@ -65,6 +65,7 @@ from .tags import (
     CUSTOM_TAG,
     EDIT_COLUMN,
     EDITS_ATTR,
+    FERRY_ROUTES,
     MODIFIED_TAG,
     NODE_TAGS,
     PART_COLUMN,
@@ -72,6 +73,7 @@ from .tags import (
     TURNS_ATTR,
 )
 from .turns import relation_tags
+from .validation import DURATION_PATTERN
 
 log = logging.getLogger(__name__)
 
@@ -217,7 +219,8 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
 
     # Access and speed depend only on tags; evaluate each distinct
     # combination once (a few thousand), not each row.
-    keys = [k for k in sorted(mode_tag_keys() | {"highway", "maxspeed"}) if k in edges.columns]
+    keys = [k for k in sorted(mode_tag_keys() | {"highway", "maxspeed", "route"})
+            if k in edges.columns]
     combos = list(zip(*(edges[k].map(_hashable) for k in keys), strict=True)) if keys else [()]
     results = {}
     for combo in set(combos):
@@ -233,6 +236,15 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
     if "cycleway" in edges:  # the older way to tag contraflow cycling
         bike_direction[edges["cycleway"].astype(str).str.startswith("opposite")] = "both"
 
+    speed = speed.astype(float)
+    bike_speed = np.full(len(edges), BIKE_KPH)
+    walk_speed = np.full(len(edges), WALK_KPH)
+    ferry = _ferry_speeds(edges, length)
+    if ferry is not None:
+        # On a ferry everyone travels at the boat's speed.
+        on_board = ~np.isnan(ferry)
+        speed[on_board] = bike_speed[on_board] = walk_speed[on_board] = ferry[on_board]
+
     analysis = pd.DataFrame({
         "car": car.astype(bool),
         "bike": bike.astype(bool),
@@ -240,14 +252,48 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
         "speed_kph": speed.round(1),
         "length_m": length.round(2),
         "car_minutes": (length / 1000 / speed * 60).round(4),
-        "bike_minutes": (length / 1000 / BIKE_KPH * 60).round(4),
-        "walk_minutes": (length / 1000 / WALK_KPH * 60).round(4),
+        "bike_minutes": (length / 1000 / bike_speed * 60).round(4),
+        "walk_minutes": (length / 1000 / walk_speed * 60).round(4),
         "car_direction": car_direction.to_numpy(),
         "bike_direction": bike_direction.to_numpy(),
     }, index=edges.index)
 
     edges = edges.drop(columns=[c for c in INTERNAL_COLUMNS if c in edges.columns])
     return pd.concat([edges, analysis], axis=1).reset_index(drop=True)
+
+
+def _ferry_speeds(edges: gpd.GeoDataFrame, length: np.ndarray) -> np.ndarray | None:
+    """
+    Speed (km/h) of each ferry edge, NaN for other edges; None if there
+    are no ferries. A `duration` (hh:mm[:ss]) is the time for the whole
+    line, as routers read it; otherwise maxspeed or the default speed.
+    """
+    if "route" not in edges:
+        return None
+    no_highway = edges["highway"].isna() if "highway" in edges else True
+    ferry = (no_highway & edges["route"].isin(FERRY_ROUTES)).to_numpy(dtype=bool)
+    if not ferry.any():
+        return None
+
+    speeds = np.full(len(edges), np.nan)
+    maxspeed = edges["maxspeed"] if "maxspeed" in edges else pd.Series(None, index=edges.index)
+    speeds[ferry] = [car_speed_kph({"route": route, "maxspeed": limit})
+                     for route, limit in zip(edges["route"][ferry], maxspeed[ferry], strict=True)]
+    if "duration" in edges:
+        hours = edges["duration"].map(_duration_hours).to_numpy(dtype=float)
+        timed = ferry & (hours > 0)  # NaN compares False
+        line = edges[PART_COLUMN] if PART_COLUMN in edges else pd.Series(range(len(edges)))
+        line_length = pd.Series(length).groupby(line.to_numpy()).transform("sum").to_numpy()
+        speeds[timed] = line_length[timed] / 1000 / hours[timed]
+    return speeds
+
+
+def _duration_hours(value) -> float:
+    """An OSM duration (hh:mm or hh:mm:ss) in hours; NaN if it isn't one."""
+    if not isinstance(value, str) or not DURATION_PATTERN.match(value):
+        return np.nan
+    parts = [int(part) for part in value.split(":")] + [0]
+    return parts[0] + parts[1] / 60 + parts[2] / 3600
 
 
 def reverse_copies(edges: pd.DataFrame) -> pd.Series:
