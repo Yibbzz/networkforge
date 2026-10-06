@@ -16,6 +16,13 @@ minor version may include breaking changes).
   crossing time, else 10 km/h - both as Valhalla reads them. In the
   GeoPackage every mode takes the ferry's time. `info --json` lists
   `tag_values.route` and `tag_patterns.duration`.
+- **Warnings for values routers don't know** on `surface`, `smoothness`,
+  `tracktype`, `sac_scale`, `sidewalk`, `cycleway*`, `segregated`, `lit`,
+  `toll`, `junction`, `bridge`, `tunnel` and `incline`, for new lines and
+  edits alike, with the likely spelling (`surface='asphault' ... did you
+  mean 'asphalt'?`). OSM allows any value, so the build carries on.
+  `info --json` lists the known values in `tag_values` (and
+  `tag_patterns.incline`).
 
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)

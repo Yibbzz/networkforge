@@ -50,7 +50,14 @@ from .tags import (
     MODIFIED_COLUMN,
     REMOVE_COLUMN,
 )
-from .validation import KNOWN_HIGHWAYS, KNOWN_TAG_KEYS, _tag_value, tag_value_problems
+from .validation import (
+    KNOWN_HIGHWAYS,
+    KNOWN_TAG_KEYS,
+    _tag_value,
+    tag_value_problems,
+    unknown_values,
+    warn_about_unknown_values,
+)
 
 log = logging.getLogger(__name__)
 
@@ -153,15 +160,19 @@ def edit_tags(row: pd.Series) -> dict[str, str]:
 def check_edit_tags(edits_gdf: gpd.GeoDataFrame, strict: bool = True) -> None:
     """The values edits would set must be valid, like those of new lines."""
     issues = []
+    unknown = {}
     for feature, row in edits_gdf.drop(columns=edits_gdf.geometry.name).iterrows():
         tags = edit_tags(row)
         problems, _ = tag_value_problems(tags)
+        for pair in unknown_values(tags):
+            unknown.setdefault(pair, []).append(feature)
         if REMOVE_COLUMN in row and wants_removal(row[REMOVE_COLUMN]) is None:
             problems.append(f"{REMOVE_COLUMN}={_tag_value(row[REMOVE_COLUMN])!r} must be yes or no")
         if "highway" in tags and tags["highway"] not in KNOWN_HIGHWAYS:
             problems.append(f"highway={tags['highway']!r} is not a routable highway value")
         issues += [(feature, problem) for problem in problems]
 
+    warn_about_unknown_values(unknown)
     if issues:
         error = InvalidTagsError(issues)
         if strict:

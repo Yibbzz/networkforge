@@ -279,6 +279,48 @@ LIMIT_PATTERN = re.compile(
     r"""none|default|below_default|unsigned)$"""
 )
 
+# Keys whose values are a documented list (OSM wiki, and what Valhalla
+# reads). OSM allows other values, so these only WARN: a misspelt value
+# ("asphault") is ignored by every router without a word.
+KNOWN_VALUES = {
+    "surface": {
+        "paved", "asphalt", "chipseal", "concrete", "concrete:lanes", "concrete:plates",
+        "paving_stones", "paving_stones:lanes", "grass_paver", "sett", "unhewn_cobblestone",
+        "cobblestone", "bricks", "metal", "metal_grid", "wood", "stepping_stones", "rubber",
+        "tiles", "unpaved", "compacted", "fine_gravel", "gravel", "shells", "rock",
+        "pebblestone", "ground", "dirt", "earth", "grass", "mud", "sand", "woodchips", "snow",
+        "ice", "salt", "clay", "artificial_turf", "acrylic", "carpet", "plastic",
+    },
+    "smoothness": {
+        "excellent", "good", "intermediate", "bad", "very_bad", "horrible", "very_horrible",
+        "impassable",
+    },
+    "tracktype": {"grade1", "grade2", "grade3", "grade4", "grade5"},
+    "sac_scale": {
+        "hiking", "mountain_hiking", "demanding_mountain_hiking", "alpine_hiking",
+        "demanding_alpine_hiking", "difficult_alpine_hiking",
+    },
+    "sidewalk": {"both", "left", "right", "no", "none", "separate", "yes"},
+    "segregated": {"yes", "no"},
+    "lit": {"yes", "no", "automatic", "24/7", "sunset-sunrise", "limited", "interval", "disused"},
+    "toll": {"yes", "no"},
+    "junction": {"roundabout", "circular", "jughandle", "filter", "spui"},
+    "bridge": {
+        "yes", "no", "viaduct", "aqueduct", "boardwalk", "cantilever", "covered", "movable",
+        "trestle", "low_water_crossing", "simple_brunnel",
+    },
+    "tunnel": {
+        "yes", "no", "building_passage", "culvert", "avalanche_protector", "flooded",
+    },
+    **{key: {
+        "lane", "track", "shared_lane", "share_busway", "opposite", "opposite_lane",
+        "opposite_track", "opposite_share_busway", "separate", "no", "shoulder", "shared",
+        "crossing", "link", "yes",
+    } for key in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both")},
+}
+# incline: up / down, or a gradient such as 10% or -5%.
+INCLINE_PATTERN = re.compile(r"^(up|down|-?\d+(\.\d+)?(%|°)?)$")
+
 # A ferry's crossing time: hh:mm or hh:mm:ss (Valhalla ignores "25").
 DURATION_PATTERN = re.compile(r"^\d+:[0-5]\d(:[0-5]\d)?$")
 
@@ -397,6 +439,29 @@ def tag_value_problems(tags: dict[str, str]) -> tuple[list[str], set[str]]:
     return problems, notes
 
 
+def unknown_values(tags: dict[str, str]) -> list[tuple[str, str]]:
+    """(key, value) pairs of `tags` that are not a value routers know (KNOWN_VALUES)."""
+    unknown = [(key, tags[key]) for key, values in KNOWN_VALUES.items()
+               if key in tags and tags[key] not in values]
+    incline = tags.get("incline")
+    if incline is not None and not INCLINE_PATTERN.match(incline):
+        unknown.append(("incline", incline))
+    return unknown
+
+
+def warn_about_unknown_values(found: dict[tuple[str, str], list]) -> None:
+    """One warning per unknown (key, value), naming its features and the likely value."""
+    for (key, value), features in found.items():
+        known = KNOWN_VALUES.get(key, {"up", "down"})
+        close = difflib.get_close_matches(value, known, n=1, cutoff=0.7)
+        hint = f" - did you mean {close[0]!r}?" if close else ""
+        log.warning(
+            "%s=%r is not a value routers know%s Routers ignore it (features %s).",
+            key, value, hint or ".", ", ".join(map(str, features)),
+            extra={"features": list(features)},
+        )
+
+
 def check_custom_tags(
     custom_gdf: gpd.GeoDataFrame,
     network_type: str,
@@ -419,6 +484,7 @@ def check_custom_tags(
     issues = []  # (feature id or None, message)
     notes = set()
     mode_counts = collections.Counter()
+    unknown = collections.defaultdict(list)  # (key, value) -> features
 
     reserved = RESERVED_COLUMNS & set(custom_gdf.columns)
     if reserved:
@@ -451,6 +517,8 @@ def check_custom_tags(
         problems, value_notes = tag_value_problems(tags)
         issues += [(index, problem) for problem in problems]
         notes |= value_notes
+        for pair in unknown_values(tags):
+            unknown[pair].append(index)
         maxspeed = tags.get("maxspeed")
 
         modes = usable_modes(tags)
@@ -480,6 +548,7 @@ def check_custom_tags(
                 issues.append((index, f"not usable in network_type={network_type!r} "
                                       f"(usable by: {', '.join(modes)})"))
 
+    warn_about_unknown_values(unknown)
     for modes, count in mode_counts.most_common():
         log.info("%d custom feature(s) usable by: %s", count, modes)
     for note in sorted(notes):

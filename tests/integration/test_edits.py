@@ -179,6 +179,12 @@ def test_closing_a_street(build, export):
     assert not (layer.car | layer.bike | layer.walk).any()
 
 
+def test_misspelt_value_on_an_edit_is_warned_about(build, caplog):
+    with caplog.at_level(logging.WARNING):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, "surface": "gravle"})])
+    assert "surface='gravle' is not a value routers know - did you mean 'gravel'?" in caplog.text
+
+
 def test_changing_the_kind_of_street(build):
     result = build([(ONE_BLOCK, {"osm_id": ROW_1, "highway": "pedestrian"})])
     (edge, _) = edges_between(result.edges, 7, 8).to_dict("records")

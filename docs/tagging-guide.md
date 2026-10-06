@@ -177,6 +177,14 @@ and on the OSM network: `oneway:bicycle` (contraflow cycling),
 list in `src/networkforge/tags.py`). On nodes, barriers (`barrier=bollard`,
 `gate`), traffic signals and crossings are kept.
 
+For `surface`, `smoothness`, `tracktype`, `sac_scale`, `sidewalk`,
+`cycleway` (and `:left/:right/:both`), `segregated`, `lit`, `toll`,
+`junction`, `bridge`, `tunnel` and `incline` the build **warns** about a
+value routers don't know, with the likely spelling: `surface='asphault'
+is not a value routers know - did you mean 'asphalt'?`. OpenStreetMap
+allows any value, so the build carries on, but routers ignore it. The
+known values are in `networkforge info --json` (`tag_values`).
+
 ### Who may use a way
 
 Two rules decide whether a mode (car, bike, walk) can use a way:

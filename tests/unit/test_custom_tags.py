@@ -214,3 +214,40 @@ def test_tag_errors_carry_structured_issues():
     assert info.value.issues == [
         {"feature": 42, "message": "maxspeed='fast' is not a valid OSM speed"}]
     assert info.value.problems == ["feature 42: maxspeed='fast' is not a valid OSM speed"]
+
+
+@pytest.mark.parametrize("key, value, hint", [
+    ("surface", "asphault", "did you mean 'asphalt'"),
+    ("smoothness", "god", "did you mean 'good'"),
+    ("tracktype", "grade 2", "did you mean 'grade2'"),
+    ("sidewalk", "bothe", "did you mean 'both'"),
+    ("cycleway", "lanes", "did you mean 'lane'"),
+    ("incline", "steep", "routers know."),
+])
+def test_unknown_value_warns_and_suggests(key, value, hint, caplog):
+    """OSM allows any value, so the build goes on; routers would ignore this one."""
+    with caplog.at_level("WARNING"):
+        check(custom(highway="residential", **{key: value}), {})
+    (record,) = [r for r in caplog.records if "is not a value routers know" in r.getMessage()]
+    assert f"{key}={value!r}" in record.getMessage() and hint in record.getMessage()
+    assert record.features == [0]
+
+
+@pytest.mark.parametrize("key, value", [
+    ("surface", "asphalt"), ("surface", "fine_gravel"), ("smoothness", "very_bad"),
+    ("tracktype", "grade5"), ("incline", "10%"), ("incline", "-5%"), ("incline", "up"),
+    ("lit", "yes"), ("cycleway:right", "track"), ("bridge", "viaduct"), ("junction", "roundabout"),
+])
+def test_known_values_pass_quietly(key, value, caplog):
+    with caplog.at_level("WARNING"):
+        check(custom(highway="residential", **{key: value}), {})
+    assert "is not a value routers know" not in caplog.text
+
+
+def test_one_warning_per_value_naming_every_feature(caplog):
+    gdf = gpd.GeoDataFrame({"highway": ["residential"] * 3, "surface": ["asphault"] * 2 + ["dirt"]},
+                           geometry=[LINE] * 3, crs="EPSG:32630")
+    with caplog.at_level("WARNING"):
+        check(gdf, {})
+    (record,) = [r for r in caplog.records if "is not a value routers know" in r.getMessage()]
+    assert record.features == [0, 1]
