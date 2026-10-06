@@ -7,10 +7,12 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-06
+
 ### Fixed
 Found by further testing (odd inputs, larger areas):
 
-- **Attributes that aren't tags kept their type.** All attributes were
+- **Attributes that aren't tags now keep their type.** All attributes were
   turned into text, so a number such as a surveyed travel time reached
   the GeoPackage as `'1.5'` and couldn't be used as a cost in QGIS.
 - **A coordinate that isn't a number** (NaN, infinite) is reported for
@@ -19,6 +21,12 @@ Found by further testing (odd inputs, larger areas):
   the layer's CRS and the order of longitude and latitude.
 
 ### Changed
+- Tag names and values are taken exactly as OSM writes them: text `True`
+  / `False` is no longer turned into `yes` / `no` (a boolean field still
+  is, and empty text still counts as no value).
+- Dev container: the environment is `/opt/venv` instead of the shared
+  `/workspace/.venv`, which the host's and the container's uv kept
+  rebuilding for their own Python. Rebuild the container to use it.
 - Building a network of your own lines is about four times faster: a
   39,000-line network (Malta) takes 25 s instead of 100 s. The steps that
   went through the custom lines one at a time in Python now work on all
@@ -334,7 +342,8 @@ with Valhalla on the raw data:
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/Yibbzz/networkforge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Yibbzz/networkforge/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Yibbzz/networkforge/compare/v0.8.0...v0.9.0
