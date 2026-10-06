@@ -44,6 +44,7 @@ from OSMnx) are still written: ways are rebuilt from the `osmid` column
 and tags come from the columns.
 """
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,7 +69,11 @@ from .tags import (
     NODE_TAGS,
     PART_COLUMN,
     ROUTING_WAY_TAGS,
+    TURNS_ATTR,
 )
+from .turns import relation_tags
+
+log = logging.getLogger(__name__)
 
 GENERATOR = "NetworkForge"
 
@@ -347,6 +352,9 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
     if source is not None:
         ways += [(way_id if way_id > 0 else None, list(refs), dict(tags), way_id)
                  for way_id, (refs, tags) in source.ferries.items()]
+    turns = edges_gdf.attrs.get(TURNS_ATTR) or []
+    if turns:
+        ways = _cut_at_junctions(ways, turns)
 
     # New ids start above every way id in the area's OSM data (the same
     # in the before and after file), and go first to further pieces of
@@ -377,6 +385,11 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
     osm_ways.sort()
 
     relations = _relations(source, pieces, set(node_ids)) if source is not None else []
+    if turns:
+        taken = [relation_id for relation_id, _, _ in relations]
+        if source is not None:
+            taken += [relation_id for relation_id, _, _ in source.relations]
+        relations += _turn_relations(turns, osm_ways, max(taken, default=0) + 1)
     return OSMData(bounds, osm_nodes, osm_ways, relations)
 
 
@@ -457,6 +470,57 @@ def _existing_ways(
                 ways.append((way_id if keeps_id else None, chain, tags[rows[0]], None))
 
     return ways
+
+
+def _cut_at_junctions(ways: list[tuple], turns: list) -> list[tuple]:
+    """
+    Cut the from and to streets of each turn restriction at its junction
+    where they run through it: OSM's restrictions need those ways to end
+    at the via node. The first piece keeps the way's id.
+    """
+    via_of = {}
+    for turn in turns:
+        for neighbour in (turn.from_neighbour, turn.to_neighbour):
+            via_of[frozenset((turn.via, neighbour))] = turn.via
+
+    cut = []
+    for way in ways:
+        way_id, refs, tags, origin = way
+        at = {via_of[segment] for segment in map(frozenset, zip(refs, refs[1:], strict=False))
+              if segment in via_of}
+        inner = [i for i in range(1, len(refs) - 1) if refs[i] in at]
+        if not inner:
+            cut.append(way)
+            continue
+        for number, (start, stop) in enumerate(zip([0, *inner], [*inner, len(refs) - 1],
+                                                   strict=True)):
+            cut.append((way_id if number == 0 else None, refs[start:stop + 1], dict(tags),
+                        origin))
+    return cut
+
+
+def _turn_relations(turns: list, ways: list[tuple], first_id: int) -> list[tuple]:
+    """The turn restrictions as OSM relations: from way, via node, to way."""
+    wanted = {frozenset((turn.via, n)) for turn in turns
+              for n in (turn.from_neighbour, turn.to_neighbour)}
+    way_of = {}
+    for way_id, refs, _ in ways:
+        for segment in map(frozenset, zip(refs, refs[1:], strict=False)):
+            if segment in wanted:
+                way_of[segment] = way_id
+
+    relations = []
+    for number, turn in enumerate(turns):
+        from_way = way_of.get(frozenset((turn.via, turn.from_neighbour)))
+        to_way = way_of.get(frozenset((turn.via, turn.to_neighbour)))
+        if from_way is None or to_way is None:  # pragma: no cover - resolve_turns found them
+            log.warning("Turn restriction %s: its streets aren't in the output; left out.",
+                        turn.feature)
+            continue
+        relations.append((first_id + number,
+                          [("w", from_way, "from"), ("n", turn.via, "via"), ("w", to_way, "to")],
+                          relation_tags(turn)))
+    return relations
 
 
 def _custom_ways(edges: pd.DataFrame) -> list[tuple]:

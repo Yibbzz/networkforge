@@ -246,3 +246,96 @@ def test_streets_given_as_lines_route_like_the_same_streets_in_osm(streets_as_li
     # cut the streets into edges at the same junctions but number them
     # differently: a trip can come out a metre or two apart.
     assert differing(built, expected, tolerance=0.005, metres=3) == 0
+
+
+# ---------------------------------------------------------------------
+# A turn restriction drawn at a real junction
+# ---------------------------------------------------------------------
+
+def test_turn_restriction_at_a_real_junction(extract, routers, tmp_path_factory):
+    """
+    Find a junction of two-way streets, draw a turn line through it
+    (20 m in on one street, 20 m out on another), ban that turn, and
+    check Valhalla drives round instead.
+    """
+    from shapely.geometry import Point
+
+    from networkforge.projection import get_analysis_crs
+    from networkforge.turns import _turn_direction
+
+    before = routers["before"]
+    streets = {way: (refs, tags) for way, (refs, tags) in before.ways.items()
+               if tags.get("highway") in ("residential", "tertiary", "secondary")
+               and "oneway" not in tags and len(refs) > 3}
+    on = {}
+    for way, (refs, _) in streets.items():
+        for position, node in enumerate(refs):
+            on.setdefault(node, []).append((way, position))
+
+    def turns_at(node):
+        """(street in, its position of node; street out, its position of node)."""
+        for way_a, at_a in on[node]:
+            for way_b, at_b in on[node]:
+                if way_a != way_b and at_a >= 1 and at_b <= len(streets[way_b][0]) - 2:
+                    yield way_a, at_a, way_b, at_b
+
+    # How many ways each node is on: a turn line must pass no other junction.
+    ways_at = {}
+    for refs, _ in before.ways.values():
+        for ref in set(refs):
+            ways_at[ref] = ways_at.get(ref, 0) + 1
+
+    def stretch(refs, start, step):
+        """Nodes from refs[start] along the way (step -1 or +1) for 15 m, or None."""
+        nodes, length = [refs[start]], 0.0
+        while length < 15:
+            index = start + step * len(nodes)
+            if not 0 <= index < len(refs) or ways_at.get(refs[index], 0) > 1:
+                return None
+            nodes.append(refs[index])
+            a, b = gpd.GeoSeries([Point(before.node(n)) for n in nodes[-2:]],
+                                 crs=4326).to_crs(crs)
+            length += a.distance(b)
+        return nodes
+
+    def candidates():
+        """Real turns: in on one street, out on another, the shortest drive going that way."""
+        for node in sorted(on):
+            for way_a, at_a, way_b, at_b in turns_at(node):
+                back = stretch(streets[way_a][0], at_a, -1)
+                ahead = stretch(streets[way_b][0], at_b, +1)
+                if back is None or ahead is None:
+                    continue
+                ends = [*back[::-1], *ahead[1:]]
+                points = gpd.GeoSeries([Point(before.node(n)) for n in ends],
+                                       crs=4326).to_crs(crs)
+                came_from, via, goes_to = (points.iloc[len(back) - 2], points.iloc[len(back) - 1],
+                                           points.iloc[len(back)])
+                if _turn_direction(came_from, via, goes_to) not in ("left", "right"):
+                    continue
+                direct = before.route(before.node(ends[0]), before.node(ends[-1]), "auto",
+                                      shortest=True)
+                if direct is not None and direct.way_ids == (way_a, way_b):
+                    yield LineString(points.tolist()), (came_from, via, goes_to), ends, direct
+
+    crs = get_analysis_crs(gpd.GeoDataFrame(geometry=[Point(before.node(next(iter(on))))],
+                                            crs=4326))
+    line, (came_from, via, goes_to), ends, direct = next(candidates())
+    turn = _turn_direction(came_from, via, goes_to)
+
+    folder = tmp_path_factory.mktemp("turn")
+    header = osmium.io.Reader(str(extract), osmium.osm.osm_entity_bits.NOTHING).header().box()
+    area = gpd.GeoDataFrame(geometry=[box(
+        header.bottom_left.lon - 0.01, header.bottom_left.lat - 0.01,
+        header.top_right.lon + 0.01, header.top_right.lat + 0.01)], crs="EPSG:4326")
+    feature = gpd.GeoDataFrame({"restriction": [f"no_{turn}_turn"]}, geometry=[line], crs=crs)
+    nodes, edges = build_network(area, feature, osm_source=extract)
+    write_osm(nodes, edges, folder / "after.osm.pbf")
+    after = Router.from_pbf(folder / "after.osm.pbf", folder / "tiles")
+
+    start, end = before.node(ends[0]), before.node(ends[-1])
+    detour = after.route(start, end, "auto", shortest=True)
+    walking = after.route(start, end, "pedestrian", shortest=True)
+
+    assert detour is None or detour.length_m > direct.length_m + 5
+    assert walking.length_m == pytest.approx(direct.length_m, abs=5)

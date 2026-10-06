@@ -42,6 +42,28 @@ another file is named.
 Turn restrictions are not part of that tutorial, but OpenStreetMap has
 them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_after`.
 
+## Turn restrictions
+
+ArcGIS stores turns in a turn feature class: short lines drawn across a
+junction, from one edge to another. Here a turn is drawn the same way,
+in the custom layer, with OSM's `restriction` tag; it becomes an OSM
+turn restriction relation ([how](tagging-guide.md#turn-restrictions)).
+Tests in `tests/valhalla/test_turns.py`:
+
+| Case | Test |
+|---|---|
+| A banned turn: vehicles and bikes go round, walkers don't | `test_banned_left_turn` |
+| Only one movement allowed | `test_only_straight_on` |
+| Exceptions (`except=bicycle`) | `test_exceptions` |
+| Lorries, buses, cars or bikes only (`restriction:hgv` ...) | `test_restriction_for_one_kind_of_vehicle` |
+| From a new road onto an existing street, and back | `test_turn_from_a_new_road_onto_an_existing_street`, `test_turn_onto_a_new_road` |
+| Next to an existing OSM restriction | `test_existing_restriction_still_applies_beside_a_new_one` |
+| At a real junction (Monaco) | `tests/live/test_valhalla_real_data.py`: `test_turn_restriction_at_a_real_junction` |
+
+Not covered: turn *penalties* in seconds (Valhalla works out turn delays
+itself), and restrictions through a stretch of street rather than one
+junction (OSM's "via way")
+
 ## A network from your own data only
 
 ArcGIS builds a network from any street feature class. `networkforge
@@ -94,7 +116,6 @@ or removing part of a stretch between two OSM nodes.
 |---|---|
 | **Time zone attribute** | Not NetworkForge's part. Time-of-day tags such as `motor_vehicle:conditional=no @ (07:00-19:00)` are written and Valhalla reads them (`test_time_of_day_closure_reaches_valhalla`), but it only applies them to trips with a departure time, on a graph built with its time zone database. |
 | **Turn penalties you set yourself** (7 s for a left turn between local roads) | Valhalla's turn delays are built in. Its options change them as a whole, not per turn type. |
-| **Your own turn restrictions** | Existing OSM restrictions are kept. You can't yet add one for your own lines. |
 | **Landmarks in directions** | Valhalla has a separate landmark database; NetworkForge doesn't write to it. |
 | **Street names in several languages** | Kept on existing streets. On your own lines only `name`, `alt_name`, `official_name`, `ref` and `int_ref` are written. |
 | **Live or historical traffic** | Not modelled. |

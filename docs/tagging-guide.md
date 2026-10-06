@@ -21,6 +21,7 @@ Contents:
 [Presets](#presets) ·
 [Attributes](#attributes) ·
 [Changing existing streets](#changing-existing-streets) ·
+[Turn restrictions](#turn-restrictions) ·
 [A network of your own lines](#a-network-of-your-own-lines) ·
 [Recipes](#recipes) ·
 [Fixing tag errors](#fixing-tag-errors)
@@ -275,6 +276,57 @@ changed street still apply.
 | `remove= is for existing streets` | A feature has `remove` set but no OSM id, so there is nothing to remove. |
 | `change nothing` (warning) | The feature's tags are all the same as OpenStreetMap's. |
 
+## Turn restrictions
+
+A turn restriction bans (or forces) one movement at a junction: "no left
+turn from Main Street into Oak Street", "straight on only". It is about
+two streets and the junction between them, so it can't be an attribute
+of one street (for "this street only goes one way", use `oneway`).
+
+Draw it in the custom layer as a **short line from the street you arrive
+on, through the junction, onto the street you leave on**, and give it a
+`restriction` attribute:
+
+| `restriction` | Meaning |
+|---|---|
+| `no_left_turn`, `no_right_turn`, `no_straight_on`, `no_u_turn` | that movement is banned |
+| `only_left_turn`, `only_right_turn`, `only_straight_on`, `only_u_turn` | that movement is the only one allowed from this street |
+
+- **Only for some vehicles:** use `restriction:hgv` (lorries),
+  `restriction:bus`, `restriction:motorcar` or `restriction:bicycle`
+  instead of `restriction`.
+- **Exceptions:** `except` lists vehicles the rule doesn't apply to,
+  separated by `;`: `bicycle`, `psv`, `bus`, `hgv`, `motorcar`,
+  `motorcycle`, `moped`, `emergency`, `taxi`.
+- Walkers are never bound by turn restrictions.
+
+These are the tags of an OpenStreetMap turn restriction, and that is
+what the line becomes in the OSM file: a relation from the street, via
+the junction, to the street (tagged `nf:custom=yes`). Where a street
+runs through the junction, it is cut there, as OSM requires.
+
+Where to draw it:
+
+- It works at any junction: between existing streets, between your new
+  lines, and between a new line and an existing street.
+- **One junction per line.** Start and end on the streets (snap to them
+  in QGIS): within the snap distance (1 m) of the street on both sides
+  of the junction. The line's first and last points should be off the
+  junction, part-way along each street.
+- The value should match what you drew. A line drawn as a left turn but
+  tagged `no_right_turn` builds, with a warning: OSM goes by the streets,
+  so the rule would apply to the left turn you drew.
+
+Routers such as Valhalla obey turn restrictions; the GeoPackage (and so
+QGIS's own network tools) can't show them.
+
+| Message | Meaning |
+|---|---|
+| `doesn't pass through a junction` | The line misses the junction (by more than the snap distance), or crosses a street with no junction. |
+| `passes through N junctions` | Draw it through only the junction the rule is at. |
+| `doesn't follow a street on both sides of the junction` | One end isn't on a street that meets the junction. |
+| `... is not an OSM turn restriction` | Use one of the values above. |
+
 ## A network of your own lines
 
 If you already have a street network as a line layer (council
@@ -312,8 +364,9 @@ separate pieces there are and names the features outside the largest
 one. These are most often lines that stop short of the street they
 should meet: extend them, or raise the snap distance.
 
-What a line layer can't carry: turn restrictions, and things that live
-on points in OpenStreetMap (traffic signals, bollards, gates). Private
+What a line layer can't carry: things that live on points in
+OpenStreetMap (traffic signals, bollards, gates). Turn restrictions are
+drawn as lines, as above. Private
 and closed streets (`access=private`, `access=no`) are kept as they are.
 An `osm_id` attribute is ignored here: there are no existing streets to
 change.
@@ -329,6 +382,7 @@ change.
 | Make an existing street one-way | copy it from the "before" layer, set `oneway=yes` ([changing existing streets](#changing-existing-streets)) |
 | Close an existing street | copy it, set `access=no` |
 | Remove an existing street | copy it, set `remove=yes` |
+| Ban a turn | a line through the junction with `restriction=no_left_turn` ([turn restrictions](#turn-restrictions)) |
 | Pedestrianise a street | `preset="pedestrian_street"` (cycling allowed), or `highway=pedestrian` for walking only |
 | Filtered street / bus gate | `preset="car_free_street"` |
 | Bikes-only route (no pedestrians) | `highway=path`, `access=no`, `bicycle=designated` |

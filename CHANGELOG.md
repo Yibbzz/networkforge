@@ -7,6 +7,22 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+- **Turn restrictions.** A line in the custom layer drawn from one street,
+  through a junction, onto another, with OSM's `restriction` tag
+  (`no_left_turn`, `only_straight_on`, ...), becomes an OSM turn
+  restriction relation. `restriction:hgv` / `:bus` / `:motorcar` /
+  `:bicycle` limit it to one kind of vehicle, and `except` exempts some.
+  It works between existing streets, new lines and changed streets, and
+  in standalone networks. Streets that run through the junction are cut
+  there, as OSM requires. Lines that pass through no junction or more
+  than one are refused with the feature named; a value that disagrees
+  with the drawn turn (no_right_turn drawn as a left turn) is warned
+  about. See "Turn restrictions" in the tagging guide.
+- `--json`: the `done` event of `build` and `check` has
+  `turn_restrictions`; `info` has `turn_restriction_fields` and
+  `tag_values.restriction`.
+
 ## [0.11.1] - 2026-10-06
 
 ### Fixed

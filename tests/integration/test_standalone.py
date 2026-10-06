@@ -297,7 +297,8 @@ def test_cli_no_osm(custom_file, capsys):
     assert events[-1] == {"event": "done", "outputs": {
         "osm": str(custom_file / "network.osm.pbf"),
         "gpkg": str(custom_file / "network.gpkg")},
-        "nodes": 5, "edges": 3, "custom_edges": 3, "modified_edges": 0, "removed_edges": 0}
+        "nodes": 5, "edges": 3, "custom_edges": 3, "modified_edges": 0, "removed_edges": 0,
+        "turn_restrictions": 0}
     (warning,) = [e for e in events if e["event"] == "warning"]
     assert warning["features"] == [9] and "separate pieces" in warning["message"]
     assert [e["step"] for e in events if e["event"] == "progress"][:2] == [1, 2]

@@ -29,7 +29,7 @@ from .osm import (
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
-from .tags import EDITS_ATTR, PART_COLUMN, REMOVE_COLUMN, REMOVED_ATTR
+from .tags import EDITS_ATTR, PART_COLUMN, REMOVE_COLUMN, REMOVED_ATTR, TURNS_ATTR
 from .topology import (
     ON_NODE_TOLERANCE,
     assign_point_ids_to_lines,
@@ -45,6 +45,7 @@ from .topology import (
     update_and_finalize_lines_gdf,
     validate_user_osm_intersection,
 )
+from .turns import check_turn_tags, resolve_turns, split_turns
 from .validation import (
     assert_all_edges_have_valid_nodes,
     assert_custom_lines_unbroken,
@@ -305,6 +306,11 @@ def build_network(
 
     # Features with an OSM way id change that existing way (edits.py);
     # the rest are new lines. Blanket tags are for new lines only.
+    # Turn restriction lines aren't part of the network: they are matched
+    # to it once it is built (turns.py).
+    custom_data_gdf, turns_gdf = split_turns(custom_data_gdf)
+    check_turn_tags(turns_gdf, strict=strict)
+
     # In a standalone network every feature is a line of the network.
     if standalone:
         edits_gdf = custom_data_gdf.iloc[:0]
@@ -379,19 +385,27 @@ def build_network(
         nodes_gdf = nodes_gdf[nodes_gdf.index.isin(in_use)]
 
     def finish(nodes, edges):
+        if edges is osm_edges_gdf:
+            # Nothing changed the streets (turn restrictions only): the
+            # after network still needs its own table, or the turns would
+            # land in the before network too.
+            edges = edges.copy()
         if source_data is not None:
             edges.attrs[SOURCE_ATTR] = source_data
             osm_edges_gdf.attrs[SOURCE_ATTR] = source_data
         edges.attrs[EDITS_ATTR] = changes
         edges.attrs[REMOVED_ATTR] = removed
+        edges.attrs[TURNS_ATTR] = resolve_turns(
+            turns_gdf, nodes, edges, snap_tolerance, strict=strict)
         if return_source_osm:
             return nodes, edges, osm_nodes_gdf, osm_edges_gdf
         return nodes, edges
 
     if custom_data_gdf.empty:
-        if not changes and not removed:
+        if not changes and not removed and turns_gdf.empty:
             raise InputError("Nothing to build: no new lines, and no feature changes or "
-                             "removes an existing street.", guide="changing-existing-streets")
+                             "removes an existing street or adds a turn restriction.",
+                             guide="changing-existing-streets")
         log.info("No new lines: the network is OSM with %d change(s) and %d edge(s) removed",
                  len(changes), removed)
         return finish(nodes_gdf, edges_gdf)

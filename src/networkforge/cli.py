@@ -62,7 +62,15 @@ from .modes import MODES, usable_modes
 from .network import JOIN_AT, build_network
 from .osm import NETWORK_TYPES
 from .presets import PRESETS, preset_tags
-from .tags import EDIT_ID_COLUMN, EDIT_ID_COLUMNS, MODIFIED_COLUMN, REMOVE_COLUMN, REMOVED_ATTR
+from .tags import (
+    EDIT_ID_COLUMN,
+    EDIT_ID_COLUMNS,
+    MODIFIED_COLUMN,
+    REMOVE_COLUMN,
+    REMOVED_ATTR,
+    TURNS_ATTR,
+)
+from .turns import RESTRICTION_KEYS, TURN_VALUES, check_turn_tags, split_turns
 from .validation import (
     ACCESS_KEYS,
     ACCESS_VALUES,
@@ -156,9 +164,10 @@ def cmd_build(args, emit) -> int:
     modified_edges = (int((streets[MODIFIED_COLUMN] == "yes").sum())
                       if MODIFIED_COLUMN in streets else 0)
     removed_edges = int(edges.attrs.get(REMOVED_ATTR, 0))
+    turn_restrictions = len(edges.attrs.get(TURNS_ATTR) or [])
     emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(streets),
           "custom_edges": custom_edges, "modified_edges": modified_edges,
-          "removed_edges": removed_edges},
+          "removed_edges": removed_edges, "turn_restrictions": turn_restrictions},
          text=f"Done: {len(nodes):,} nodes, {len(streets):,} edges ({custom_edges:,} custom, "
               f"{modified_edges:,} changed, {removed_edges:,} removed). "
               f"Wrote {', '.join(outputs.values())}")
@@ -174,8 +183,11 @@ def cmd_check(args, emit) -> int:
         custom = take_edit_ids(custom)
         custom = drop_reserved_columns(custom, quiet=EDIT_ID_COLUMN in custom.columns)
 
-    # Changes to existing streets are checked for valid values only: which
-    # way they change is known once the network is downloaded (build).
+    # Changes to existing streets and turn restrictions are checked for
+    # valid values only: where they apply is known once the network is
+    # built.
+    custom, turns = split_turns(custom)
+    check_turn_tags(turns, strict=True)
     custom, edits = split_edits(custom)
     check_edit_tags(edits, strict=True)
 
@@ -193,9 +205,12 @@ def cmd_check(args, emit) -> int:
     summary = "; ".join(f"{count} usable by {m}" for m, count in modes.most_common())
     if len(edits):
         summary = "; ".join(filter(None, [summary, f"{len(edits)} change existing streets"]))
-    emit({"event": "done", "features": len(custom) + len(edits), "modes": dict(modes),
-          "edits": len(edits)},
-         text=f"OK: {len(custom) + len(edits)} feature(s) - {summary}")
+    if len(turns):
+        summary = "; ".join(filter(None, [summary, f"{len(turns)} turn restriction(s)"]))
+    features = len(custom) + len(edits) + len(turns)
+    emit({"event": "done", "features": features, "modes": dict(modes),
+          "edits": len(edits), "turn_restrictions": len(turns)},
+         text=f"OK: {features} feature(s) - {summary}")
     return EXIT_OK
 
 
@@ -213,10 +228,12 @@ def cmd_info(args, emit) -> int:
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
         "edit_id_fields": list(EDIT_ID_COLUMNS),
         "remove_field": REMOVE_COLUMN,
+        "turn_restriction_fields": list(RESTRICTION_KEYS),
         "standalone": True,
         "join_at": list(JOIN_AT),
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
+            "restriction": sorted(TURN_VALUES),
             "highway": sorted(KNOWN_HIGHWAYS),
             "oneway": sorted(ONEWAY_VALUES),
             **{key: sorted(ACCESS_VALUES) for key in ACCESS_KEYS},

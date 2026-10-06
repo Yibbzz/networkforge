@@ -64,6 +64,13 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   features outside the largest piece (`_warn_about_separate_pieces`). `join_at`: "crossings"
   (default pipeline) or "vertices" (no crossing points, lines split only at their own vertices,
   all vertices within snap_tolerance clustered) - the latter reproduces OSM-derived data exactly.
+- `turns.py` - turn restrictions: custom features with `restriction` / `restriction:<vehicle>`
+  (`RESTRICTION_KEYS`) are split off in step 1 (`split_turns`, before edits) and matched to the
+  FINISHED network in `finish()` (`resolve_turns`): exactly one junction (node with >= 3 neighbours)
+  within snap_tolerance of the line, not at its ends; from/to = the edges at that node nearest
+  the line 3 m before/after it. Stored as `Turn`s in `edges.attrs[TURNS_ATTR]`; export cuts the
+  member ways at the via node (`_cut_at_junctions`) and writes relations (`_turn_relations`,
+  ids above the source's). Value vs drawn direction mismatch only warns.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
@@ -153,6 +160,8 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
 ## Gotchas
 - Overpass downloads retry on connection errors (`osm.DOWNLOAD_RETRY_WAITS`, zeroed in
   tests/integration/conftest.py); tests/live/conftest.py turns a final OSMDownloadError into a skip.
+- `finish()` must not set attrs on `osm_edges_gdf` itself: with no line or edit, `edges` IS the
+  baseline table (copy it), or turns leaked into the before file.
 - Valhalla 3.9 quirks the tests work around: the matrix can disagree with route() on the same graph
   (`Router.distances(agrees_with=...)` re-measures with route()); locations snap onto a node up to
   5 m away (test_random_lines skips such ambiguous junctions).

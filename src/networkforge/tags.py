@@ -101,6 +101,10 @@ MODIFIED_TAG = "nf:modified"
 EDIT_COLUMN = "nf_edit"
 EDITS_ATTR = "networkforge_edits"
 
+# Turn restrictions resolved on the built network (turns.Turn), carried
+# to export like the edits.
+TURNS_ATTR = "networkforge_turns"
+
 # Numbers the custom lines, so the pieces a line is cut into at
 # junctions can be written as one way again.
 PART_COLUMN = "nf_part"

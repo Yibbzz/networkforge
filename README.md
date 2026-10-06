@@ -18,6 +18,8 @@ and as a GeoPackage for QGIS.
   attribute to make it one-way, close it, pedestrianise it or change its
   speed limit ([how](docs/tagging-guide.md#changing-existing-streets)).
 - **Remove** existing streets (`remove=yes`).
+- **Ban or force turns** at junctions, drawn as short lines through the
+  junction ([how](docs/tagging-guide.md#turn-restrictions)).
 - **Build a network from your own lines alone**, with no OpenStreetMap
   ([how](docs/tagging-guide.md#a-network-of-your-own-lines)).
 - **Before and after**: the untouched network and the changed one, to
@@ -50,9 +52,10 @@ is not a full transport model:
   one, remove it and draw the new line.
 - **No traffic simulation.** No congestion, demand or signal timing:
   travel times come from speed limits (or default speeds per road type).
-- **Turn restrictions come from OpenStreetMap only.** Existing ones
-  ("no right turn") are kept in the exported file and routers obey them;
-  you can't yet add one for your own lines.
+- **Turn restrictions are for routers.** Existing ones and the ones you
+  draw are written to the OSM file and Valhalla obeys them; the
+  GeoPackage (QGIS's own network tools) can't show them. Restrictions
+  through a stretch of street ("via way") can't be drawn yet.
 - **The GeoPackage is simpler than a router.** Its `car`, `bike` and
   `walk` columns say who may use each street and in which direction,
   which is what QGIS's network tools need. It knows nothing of turn
