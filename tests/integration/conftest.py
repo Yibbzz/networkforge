@@ -28,7 +28,9 @@ def build(fake_osm, tmp_path):
     def _build(features, **build_kwargs):
         custom = gpd.GeoDataFrame(
             [tags for _, tags in features],
-            geometry=[LineString(coords) for coords, _ in features],
+            # coords, or a ready-made geometry (e.g. a MultiLineString)
+            geometry=[coords if hasattr(coords, "geom_type") else LineString(coords)
+                      for coords, _ in features],
             crs=UTM,
         )
         return build_and_export(BBOX, custom, tmp_path, **build_kwargs)

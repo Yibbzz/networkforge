@@ -156,3 +156,20 @@ def test_other_attributes_reach_the_geopackage_with_their_type(build, tmp_path):
     assert set(custom.survey_minutes) == {1.5} and set(custom.score) == {7}
     assert set(custom.note) == {"proposed"}
     assert set(custom.maxspeed) == {"30 mph"}  # tags are OSM text
+
+
+def test_new_roundabout_is_one_way_without_saying_so(build):
+    """OSM (and Valhalla) treat junction=roundabout as one-way in its drawn direction."""
+    ring = [(500_300.0, 6_200_300.0), (500_350.0, 6_200_320.0), (500_370.0, 6_200_360.0),
+            (500_320.0, 6_200_380.0), (500_300.0, 6_200_300.0)]
+    result = build([(ring, {"highway": "primary", "junction": "roundabout"})])
+    custom = analysis_edges(result.nodes, result.edges).query("custom == 'yes'")
+    assert set(custom.car_direction) == {"forward"}
+    assert set(custom.bike_direction) == {"forward"}
+
+
+def test_roundabout_with_an_explicit_oneway_keeps_it(build):
+    ring = [(500_300.0, 6_200_300.0), (500_350.0, 6_200_320.0), (500_300.0, 6_200_300.0)]
+    result = build([(ring, {"highway": "primary", "junction": "roundabout", "oneway": "-1"})])
+    custom = analysis_edges(result.nodes, result.edges).query("custom == 'yes'")
+    assert set(custom.car_direction) == {"backward"}

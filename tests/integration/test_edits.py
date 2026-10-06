@@ -13,6 +13,7 @@ import geopandas as gpd
 import osmium
 import pytest
 from shapely.geometry import LineString
+from shapely.geometry import MultiLineString as MULTI
 
 from networkforge import osm, write_gpkg, write_osm
 from networkforge.cli import EXIT_INPUT, EXIT_OK, main
@@ -553,3 +554,47 @@ def test_new_nodes_never_reuse_an_id_from_the_osm_data(build, export, monkeypatc
     assert new and min(new) > FERRY_NODE
     _, after = export(result)
     assert after[FERRY_ID][0][1] == FERRY_NODE
+
+
+# ---------------------------------------------------------------------
+# Multi-part features
+# ---------------------------------------------------------------------
+
+TWO_BLOCKS = [block(1, 0, 1), block(1, 2, 3)]  # 6-7 and 8-9, not 7-8
+
+
+def test_multi_part_change_applies_to_each_part(build, export):
+    result = build([(MULTI(TWO_BLOCKS), {"osm_id": ROW_1, "maxspeed": "20 mph"})])
+    _, after = export(result)
+
+    changed = sorted(refs for refs, tags in after.values() if tags.get("nf:modified") == "yes")
+    assert changed == [[6, 7], [8, 9]]
+    between = edges_between(result.edges, 7, 8)  # the block between the parts
+    assert set(between.maxspeed) == {"30 mph"} and between.modified.isna().all()
+
+
+def test_each_part_of_a_one_way_change_follows_its_own_direction(build, export):
+    """First part drawn eastwards, second westwards: one-way east, then west."""
+    parts = [block(1, 0, 1), block(1, 3, 2)]
+    _, after = export(build([(MULTI(parts), {"osm_id": ROW_1, "oneway": "yes"})]))
+
+    oneway = {tuple(refs): tags["oneway"] for refs, tags in after.values()
+              if tags.get("nf:modified") == "yes"}
+    assert oneway == {(6, 7): "yes", (8, 9): "-1"}
+
+
+def test_multi_part_removal(build, export):
+    result = build([(MULTI(TWO_BLOCKS), {"osm_id": ROW_1, "remove": "yes"})])
+    _, after = export(result)
+
+    assert sorted(refs for refs, tags in after.values()
+                  if tags.get("name") == "Row 1 Street") == [[7, 8], [9, 10]]
+    assert result.edges.attrs[REMOVED_ATTR] == 2
+
+
+def test_multi_part_feature_that_changes_nothing_is_named_once(build, caplog):
+    same = {"osm_id": ROW_1, "maxspeed": "30 mph"}
+    with caplog.at_level(logging.WARNING), pytest.raises(InputError, match="Nothing to build"):
+        build([(MULTI(TWO_BLOCKS), same)])
+    (warning,) = [r for r in caplog.records if "change nothing" in r.getMessage()]
+    assert warning.features == [0]

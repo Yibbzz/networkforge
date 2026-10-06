@@ -7,6 +7,28 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+- **A multi-part feature that changes an existing street** (`osm_id`)
+  now applies to each part on its own: `oneway` follows the direction
+  each part is drawn in (all parts took the first part's), and a problem
+  or an unchanged feature is reported once, not once per part.
+- **A new roundabout without `oneway`** is one-way in the GeoPackage's
+  `car_direction` / `bike_direction`, as OSM and Valhalla treat it. It
+  was marked two-way there (the PBF was already right).
+- **A line that crosses itself within 1 m of a motorway** (or another
+  grade-separated way) no longer joins it there. The line was cut at the
+  crossing before snapping, and the cut ends counted as line ends, which
+  may join a motorway (as slip roads do). Now only the ends you drew do.
+  Found by the new multi-part property tests; single lines were affected
+  too.
+
+### Added
+- Tests for multi-part custom lines: offline (parts that share an end,
+  cross, nearly meet, stray from the network or collapse; random
+  multi-part lines in the property tests) and in Valhalla (each part
+  routable, crossing parts joined, per-part edits and removals,
+  standalone networks).
+
 ## [0.12.0] - 2026-10-06
 
 ### Added

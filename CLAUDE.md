@@ -170,8 +170,10 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
 - A piece left without two end nodes after splitting (zero-length offcut where a line is cut at
   its own end) must be dropped (network.py step 10): it kept the parent's u/v and became a second,
   uncut copy of the street.
-- A custom line crossing itself is cut at the crossing first (`split_at_self_crossings`) so it gets
-  a junction there; grade-separated lines are left whole.
+- A custom line crossing itself is cut at the crossing (`split_at_self_crossings`) so it gets
+  a junction there; grade-separated lines are left whole. It returns the cuts, passed as `not_ends`
+  to the snapping steps and `create_points_from_gdf`: cut ends aren't drawn ends, and only ends may
+  join a motorway. Cutting AFTER snapping instead broke lines snapped into an out-and-back (Hypothesis).
 - modes.py vs Valhalla: bikes on `highway=pedestrian` need a bicycle tag; `motorroad=yes` closes
   walk/bike; lines open only to buses etc. (`open_to_other_vehicles`) are valid, with a note.
 - GeoPackage / OSMnx routing ignores node barriers and turn restrictions; Valhalla obeys both.

@@ -16,7 +16,7 @@ import math
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, MultiLineString, Point
 
 from networkforge.modes import usable_modes
 from networkforge.validation import assert_all_custom_edges_are_connected
@@ -134,3 +134,25 @@ def assert_motorway_only_joined_at_line_ends(result, features):
         assert min(position.distance(end) for end in ends) <= SNAP_TOLERANCE, (
             f"motorway joined at {position}, which is not a custom line end"
         )
+
+
+@st.composite
+def multi_part_feature(draw):
+    """Two to three parts, each drawn like custom_feature, sharing one set of tags."""
+    parts = draw(st.lists(custom_feature(), min_size=2, max_size=3))
+    return MultiLineString([coords for coords, _ in parts]), parts[0][1]
+
+
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(feature=multi_part_feature())
+def test_integration_rules_hold_for_any_multi_part_line(build, feature):
+    """Each part of a multi-part feature joins and is routed like a line of its own."""
+    geometry, tags = feature
+    result = build([(geometry, tags)])
+
+    assert_all_custom_edges_are_connected(result.edges)
+    assert result.nodes.index.is_unique
+    assert_valid_osm_xml(result.custom_path)
+    assert_routes(result, set(usable_modes(tags)))
+    assert_motorway_only_joined_at_line_ends(
+        result, [(list(part.coords), tags) for part in geometry.geoms])

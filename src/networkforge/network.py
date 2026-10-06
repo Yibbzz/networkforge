@@ -421,15 +421,19 @@ def build_network(
     # exactly onto it (nearest node, else nearest edge), so the line
     # joins the network itself rather than a point next to it.
     custom_parts_gdf = custom_data_gdf.explode(index_parts=False)
+    # Where a line crosses itself it is cut, but those cuts are not ends
+    # the user drew: they mustn't join what only ends may (a motorway).
+    cuts = np.empty((0, 2))
     if not at_vertices:
-        custom_parts_gdf = split_at_self_crossings(custom_parts_gdf)
+        custom_parts_gdf, cuts = split_at_self_crossings(custom_parts_gdf)
     custom_parts_gdf = snap_line_ends_together(
-        custom_parts_gdf, snap_tolerance, every_vertex=at_vertices)
+        custom_parts_gdf, snap_tolerance, every_vertex=at_vertices, not_ends=cuts)
     custom_data_gdf = snap_line_vertices_to_network(
         custom_parts_gdf,
         nodes_gdf,
         edges_gdf,
         snap_tolerance,
+        not_ends=cuts,
     )
 
     if custom_data_gdf.empty:
@@ -470,6 +474,7 @@ def build_network(
     custom_points_gdf = create_points_from_gdf(
         combined_gdf,
         crossings=not at_vertices,
+        not_ends=cuts,
     )
 
     # Crossings near an OSM node are moved onto it before splitting.

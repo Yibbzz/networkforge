@@ -240,30 +240,54 @@ def snap_points_to_network(
     return snap_points_to_edges(near_node, edges_gdf, tolerance)
 
 
-def split_at_self_crossings(lines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def split_at_self_crossings(lines_gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, np.ndarray]:
     """
     Cut each (single-part) line that crosses itself into parts that end
     at the crossing, so the crossing becomes a junction like any other
     place two lines cross at-grade. Lines that are grade-separated
     (a bridge looping over itself) are left whole. Parts keep the line's
     index label and attributes.
+
+    Also returns the cuts (x, y rows): part ends that aren't ends of a
+    drawn line, to pass as `not_ends` to the steps that let only ends
+    join a grade-separated way.
     """
+    no_cuts = np.empty((0, 2))
     crossing = ~lines_gdf.geometry.is_simple.to_numpy()
     if crossing.any():
         separated = np.array([is_grade_separated(row) for _, row in lines_gdf[crossing].iterrows()])
         crossing[np.flatnonzero(crossing)[separated]] = False
     if not crossing.any():
-        return lines_gdf
+        return lines_gdf, no_cuts
 
     geometries = lines_gdf.geometry.to_numpy().copy()
+    drawn_ends = _end_coordinates(geometries)
     geometries[crossing] = shapely.node(geometries[crossing])
-    return lines_gdf.set_geometry(geometries, crs=lines_gdf.crs).explode(index_parts=False)
+    parts = lines_gdf.set_geometry(geometries, crs=lines_gdf.crs).explode(index_parts=False)
+    part_ends = np.unique(_end_coordinates(parts.geometry.to_numpy()), axis=0)
+    cuts = part_ends[~_rows_in(part_ends, drawn_ends)]
+    return parts, cuts
+
+
+def _end_coordinates(geometries: np.ndarray) -> np.ndarray:
+    """The first and last coordinates of each line, as (x, y) rows."""
+    return np.vstack([shapely.get_coordinates(shapely.get_point(geometries, 0)),
+                      shapely.get_coordinates(shapely.get_point(geometries, -1))])
+
+
+def _rows_in(coords: np.ndarray, rows: np.ndarray) -> np.ndarray:
+    """For each (x, y) row of coords: is it exactly one of `rows`?"""
+    if not len(rows) or not len(coords):
+        return np.zeros(len(coords), dtype=bool)
+    known = {tuple(row) for row in rows.tolist()}
+    return np.array([tuple(row) in known for row in coords.tolist()], dtype=bool)
 
 
 def snap_line_ends_together(
     lines_gdf: gpd.GeoDataFrame,
     tolerance: float,
     every_vertex: bool = False,
+    not_ends: np.ndarray | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Where ends of different (single-part) lines lie within `tolerance`
@@ -274,6 +298,8 @@ def snap_line_ends_together(
 
     every_vertex: do the same for all vertices, not only the ends (for
     networks whose lines join wherever they share a vertex).
+    not_ends: (x, y) rows of part ends that aren't line ends (see
+    split_at_self_crossings); they stay put.
     """
     geometries = lines_gdf.geometry.to_numpy()
     if len(geometries) < 2:
@@ -286,6 +312,8 @@ def snap_line_ends_together(
         starts = np.flatnonzero(np.r_[True, line[1:] != line[:-1]])
         stops = np.flatnonzero(np.r_[line[1:] != line[:-1], True])
         candidates = np.unique(np.r_[starts, stops])
+        if not_ends is not None:
+            candidates = candidates[~_rows_in(coords[candidates], not_ends)]
 
     points = shapely.points(coords[candidates])
     a, b = shapely.STRtree(points).query(points, predicate="dwithin", distance=tolerance)
@@ -323,13 +351,15 @@ def snap_line_vertices_to_network(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame,
     tolerance: float,
+    not_ends: np.ndarray | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Snap each vertex of each (single-part) line onto the existing
     network (see snap_points_to_network). A line's two end points may
     snap to anything; its middle vertices only to ways it can join
     at-grade (see joinable_network), and not at all if the line is
-    itself grade-separated (e.g. tagged bridge=yes).
+    itself grade-separated (e.g. tagged bridge=yes). Part ends listed in
+    `not_ends` (cuts where a line crosses itself) count as middles.
 
     Repeated vertices this creates are removed; a line that collapses
     to one point is dropped.
@@ -342,6 +372,8 @@ def snap_line_vertices_to_network(
     coords, line = shapely.get_coordinates(lines.geometry.to_numpy(), return_index=True)
     new_line = np.r_[True, line[1:] != line[:-1]]
     is_end = new_line | np.r_[line[1:] != line[:-1], True]
+    if not_ends is not None:
+        is_end &= ~_rows_in(coords, not_ends)
     points = gpd.GeoDataFrame(
         {"line": line, "is_end": is_end, "separated": _separated_mask(lines)[line]},
         geometry=shapely.points(coords),
@@ -411,10 +443,12 @@ def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
 def create_points_from_gdf(
     lines_gdf: gpd.GeoDataFrame,
     crossings: bool = True,
+    not_ends: np.ndarray | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Create points from intersections and vertices of custom lines, each
-    with what it may join (POINT_COLUMNS).
+    with what it may join (POINT_COLUMNS). Part ends listed in `not_ends`
+    (see split_at_self_crossings) aren't line ends.
 
     Only at-grade crossings become points (see crosses_at_grade): a
     custom line crossing a motorway, bridge or tunnel - or tagged as a
@@ -455,8 +489,11 @@ def create_points_from_gdf(
         first = np.r_[True, part[1:] != part[:-1]]
         last = np.r_[part[1:] != part[:-1], True]
         line = custom[part_of[part]]
+        is_end = first | last
+        if not_ends is not None:
+            is_end &= ~_rows_in(coords, not_ends)
         frames.append(pd.DataFrame({
-            "x": coords[:, 0], "y": coords[:, 1], "is_end": first | last,
+            "x": coords[:, 0], "y": coords[:, 1], "is_end": is_end,
             "separated": separated[line], "layer": layers[line],
         }))
 

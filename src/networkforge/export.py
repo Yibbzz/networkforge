@@ -192,6 +192,12 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
 
     oneway = edges["oneway"] if "oneway" in edges else pd.Series(None, index=edges.index)
     car_direction = oneway.map(_direction)
+    if "junction" in edges:
+        # A roundabout is one-way in its drawn direction without saying so
+        # (OSM's rule, and Valhalla's). OSMnx already marks existing ones;
+        # this covers new lines.
+        implied = (oneway.isna() & edges["junction"].isin(["roundabout", "circular"])).to_numpy()
+        car_direction[implied] = "forward"
     reverse_copy = reverse_copies(edges)
     edges, car_direction = edges[~reverse_copy], car_direction[~reverse_copy]
     if "oneway" in edges:

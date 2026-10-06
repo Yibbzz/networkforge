@@ -209,6 +209,10 @@ def apply_edits(
     bidirectional: the network type holds every way in both directions
         (OSMnx's walk network), so one-way changes don't alter the edges.
     """
+    # Each part of a multi-part feature on its own: `oneway` follows the
+    # direction each part is drawn in.
+    edits_gdf = edits_gdf.explode(index_parts=False)
+
     edges = edges_gdf.copy()
     edges[MODIFIED_COLUMN] = None
     edges[EDIT_COLUMN] = np.nan
@@ -224,7 +228,7 @@ def apply_edits(
     claims = []  # (edge label, distance of its middle from the feature, edit number)
     for number, (feature, row) in enumerate(edits_gdf[edit_columns].iterrows()):
         way_id = int(row[EDIT_ID_COLUMN])
-        line = edits_gdf.geometry.loc[feature]
+        line = edits_gdf.geometry.iloc[number]  # by position: parts share their feature id
         of_way = (edges["osmid"] == way_id).to_numpy()
         if way_id not in source.ways or not of_way.any():
             issues.append((feature, f"OSM way {way_id} is not in this network (outside the "
@@ -322,6 +326,7 @@ def apply_edits(
     if drop:
         edges = pd.concat([edges.drop(drop[0].append(drop[1:])), *rebuilt], ignore_index=True)
 
+    issues = list(dict.fromkeys(issues))  # the same problem with two parts of one feature
     if issues:
         error = InputError(
             "Some features that change an existing street can't be applied - "
@@ -333,6 +338,7 @@ def apply_edits(
             raise error
         log.warning("strict=False, skipping them: %s", error,
                     extra={"features": [feature for feature, _ in issues]})
+    unchanged = list(dict.fromkeys(unchanged))  # a feature's parts are listed once
     if unchanged:
         log.warning("%d feature(s) with an OSM id change nothing: their tags are the same "
                     "as the way's in OpenStreetMap (features %s).", len(unchanged),

@@ -8,7 +8,7 @@ ids, access tags, mode isolation and before/after routing.
 """
 
 import pytest
-from shapely.geometry import Point
+from shapely.geometry import MultiLineString, Point
 
 from networkforge import osm
 from networkforge.modes import usable_modes
@@ -223,6 +223,56 @@ def test_line_that_collapses_between_others_is_dropped_alone(build, caplog):
     assert set(custom.nf_part) == {0, 1}  # the two good lines
 
 
+# ---------------------------------------------------------------------
+# Multi-part features: every part is a line of its own
+# ---------------------------------------------------------------------
+
+def parts_of(edges):
+    custom = edges[edges["custom"] == "yes"]
+    return {int(part): custom[custom.nf_part == part] for part in custom.nf_part.unique()}
+
+
+def test_parts_sharing_an_end_are_joined(build):
+    edges = build([(MultiLineString([[(X0 + 300, Y0 + 300), (X0 + 350, Y0 + 350)],
+                                     [(X0 + 350, Y0 + 350), (X0 + 400, Y0 + 400)]]),
+                    ROAD_TAGS)]).edges
+    first, second = parts_of(edges).values()
+    assert set(first.v) & set(second.u)
+
+
+def test_parts_crossing_each_other_are_joined(build):
+    edges = build([(MultiLineString([[(X0 + 300, Y0 + 300), (X0 + 400, Y0 + 400)],
+                                     [(X0 + 300, Y0 + 400), (X0 + 400, Y0 + 300)]]),
+                    ROAD_TAGS)]).edges
+    first, second = parts_of(edges).values()
+    assert len(first) == len(second) == 2
+    assert len({*first.u, *first.v} & {*second.u, *second.v}) == 1
+
+
+def test_part_ends_nearly_meeting_share_a_node(build):
+    edges = build([(MultiLineString([[(X0 + 300, Y0 + 300), (X0 + 350, Y0 + 350)],
+                                     [(X0 + 350.4, Y0 + 350.3), (X0 + 400, Y0 + 400)]]),
+                    ROAD_TAGS)]).edges
+    first, second = parts_of(edges).values()
+    assert len(first) == len(second) == 1 and set(first.v) == set(second.u)
+
+
+def test_a_part_that_reaches_nothing_names_its_feature_once(build, caplog):
+    stray = [(X0 + 330, Y0 + 330), (X0 + 360, Y0 + 360)]
+    with caplog.at_level("WARNING"):
+        build([(MultiLineString([DIAGONAL, stray]), ROAD_TAGS)])
+    (warning,) = [r for r in caplog.records if "don't connect" in r.getMessage()]
+    assert warning.features == [0]
+
+
+def test_a_part_that_collapses_is_dropped_and_the_rest_kept(build, caplog):
+    tiny = [(X0 + 100.1, Y0 + 100.1), (X0 + 100.3, Y0 + 100.2)]
+    with caplog.at_level("WARNING"):
+        edges = build([(MultiLineString([DIAGONAL, tiny]), ROAD_TAGS)]).edges
+    assert "collapsed onto a single node" in caplog.text
+    assert len(parts_of(edges)) == 1
+
+
 def test_custom_road_is_not_joined_to_a_motorway_it_crosses(build):
     edges = build([(ROAD_TO_MOTORWAY, ROAD_TAGS)]).edges
 
@@ -243,6 +293,33 @@ def test_middle_vertex_near_a_motorway_does_not_snap_onto_it(build):
     """Only a line's END points may snap onto a grade-separated way."""
     bend_near_motorway = [(X0 + 400, Y0 + 100), (X0 + 499.5, Y0 + 150), (X0 + 400, Y0 + 200)]
     edges = build([(bend_near_motorway, ROAD_TAGS)]).edges
+
+    shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
+    assert not shared
+
+
+def test_line_crossing_itself_near_a_motorway_does_not_join_it(build):
+    """
+    Where a line crosses itself it is cut into pieces, but those cuts are
+    not ends the user drew: they mustn't snap onto the motorway 0.3 m away
+    (found by Hypothesis).
+    """
+    loop = [(X0 + 400, Y0 + 100), (X0 + 499.9, Y0 + 150), (X0 + 499.9, Y0 + 250),
+            (X0 + 499.7, Y0 + 140), (X0 + 400, Y0 + 200)]
+    edges = build([(loop, ROAD_TAGS)]).edges
+
+    shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
+    assert not shared
+
+
+def test_line_snapped_into_an_out_and_back_does_not_join_the_motorway(build):
+    """
+    Both ends snap onto node 2, so the line runs out to the motorway and
+    back along itself; its far vertex is still a middle (found by
+    Hypothesis, after cutting self-crossings after snapping).
+    """
+    out_and_back = [(X0 + 100.3, Y0 - 0.3), (X0 + 500, Y0 + 1), (X0 + 100, Y0)]
+    edges = build([(out_and_back, ROAD_TAGS)]).edges
 
     shared = osm_edge_nodes(edges, "motorway") & custom_edge_nodes(edges)
     assert not shared
