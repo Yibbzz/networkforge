@@ -58,6 +58,8 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `remove=yes` (`REMOVE_COLUMN`) on such a feature drops the edges instead; the nodes only they
   used leave `nodes_gdf` (so new lines can't snap to them) but stay in the before nodes; export
   needs nothing special (a missing stretch splits the way, like cropping).
+  `remove_tags` (`REMOVE_TAGS_COLUMN`, keys split by ; or ,) deletes tags: the change maps the
+  key to None (edge column blanked; export drops None tags; deleting oneway rebuilds directions).
 - Standalone (`build_network(None, lines, standalone=True)`, CLI `--no-osm`): no download, empty
   OSM tables (`network._no_network`), bbox = the data's extent, OSM ids / `remove` ignored, private
   streets allowed (`check_custom_tags(require_usable=False)`), node ids from 1, a warning naming

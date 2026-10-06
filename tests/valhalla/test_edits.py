@@ -93,6 +93,28 @@ def test_bus_gate_opened_to_cars(scenario):
     assert metres(built, "after", at(0, 4), at(1, 4), "auto") == 100
 
 
+def test_bus_gate_removed_by_deleting_its_tag(scenario):
+    """remove_tags=motor_vehicle: the street is an ordinary residential street again."""
+    gate = way_id(21, 22)
+    built = scenario([([xy(0, 4), xy(1, 4)], {"osm_id": gate, "remove_tags": "motor_vehicle"})])
+    assert "motor_vehicle" not in built.after.ways[changed_way(built)][1]
+    assert metres(built, "after", at(0, 4), at(1, 4), "auto") == 100
+
+
+def test_deleting_maxspeed_falls_back_to_valhallas_default(scenario):
+    whole_street = [xy(0, 1), xy(4, 1)]
+    built = scenario([(whole_street, {"osm_id": ROW_1, "remove_tags": "maxspeed"})])
+    for edge in built.after.edges(changed_way(built)):
+        assert edge["edge_info"].get("speed_limit", 0) in (0, 255)  # none tagged
+        assert edge["edge"]["speeds"]["type"] == "classified"
+
+
+def test_one_way_slip_road_made_two_way_by_deleting_oneway(scenario):
+    slip = [xy(4, 0), xy(5, 0)]
+    built = scenario([(slip, {"osm_id": SLIP, "remove_tags": "oneway"})])
+    assert metres(built, "after", at(5, 0), at(4, 0), "auto") == 100
+
+
 def test_lower_speed_limit_takes_longer_over_the_same_distance(scenario):
     whole_street = [xy(0, 1), xy(4, 1)]
     built = scenario([(whole_street, {"osm_id": ROW_1, "maxspeed": "10 mph"})])

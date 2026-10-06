@@ -185,6 +185,57 @@ def test_misspelt_value_on_an_edit_is_warned_about(build, caplog):
     assert "surface='gravle' is not a value routers know - did you mean 'gravel'?" in caplog.text
 
 
+def test_deleting_a_tag(build, export):
+    """remove_tags deletes maxspeed from the stretch: the default speed applies."""
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove_tags": "maxspeed"})])
+    before, after = export(result)
+
+    (tags,) = [tags for _, tags in after.values() if tags.get("nf:modified") == "yes"]
+    assert "maxspeed" not in tags and tags["highway"] == "residential"
+    assert before[ROW_1][1]["maxspeed"] == "30 mph"  # the before network keeps it
+    layer = analysis_edges(result.nodes, result.edges).query("modified == 'yes'")
+    assert set(layer.speed_kph) == {30.0}  # residential default, not 48.3 (30 mph)
+
+
+def test_deleting_several_tags_with_a_new_value_for_another(build, export):
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove_tags": "maxspeed; name",
+                                 "surface": "gravel"})])
+    _, after = export(result)
+
+    (tags,) = [tags for _, tags in after.values() if tags.get("nf:modified") == "yes"]
+    assert "maxspeed" not in tags and "name" not in tags and tags["surface"] == "gravel"
+
+
+def test_deleting_oneway_makes_the_street_two_way(build, export):
+    result = build([(block(0, 4, 5), {"osm_id": SLIP, "remove_tags": "oneway"})])
+    _, after = export(result)
+
+    both = edges_between(result.edges, *SLIP_ROAD)
+    assert sorted(both.reversed) == [False, True] and not both.oneway.any()
+    (tags,) = [tags for _, tags in after.values() if tags.get("nf:modified") == "yes"]
+    assert "oneway" not in tags
+
+
+def test_deleting_a_tag_the_way_does_not_have_changes_nothing(build, caplog):
+    with caplog.at_level(logging.WARNING), pytest.raises(InputError, match="Nothing to build"):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, "remove_tags": "lit"})])
+    assert "change nothing" in caplog.text
+
+
+@pytest.mark.parametrize("tags, message", [
+    ({"remove_tags": "highway"}, "use remove=yes"),
+    ({"remove_tags": "maxspeed", "maxspeed": "20 mph"}, "both given a value"),
+])
+def test_deleting_tags_wrongly_is_reported(build, tags, message):
+    with pytest.raises(InvalidTagsError, match=message):
+        build([(ONE_BLOCK, {"osm_id": ROW_1, **tags})])
+
+
+def test_remove_tags_on_a_new_line_is_an_error(build):
+    with pytest.raises(InputError, match="remove_tags= is for existing streets"):
+        build([(ONE_BLOCK, {"highway": "residential", "remove_tags": "maxspeed"})])
+
+
 def test_changing_the_kind_of_street(build):
     result = build([(ONE_BLOCK, {"osm_id": ROW_1, "highway": "pedestrian"})])
     (edge, _) = edges_between(result.edges, 7, 8).to_dict("records")

@@ -18,8 +18,11 @@ What changes:
       lines: reverse the line (or use -1) to reverse the street.
     - Several features may cover the same stretch (rows copied twice,
       overlapping selections) as long as they ask for the same change.
-    - A tag can be set, not removed: close a street with access=no, open
-      a bus gate with motor_vehicle=yes.
+    - A tag is set by giving it a value: close a street with access=no,
+      open a bus gate with motor_vehicle=yes. An empty attribute changes
+      nothing; to delete tags from the way, list them in `remove_tags`
+      (`remove_tags=maxspeed;access`). Deleting `oneway` makes the
+      stretch two-way (a roundabout stays one-way).
     - `remove=yes` takes the stretch out of the network altogether (its
       other attributes are then ignored): it is in neither the edge table
       nor the OSM file. The way's remaining parts stay; a turn
@@ -49,6 +52,7 @@ from .tags import (
     EDIT_ID_COLUMNS,
     MODIFIED_COLUMN,
     REMOVE_COLUMN,
+    REMOVE_TAGS_COLUMN,
 )
 from .validation import (
     KNOWN_HIGHWAYS,
@@ -129,22 +133,31 @@ def split_edits(custom_gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, gpd.Geo
     if EDIT_ID_COLUMN not in edits.columns:
         edits = edits.assign(**{EDIT_ID_COLUMN: np.nan})
 
-    if REMOVE_COLUMN in custom_gdf.columns:
-        # Only an existing street can be removed: a new line marked for
-        # removal has most likely lost its OSM id on the way here.
-        marked = [feature for feature, value in new_lines[REMOVE_COLUMN].items()
-                  if wants_removal(value) is not False]
+    for column, is_set in ((REMOVE_COLUMN, lambda value: wants_removal(value) is not False),
+                           (REMOVE_TAGS_COLUMN, lambda value: bool(tags_to_remove(value)))):
+        if column not in custom_gdf.columns:
+            continue
+        # Only an existing street can lose tags or be removed: a new line
+        # marked so has most likely lost its OSM id on the way here.
+        marked = [feature for feature, value in new_lines[column].items() if is_set(value)]
         if marked:
             raise InputError(
-                f"{REMOVE_COLUMN}= is for existing streets: feature(s) "
+                f"{column}= is for existing streets: feature(s) "
                 f"{', '.join(map(str, marked))} have no OSM id ({' / '.join(EDIT_ID_COLUMNS)}) "
-                "saying which street to remove.",
+                "saying which street to change.",
                 guide="changing-existing-streets",
-                issues=[{"feature": feature, "message": f"{REMOVE_COLUMN} set, but no OSM id"}
+                issues=[{"feature": feature, "message": f"{column} set, but no OSM id"}
                         for feature in marked],
             )
-        new_lines = new_lines.drop(columns=[REMOVE_COLUMN])
+        new_lines = new_lines.drop(columns=[column])
     return new_lines, edits
+
+
+def tags_to_remove(value) -> list[str]:
+    """The tag keys a `remove_tags` attribute lists (separated by ; or ,)."""
+    text = _tag_value(value) or ""
+    return list(dict.fromkeys(key.strip() for key in text.replace(",", ";").split(";")
+                              if key.strip()))
 
 
 def edit_tags(row: pd.Series) -> dict[str, str]:
@@ -170,6 +183,13 @@ def check_edit_tags(edits_gdf: gpd.GeoDataFrame, strict: bool = True) -> None:
             problems.append(f"{REMOVE_COLUMN}={_tag_value(row[REMOVE_COLUMN])!r} must be yes or no")
         if "highway" in tags and tags["highway"] not in KNOWN_HIGHWAYS:
             problems.append(f"highway={tags['highway']!r} is not a routable highway value")
+        removing = tags_to_remove(row.get(REMOVE_TAGS_COLUMN))
+        if "highway" in removing:
+            problems.append(f"{REMOVE_TAGS_COLUMN} can't delete highway: use "
+                            f"{REMOVE_COLUMN}=yes to take the street out")
+        for key in sorted(set(removing) & tags.keys()):
+            problems.append(f"{key} is both given a value ({tags[key]!r}) and listed in "
+                            f"{REMOVE_TAGS_COLUMN}")
         issues += [(feature, problem) for problem in problems]
 
     warn_about_unknown_values(unknown)
@@ -268,7 +288,12 @@ def apply_edits(
         change = {}
         if REMOVE_COLUMN in row and wants_removal(row[REMOVE_COLUMN]):
             change = dict(REMOVAL)
-        for key, value in ({} if change else edit_tags(row.drop(EDIT_ID_COLUMN))).items():
+        # A deleted tag is a change to None.
+        if not change:
+            change = {key: None for key in tags_to_remove(row.get(REMOVE_TAGS_COLUMN))
+                      if key in current}
+        for key, value in ({} if REMOVE_COLUMN in change
+                           else edit_tags(row.drop(EDIT_ID_COLUMN))).items():
             if key == "oneway":
                 state = _oneway_state(value)
                 if not along_way:
@@ -320,7 +345,8 @@ def apply_edits(
         changes[number] = change
         log.info("Feature %s changes %d edge(s) of OSM way %d: %s", features[number], len(rows),
                  int(edges.at[rows[0], "osmid"]),
-                 ", ".join(f"{k}={v}" for k, v in change.items()))
+                 ", ".join(f"{k}={v}" if v is not None else f"{k} deleted"
+                           for k, v in change.items()))
 
         for key, value in change.items():
             if key not in edges.columns:
@@ -332,8 +358,9 @@ def apply_edits(
         edges.loc[rows, EDIT_COLUMN] = number
         if "oneway" in change and not bidirectional:
             drop.append(rows)
+            way_tags = source.ways[int(edges.at[rows[0], "osmid"])][1]
             rebuilt += _in_direction(edges.loc[rows], positions[number],
-                                     _oneway_state(change["oneway"]))
+                                     _oneway_state(change["oneway"], {**way_tags, **change}))
     if drop:
         edges = pd.concat([edges.drop(drop[0].append(drop[1:])), *rebuilt], ignore_index=True)
 

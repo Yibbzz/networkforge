@@ -95,6 +95,9 @@ EDIT_ID_COLUMN = "osm_id"
 # On a feature with an OSM way id: `remove=yes` takes the stretch of the
 # way it lies along out of the network altogether.
 REMOVE_COLUMN = "remove"
+# On a feature with an OSM way id: `remove_tags=maxspeed;access` deletes
+# those tags from the stretch (an empty attribute only means "no change").
+REMOVE_TAGS_COLUMN = "remove_tags"
 REMOVED_ATTR = "networkforge_removed_edges"
 
 # Marks edges (and, as a tag, ways) whose tags an edit changed, and

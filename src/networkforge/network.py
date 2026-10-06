@@ -29,7 +29,14 @@ from .osm import (
 )
 from .presets import preset_tags
 from .projection import get_analysis_crs
-from .tags import EDITS_ATTR, PART_COLUMN, REMOVE_COLUMN, REMOVED_ATTR, TURNS_ATTR
+from .tags import (
+    EDITS_ATTR,
+    PART_COLUMN,
+    REMOVE_COLUMN,
+    REMOVE_TAGS_COLUMN,
+    REMOVED_ATTR,
+    TURNS_ATTR,
+)
 from .topology import (
     ON_NODE_TOLERANCE,
     assign_point_ids_to_lines,
@@ -314,7 +321,8 @@ def build_network(
     # In a standalone network every feature is a line of the network.
     if standalone:
         edits_gdf = custom_data_gdf.iloc[:0]
-        custom_data_gdf = custom_data_gdf.drop(columns=[REMOVE_COLUMN], errors="ignore")
+        custom_data_gdf = custom_data_gdf.drop(columns=[REMOVE_COLUMN, REMOVE_TAGS_COLUMN],
+                                               errors="ignore")
     else:
         custom_data_gdf, edits_gdf = split_edits(custom_data_gdf)
 

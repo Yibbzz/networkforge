@@ -504,6 +504,7 @@ def _existing_ways(
                 run_tags = dict(tags)
                 if number is not None:
                     run_tags |= {**changes.get(number, {}), MODIFIED_TAG: "yes"}
+                    run_tags = {k: v for k, v in run_tags.items() if v is not None}
                 ways.append((way_id if i == keeper and way_id > 0 else None, run, run_tags,
                              way_id))
 

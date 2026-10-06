@@ -68,6 +68,7 @@ from .tags import (
     FERRY_ROUTES,
     MODIFIED_COLUMN,
     REMOVE_COLUMN,
+    REMOVE_TAGS_COLUMN,
     REMOVED_ATTR,
     TURNS_ATTR,
 )
@@ -232,6 +233,7 @@ def cmd_info(args, emit) -> int:
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
         "edit_id_fields": list(EDIT_ID_COLUMNS),
         "remove_field": REMOVE_COLUMN,
+        "remove_tags_field": REMOVE_TAGS_COLUMN,
         "turn_restriction_fields": list(RESTRICTION_KEYS),
         "standalone": True,
         "join_at": list(JOIN_AT),

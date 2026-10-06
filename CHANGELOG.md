@@ -23,6 +23,11 @@ minor version may include breaking changes).
   mean 'asphalt'?`). OSM allows any value, so the build carries on.
   `info --json` lists the known values in `tag_values` (and
   `tag_patterns.incline`).
+- **Deleting tags from an existing street.** On a feature with an OSM
+  id, `remove_tags=maxspeed;motor_vehicle` deletes those tags from the
+  stretch (an empty attribute still means "no change"). Deleting
+  `oneway` makes the street two-way. `info --json` has
+  `remove_tags_field`.
 
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)

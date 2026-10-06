@@ -107,9 +107,10 @@ layer or a QuickOSM layer, edit an attribute, add it to the custom layer
 | Turn restrictions on a changed street still apply | | `test_turn_restriction_still_applies_when_its_way_is_changed` |
 | A new line joins a changed street | | `test_new_line_joins_a_changed_street` |
 | Remove a street altogether | `remove=yes` | `test_street_removed`, `test_removed_street_replaced_by_a_new_line` |
+| Delete a tag (lift a speed limit, a bus gate) | `remove_tags=maxspeed;motor_vehicle` | `test_bus_gate_removed_by_deleting_its_tag`, `test_deleting_maxspeed_falls_back_to_valhallas_default` |
 
-Not possible yet: removing a single tag, moving a street, and changing
-or removing part of a stretch between two OSM nodes.
+Not possible yet: moving a street, and changing or removing part of a
+stretch between two OSM nodes.
 
 ## What is not covered
 

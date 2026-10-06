@@ -280,9 +280,16 @@ What happens:
   layer, which has one row per stretch).
 - **`oneway` follows the direction the feature is drawn**, as for new
   lines. To reverse a one-way street, reverse the line or use `-1`.
-- **Tags are set, not removed.** Close a street with `access=no` (or
-  `motor_vehicle=no` for motor traffic only); open a bus gate with
+- **Set a tag by giving it a value.** Close a street with `access=no`
+  (or `motor_vehicle=no` for motor traffic only); open a bus gate with
   `motor_vehicle=yes`; make a one-way street two-way with `oneway=no`.
+  An empty attribute changes nothing.
+- **Delete tags with `remove_tags`.** Add a `remove_tags` attribute and
+  list the keys, separated by `;`: `remove_tags=maxspeed;motor_vehicle`
+  takes the speed limit and the bus gate off the stretch, so routers
+  use their defaults. Deleting `oneway` makes the street two-way (a
+  roundabout stays one-way). `highway` can't be deleted - use
+  `remove=yes`. A key the street doesn't have is simply not changed.
 - **`remove=yes` takes the street out altogether.** Add a `remove`
   attribute to the layer and set it to `yes` on the copied feature. The
   stretch is then in neither the "after" GeoPackage nor the OSM file
@@ -301,7 +308,9 @@ changed street still apply.
 | `OSM way N is not in this network` | The id isn't a street inside the area: it is outside the box, isn't a routable way, or OpenStreetMap changed since the layer was made. Copy the street from the "before" layer of a fresh build. |
 | `doesn't lie along OSM way N` | The feature's line isn't on that street. Its geometry must follow the street (within the snap tolerance). |
 | `overlaps feature X on OSM way N with a different change` | Two features ask for different things on the same stretch. Put both changes on one feature. |
-| `remove= is for existing streets` | A feature has `remove` set but no OSM id, so there is nothing to remove. |
+| `remove= is for existing streets` (or `remove_tags=`) | A feature has `remove` or `remove_tags` set but no OSM id, so there is no street to change. |
+| `remove_tags can't delete highway` | Use `remove=yes` to take the street out. |
+| `X is both given a value and listed in remove_tags` | Either set the tag or delete it. |
 | `change nothing` (warning) | The feature's tags are all the same as OpenStreetMap's. |
 
 ## Turn restrictions
@@ -410,6 +419,7 @@ change.
 | Make an existing street one-way | copy it from the "before" layer, set `oneway=yes` ([changing existing streets](#changing-existing-streets)) |
 | Close an existing street | copy it, set `access=no` |
 | Remove an existing street | copy it, set `remove=yes` |
+| Lift a speed limit or a bus gate | copy it, set `remove_tags=maxspeed` / `remove_tags=motor_vehicle` |
 | Ban a turn | a line through the junction with `restriction=no_left_turn` ([turn restrictions](#turn-restrictions)) |
 | Pedestrianise a street | `preset="pedestrian_street"` (cycling allowed), or `highway=pedestrian` for walking only |
 | Filtered street / bus gate | `preset="car_free_street"` |
