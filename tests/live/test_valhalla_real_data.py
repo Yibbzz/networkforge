@@ -311,7 +311,7 @@ def test_turn_restriction_at_a_real_junction(extract, routers, tmp_path_factory)
                                        crs=4326).to_crs(crs)
                 came_from, via, goes_to = (points.iloc[len(back) - 2], points.iloc[len(back) - 1],
                                            points.iloc[len(back)])
-                if _turn_direction(came_from, via, goes_to) not in ("left", "right"):
+                if _turn_direction(came_from, via, via, goes_to) not in ("left", "right"):
                     continue
                 direct = before.route(before.node(ends[0]), before.node(ends[-1]), "auto",
                                       shortest=True)
@@ -321,7 +321,7 @@ def test_turn_restriction_at_a_real_junction(extract, routers, tmp_path_factory)
     crs = get_analysis_crs(gpd.GeoDataFrame(geometry=[Point(before.node(next(iter(on))))],
                                             crs=4326))
     line, (came_from, via, goes_to), ends, direct = next(candidates())
-    turn = _turn_direction(came_from, via, goes_to)
+    turn = _turn_direction(came_from, via, via, goes_to)
 
     folder = tmp_path_factory.mktemp("turn")
     header = osmium.io.Reader(str(extract), osmium.osm.osm_entity_bits.NOTHING).header().box()

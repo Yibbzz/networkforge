@@ -1,13 +1,13 @@
 [project]
 name = "networkforge"
-version = "0.12.0"
+version = "1.0.0"
 description = "Build and edit routable street networks from GIS layers: add to, change or replace OpenStreetMap; output OSM PBF and GeoPackage"
 readme = "README.md"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 keywords = ["openstreetmap", "osm", "routing", "transport", "network", "gis"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.12",

@@ -2,10 +2,24 @@
 
 All notable changes to NetworkForge. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
-follow [Semantic Versioning](https://semver.org/) (while below 1.0, a
-minor version may include breaking changes).
+follow [Semantic Versioning](https://semver.org/). From 1.0 the command
+line (flags, exit codes, `--json` events) and the Python API are stable:
+a breaking change means a new major version.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-06
+
+The first stable release: every OSM feature a network build needs -
+new lines, changed and removed streets, turn restrictions, points on
+the network, ferries - tested against Valhalla.
+
+### Stability
+- The command line (`build`, `check`, `presets`, `info`), its exit codes
+  and its `--json` events, and the Python API (`build_network`,
+  `write_osm`, `write_gpkg`, the errors) are now stable. New fields may
+  be added to the JSON events; none is removed or changes meaning
+  without a new major version.
 
 ### Added
 - **New ferries.** A custom line with `route=ferry` (or
@@ -40,6 +54,16 @@ minor version may include breaking changes).
   joined by a street becomes a restriction over that stretch (from way,
   via way, to way), e.g. no U-turn across a dual carriageway. Valhalla
   obeys it.
+- Tests for multi-part custom lines: offline (parts that share an end,
+  cross, nearly meet, stray from the network or collapse; random
+  multi-part lines in the property tests) and in Valhalla (each part
+  routable, crossing parts joined, per-part edits and removals,
+  standalone networks).
+
+### Changed
+- **Point features are accepted** in the custom layer (they tag nodes,
+  see above); only other geometry types are refused, now as "not a line
+  or point".
 
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)
@@ -55,13 +79,6 @@ minor version may include breaking changes).
   may join a motorway (as slip roads do). Now only the ends you drew do.
   Found by the new multi-part property tests; single lines were affected
   too.
-
-### Added
-- Tests for multi-part custom lines: offline (parts that share an end,
-  cross, nearly meet, stray from the network or collapse; random
-  multi-part lines in the property tests) and in Valhalla (each part
-  routable, crossing parts joined, per-part edits and removals,
-  standalone networks).
 
 ## [0.12.0] - 2026-10-06
 
@@ -416,7 +433,8 @@ with Valhalla on the raw data:
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Yibbzz/networkforge/compare/v0.12.0...v1.0.0
 [0.12.0]: https://github.com/Yibbzz/networkforge/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/Yibbzz/networkforge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...v0.11.0
