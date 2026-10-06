@@ -79,6 +79,33 @@ def test_turn_between_existing_streets_becomes_a_relation(build, tmp_path):
     assert RESTRICTION_ID in relations  # the grid's own restriction is kept
 
 
+def test_line_through_two_junctions_is_a_via_way_restriction(build, tmp_path):
+    """Along Row 2 Street through 12 and 13, then north: from 11-12, via 12-13, to 13-18."""
+    line = [xy(0.5, 2), xy(1, 2), xy(2, 2), xy(2, 2.5)]
+    result = build([(line, {"restriction": "no_left_turn"})])
+    ways, relations = written(result, tmp_path)
+
+    ((members, _),) = custom_turns(relations).values()
+    assert [(kind, role) for kind, _, role in members] == [("w", "from"), ("w", "via"),
+                                                           ("w", "to")]
+    (_, from_way, _), (_, via_way, _), (_, to_way, _) = members
+    assert ways[from_way][0][-2:] == [11, 12]
+    assert ways[via_way][0] == [12, 13]
+    assert ways[to_way][0][:2] == [13, 18]
+    (turn,) = result.edges.attrs[TURNS_ATTR]
+    assert turn.via_path == (12, 13)
+
+
+def test_via_way_u_turn_gives_no_drawing_warning(build, caplog):
+    """East on Row 1 to 7, north to 12, back west on Row 2: a U-turn over two junctions."""
+    line = [xy(0.5, 1), xy(1, 1), xy(1, 2), xy(0.5, 2)]
+    with caplog.at_level(logging.WARNING):
+        result = build([(line, {"restriction": "no_u_turn"})])
+    assert "drawn as" not in caplog.text
+    (turn,) = result.edges.attrs[TURNS_ATTR]
+    assert turn.via_path == (7, 12)
+
+
 def test_turn_lines_are_not_part_of_the_network(build):
     result = build([(TURN_AT_7, {"restriction": "no_left_turn"})])
     assert "custom" not in result.edges.columns
@@ -171,7 +198,8 @@ def test_a_build_of_turn_restrictions_alone(build, tmp_path):
 
 @pytest.mark.parametrize("line, message", [
     ([xy(0.2, 1), xy(0.8, 1)], "doesn't pass through a junction"),
-    ([xy(0.5, 1), xy(2.5, 1)], "passes through 2 junctions"),
+    ([xy(0.5, 1), xy(3.5, 1)], "passes through 3 junctions"),
+    ([xy(0.5, 1), xy(1, 1), xy(2, 2), xy(2, 2.5)], "2 junctions that no street"),
     ([xy(0.5, 1.2), xy(1, 1), xy(1.2, 1.5)], "doesn't follow a street on both sides"),
 ])
 def test_turn_line_that_cannot_be_placed(build, line, message):

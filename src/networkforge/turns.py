@@ -13,6 +13,11 @@ of an OSM turn restriction relation, which is what the line becomes:
     members: from = the street arrived on, via = the junction,
              to = the street left on
 
+A line through TWO junctions joined by a street is a "via way"
+restriction: from the street arrived on at the first junction, along
+the street between them (via), onto the street left on at the second -
+e.g. no_u_turn across a dual carriageway.
+
 Turn lines are not part of the network themselves. They are matched to
 the finished network (so they work between existing streets, new lines
 and changed streets alike) by resolve_turns(); export writes the
@@ -64,10 +69,29 @@ class Turn:
     """A turn restriction resolved on the network (node ids of the analysis tables)."""
 
     feature: object
-    via: int
+    via: int              # the junction; the first one of a via-way restriction
     from_neighbour: int   # the from street is the edge via - from_neighbour
-    to_neighbour: int     # the to street is the edge via - to_neighbour
+    to_neighbour: int     # the to street is the edge via_path[-1] - to_neighbour
     tags: dict
+    # The via way's nodes from the first junction to the second; (via,)
+    # for a restriction at one junction.
+    via_path: tuple[int, ...] = ()
+
+    @property
+    def path(self) -> tuple[int, ...]:
+        return self.via_path or (self.via,)
+
+    @property
+    def from_segment(self) -> frozenset:
+        return frozenset((self.path[0], self.from_neighbour))
+
+    @property
+    def to_segment(self) -> frozenset:
+        return frozenset((self.path[-1], self.to_neighbour))
+
+    @property
+    def via_segments(self) -> list[frozenset]:
+        return [frozenset(pair) for pair in zip(self.path, self.path[1:], strict=False)]
 
 
 def turn_tags(row: pd.Series) -> dict[str, str]:
@@ -156,47 +180,64 @@ def resolve_turns(
         start, end = shapely.get_point(line, 0), shapely.get_point(line, -1)
 
         # Junctions on the line: nodes where three or more streets meet,
-        # between its two ends.
+        # between its two ends, in the order the line passes them.
         near = node_ids[tree.query(line, predicate="dwithin", distance=tolerance)]
-        junctions = [
-            int(node) for node in near
-            if len(neighbours.get(int(node), {})) >= 3
-            and nodes_gdf.geometry.loc[node].distance(start) > tolerance
-            and nodes_gdf.geometry.loc[node].distance(end) > tolerance
-        ]
+        junctions = sorted(
+            (int(node) for node in near
+             if len(neighbours.get(int(node), {})) >= 3
+             and nodes_gdf.geometry.loc[node].distance(start) > tolerance
+             and nodes_gdf.geometry.loc[node].distance(end) > tolerance),
+            key=lambda node: line.project(nodes_gdf.geometry.loc[node]),
+        )
         if not junctions:
             issues.append((feature, "doesn't pass through a junction: draw it from the "
                                     "street you arrive on, through the junction, onto the "
                                     "street you leave on"))
             continue
-        if len(junctions) > 1:
+        if len(junctions) > 2:
             issues.append((feature, f"passes through {len(junctions)} junctions: draw it "
-                                    "through only the one the restriction is at"))
+                                    "through the one the restriction is at, or two joined "
+                                    "by a street (a via-way restriction)"))
             continue
-        (via,) = junctions
-        point = nodes_gdf.geometry.loc[via]
+        path = (junctions[0],)
+        if len(junctions) == 2:
+            path = _street_between(junctions[0], junctions[1], line, neighbours, nodes_gdf,
+                                   tolerance)
+            if path is None:
+                issues.append((feature, "passes through 2 junctions that no street along it "
+                                        "joins: draw it through one junction, or two joined "
+                                        "by a street (a via-way restriction)"))
+                continue
+        first, last = (nodes_gdf.geometry.loc[node] for node in (path[0], path[-1]))
 
-        # Which streets: the ones the line runs along just before and
-        # just after the junction.
-        position = line.project(point)
-        step = min(LOOK_AROUND_M, position / 2, (line.length - position) / 2)
-        before = line.interpolate(position - step)
-        after = line.interpolate(position + step)
-        streets = neighbours[via]
+        # Which streets: the ones the line runs along just before the
+        # (first) junction and just after the (last) one.
+        position_in, position_out = line.project(first), line.project(last)
+        step = min(LOOK_AROUND_M, position_in / 2, (line.length - position_out) / 2)
+        before = line.interpolate(position_in - step)
+        after = line.interpolate(position_out + step)
 
-        def nearest(probe, streets=streets):
+        def nearest(probe, node, leave_out=None):
+            streets = {other: geometry for other, geometry in neighbours[node].items()
+                       if other != leave_out}
+            if not streets:
+                return None
             other, geometry = min(streets.items(), key=lambda item: item[1].distance(probe))
             return other if geometry.distance(probe) <= tolerance else None
 
-        came_from, goes_to = nearest(before), nearest(after)
+        via_way = len(path) > 1
+        came_from = nearest(before, path[0], path[1] if via_way else None)
+        goes_to = nearest(after, path[-1], path[-2] if via_way else None)
         if came_from is None or goes_to is None:
             issues.append((feature, "doesn't follow a street on both sides of the junction "
                                     f"(within {tolerance} m): start and end it on the streets"))
             continue
 
         tags = turn_tags(row)
-        _warn_if_drawn_differently(feature, tags, before, point, after, came_from == goes_to)
-        turns.append(Turn(feature, via, came_from, goes_to, tags))
+        same_street = not via_way and came_from == goes_to
+        _warn_if_drawn_differently(feature, tags, before, first, last, after, same_street)
+        turns.append(Turn(feature, path[0], came_from, goes_to, tags,
+                          via_path=path if via_way else ()))
 
     if issues:
         error = InputError(
@@ -214,11 +255,31 @@ def resolve_turns(
     return turns
 
 
-def _warn_if_drawn_differently(feature, tags, before, via, after, same_street) -> None:
+def _street_between(a, b, line, neighbours, nodes_gdf, tolerance) -> tuple[int, ...] | None:
+    """
+    The nodes of the street from junction a to junction b along `line`
+    (edges whose middle lies on it, through no other junction), or None.
+    """
+    def along(node) -> float:
+        return line.project(nodes_gdf.geometry.loc[node])
+
+    path = [a]
+    while path[-1] != b:
+        node = path[-1]
+        onward = [other for other, geometry in neighbours[node].items()
+                  if along(other) > along(node)
+                  and geometry.interpolate(0.5, normalized=True).distance(line) <= tolerance]
+        if len(onward) != 1 or (onward[0] != b and len(neighbours[onward[0]]) >= 3):
+            return None
+        path.append(onward[0])
+    return tuple(path)
+
+
+def _warn_if_drawn_differently(feature, tags, before, first, last, after, same_street) -> None:
     """Warn when the drawn turn isn't the one the value names (no_left_turn drawn right)."""
     value = next(tags[key] for key in RESTRICTION_KEYS if key in tags)
     meant = TURN_VALUES.get(value)
-    drawn = "u_turn" if same_street else _turn_direction(before, via, after)
+    drawn = "u_turn" if same_street else _turn_direction(before, first, last, after)
     if meant is not None and drawn != meant:
         log.warning("Turn restriction %s is drawn as a %s but tagged %s=%s - check the "
                     "line's direction (it goes from the street you arrive on to the one "
@@ -227,10 +288,13 @@ def _warn_if_drawn_differently(feature, tags, before, via, after, same_street) -
                     extra={"features": [feature]})
 
 
-def _turn_direction(before, via, after) -> str:
-    """left / right / straight / u_turn, from the line's direction either side of `via`."""
-    heading_in = math.atan2(via.y - before.y, via.x - before.x)
-    heading_out = math.atan2(after.y - via.y, after.x - via.x)
+def _turn_direction(before, first, last, after) -> str:
+    """
+    left / right / straight / u_turn, from the line's direction arriving
+    at the (first) junction and leaving the (last) one.
+    """
+    heading_in = math.atan2(first.y - before.y, first.x - before.x)
+    heading_out = math.atan2(after.y - last.y, after.x - last.x)
     angle = math.degrees((heading_out - heading_in + math.pi) % (2 * math.pi) - math.pi)
     if abs(angle) < 35:
         return "straight"

@@ -36,6 +36,10 @@ minor version may include breaking changes).
   an existing node's tags (take out a bollard). `layer` picks the street
   where a bridge crosses one. `check` / `build --json` report `points` /
   `tagged_nodes`.
+- **Via-way turn restrictions.** A turn line through two junctions
+  joined by a street becomes a restriction over that stretch (from way,
+  via way, to way), e.g. no U-turn across a dual carriageway. Valhalla
+  obeys it.
 
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)

@@ -346,10 +346,17 @@ Where to draw it:
 
 - It works at any junction: between existing streets, between your new
   lines, and between a new line and an existing street.
-- **One junction per line.** Start and end on the streets (snap to them
-  in QGIS): within the snap distance (1 m) of the street on both sides
-  of the junction. The line's first and last points should be off the
-  junction, part-way along each street.
+- **One junction per line** - or two, for a restriction over a stretch
+  of street (OSM's "via way"): a line along a street through two
+  junctions bans the whole movement, from the street before the first
+  junction, along the street between them, onto the street after the
+  second. The classic case is `no_u_turn` across a dual carriageway:
+  draw it up one carriageway, across the gap and back down the other.
+  The two junctions must be joined by one street along the line.
+- Start and end on the streets (snap to them in QGIS): within the snap
+  distance (1 m) of the street on both sides of the junction. The
+  line's first and last points should be off the junction, part-way
+  along each street.
 - The value should match what you drew. A line drawn as a left turn but
   tagged `no_right_turn` builds, with a warning: OSM goes by the streets,
   so the rule would apply to the left turn you drew.
@@ -360,7 +367,8 @@ QGIS's own network tools) can't show them.
 | Message | Meaning |
 |---|---|
 | `doesn't pass through a junction` | The line misses the junction (by more than the snap distance), or crosses a street with no junction. |
-| `passes through N junctions` | Draw it through only the junction the rule is at. |
+| `passes through N junctions` | Draw it through only the junction the rule is at, or two joined by a street (a via-way restriction). |
+| `passes through 2 junctions that no street along it joins` | For a via-way restriction the line must follow the street from one junction to the other. |
 | `doesn't follow a street on both sides of the junction` | One end isn't on a street that meets the junction. |
 | `... is not an OSM turn restriction` | Use one of the values above. |
 

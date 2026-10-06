@@ -60,9 +60,12 @@ Tests in `tests/valhalla/test_turns.py`:
 | Next to an existing OSM restriction | `test_existing_restriction_still_applies_beside_a_new_one` |
 | At a real junction (Monaco) | `tests/live/test_valhalla_real_data.py`: `test_turn_restriction_at_a_real_junction` |
 
+Restrictions over a stretch of street (OSM's "via way", e.g. no U-turn
+across a dual carriageway): a line through two junctions
+(`test_via_way_restriction`).
+
 Not covered: turn *penalties* in seconds (Valhalla works out turn delays
-itself), and restrictions through a stretch of street rather than one
-junction (OSM's "via way")
+itself).
 
 ## A network from your own data only
 

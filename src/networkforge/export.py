@@ -536,20 +536,23 @@ def _existing_ways(
 
 def _cut_at_junctions(ways: list[tuple], turns: list) -> list[tuple]:
     """
-    Cut the from and to streets of each turn restriction at its junction
-    where they run through it: OSM's restrictions need those ways to end
-    at the via node. The first piece keeps the way's id.
+    Cut the member streets of each turn restriction where they run
+    through its junction(s): OSM's restrictions need the from and to
+    ways to end at the via node (or via way), and a via way to run from
+    one junction to the other. The first piece keeps the way's id.
     """
-    via_of = {}
+    cut_at = defaultdict(set)  # segment -> nodes to cut the way holding it at
     for turn in turns:
-        for neighbour in (turn.from_neighbour, turn.to_neighbour):
-            via_of[frozenset((turn.via, neighbour))] = turn.via
+        cut_at[turn.from_segment].add(turn.path[0])
+        cut_at[turn.to_segment].add(turn.path[-1])
+        for segment in turn.via_segments:
+            cut_at[segment] |= {turn.path[0], turn.path[-1]}
 
     cut = []
     for way in ways:
         way_id, refs, tags, origin = way
-        at = {via_of[segment] for segment in map(frozenset, zip(refs, refs[1:], strict=False))
-              if segment in via_of}
+        at = set().union(*(cut_at.get(segment, set())
+                           for segment in map(frozenset, zip(refs, refs[1:], strict=False))))
         inner = [i for i in range(1, len(refs) - 1) if refs[i] in at]
         if not inner:
             cut.append(way)
@@ -562,9 +565,12 @@ def _cut_at_junctions(ways: list[tuple], turns: list) -> list[tuple]:
 
 
 def _turn_relations(turns: list, ways: list[tuple], first_id: int) -> list[tuple]:
-    """The turn restrictions as OSM relations: from way, via node, to way."""
-    wanted = {frozenset((turn.via, n)) for turn in turns
-              for n in (turn.from_neighbour, turn.to_neighbour)}
+    """
+    The turn restrictions as OSM relations: from way, via node (or via
+    way(s), in order), to way.
+    """
+    wanted = {segment for turn in turns
+              for segment in (turn.from_segment, turn.to_segment, *turn.via_segments)}
     way_of = {}
     for way_id, refs, _ in ways:
         for segment in map(frozenset, zip(refs, refs[1:], strict=False)):
@@ -573,14 +579,16 @@ def _turn_relations(turns: list, ways: list[tuple], first_id: int) -> list[tuple
 
     relations = []
     for number, turn in enumerate(turns):
-        from_way = way_of.get(frozenset((turn.via, turn.from_neighbour)))
-        to_way = way_of.get(frozenset((turn.via, turn.to_neighbour)))
-        if from_way is None or to_way is None:  # pragma: no cover - resolve_turns found them
+        from_way, to_way = way_of.get(turn.from_segment), way_of.get(turn.to_segment)
+        via_ways = list(dict.fromkeys(way_of.get(segment) for segment in turn.via_segments))
+        if from_way is None or to_way is None or None in via_ways:  # pragma: no cover
             log.warning("Turn restriction %s: its streets aren't in the output; left out.",
                         turn.feature)
             continue
+        via = ([("w", way, "via") for way in via_ways] if turn.via_segments
+               else [("n", turn.via, "via")])
         relations.append((first_id + number,
-                          [("w", from_way, "from"), ("n", turn.via, "via"), ("w", to_way, "to")],
+                          [("w", from_way, "from"), *via, ("w", to_way, "to")],
                           relation_tags(turn)))
     return relations
 

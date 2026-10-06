@@ -70,7 +70,8 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   (`RESTRICTION_KEYS`) are split off in step 1 (`split_turns`, before edits) and matched to the
   FINISHED network in `finish()` (`resolve_turns`): exactly one junction (node with >= 3 neighbours)
   within snap_tolerance of the line, not at its ends; from/to = the edges at that node nearest
-  the line 3 m before/after it. Stored as `Turn`s in `edges.attrs[TURNS_ATTR]`; export cuts the
+  the line 3 m before/after it. Two junctions joined by a street along the line = a via-way
+  restriction (`Turn.via_path`; members from / via way(s) / to). Stored as `Turn`s in `edges.attrs[TURNS_ATTR]`; export cuts the
   member ways at the via node (`_cut_at_junctions`) and writes relations (`_turn_relations`,
   ids above the source's). Value vs drawn direction mismatch only warns.
 - `points.py` - Point features with node tags (`POINT_TAG_KEYS`): split off in step 1

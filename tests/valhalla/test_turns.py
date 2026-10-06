@@ -101,3 +101,26 @@ def test_existing_restriction_still_applies_beside_a_new_one(scenario):
 def test_before_file_has_no_custom_restriction(scenario):
     built = scenario([(TURN_LEFT, {"restriction": "no_left_turn"})])
     assert turns_left(built, "auto", "before")
+
+
+def test_via_way_restriction(scenario):
+    """
+    No left turn from Row 2 Street (11-12) along it to 13 and north (13-18): a
+    restriction over two junctions. From mid 11-12 to mid 13-18: 200 m, else 300 m.
+    """
+    start, end = at(0.5, 2), at(2, 2.5)
+    line = [xy(0.5, 2), xy(1, 2), xy(2, 2), xy(2, 2.5)]
+    built = scenario([(line, {"restriction": "no_left_turn"})])
+
+    for costing in ("auto", "bus", "truck"):
+        assert built.before.route(start, end, costing, shortest=True).length_m == (
+            pytest.approx(200, abs=2))
+        assert built.after.route(start, end, costing, shortest=True).length_m == (
+            pytest.approx(300, abs=2)), costing
+    # Turning at 12 alone, or at 13 having come from elsewhere, is still allowed.
+    assert built.after.route(at(1, 2.5), end, "auto", shortest=True).length_m == (
+        pytest.approx(200, abs=2))
+    assert built.after.route(start, at(1, 2.5), "auto", shortest=True).length_m == (
+        pytest.approx(100, abs=2))
+    assert built.after.route(start, end, "pedestrian", shortest=True).length_m == (
+        pytest.approx(200, abs=2))
