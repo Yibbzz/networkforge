@@ -6,7 +6,7 @@ import re
 import geopandas as gpd
 import pandas as pd
 import pytest
-from shapely.geometry import LineString, Point, Polygon, box
+from shapely.geometry import LineString, Polygon, box
 
 from networkforge.errors import InputError, NetworkForgeError
 from networkforge.inputs import check_bbox, clean_custom_data
@@ -83,7 +83,7 @@ def test_custom_data_needs_a_crs():
 
 
 @pytest.mark.parametrize("bad, message", [
-    (Point(150, 150), "feature 1: Point, not a line"),
+    (box(150, 150, 160, 160), "feature 1: Polygon, not a line or point"),
     (Polygon([(100, 100), (200, 100), (200, 200)]), "feature 1: Polygon, not a line"),
     (None, "feature 1: no geometry"),
     (LineString(), "feature 1: no geometry"),
@@ -96,7 +96,7 @@ def test_unusable_features_rejected_when_strict(bad, message):
 
 
 def test_unusable_features_dropped_with_warning_when_not_strict(caplog):
-    cleaned = clean_custom_data(features(LINE, Point(1, 1), None), BBOX, strict=False)
+    cleaned = clean_custom_data(features(LINE, box(1, 1, 2, 2), None), BBOX, strict=False)
 
     assert list(cleaned["name"]) == ["f0"]
     assert "dropping them" in caplog.text
@@ -104,7 +104,7 @@ def test_unusable_features_dropped_with_warning_when_not_strict(caplog):
 
 def test_nothing_usable_left_is_an_error():
     with pytest.raises(InputError, match="No usable custom features"):
-        clean_custom_data(features(Point(1, 1)), BBOX, strict=False)
+        clean_custom_data(features(box(1, 1, 2, 2)), BBOX, strict=False)
 
 
 def test_partly_outside_warns(caplog):
@@ -124,7 +124,7 @@ def test_bbox_in_another_crs_is_compared_correctly():
 
 
 def test_many_bad_features_are_summarised():
-    points = [Point(i, i) for i in range(15)]
+    points = [box(i, i, i + 1, i + 1) for i in range(15)]
     with pytest.raises(InputError, match="and 5 more"):
         clean_custom_data(features(LINE, *points), BBOX)
 
@@ -138,18 +138,18 @@ def test_input_errors_are_catchable_as_value_error_and_base_class():
 
 def test_input_errors_list_issues_per_feature():
     with pytest.raises(InputError) as info:
-        clean_custom_data(features(LINE, Point(150, 150), None), BBOX)
+        clean_custom_data(features(LINE, box(150, 150, 160, 160), None), BBOX)
     assert info.value.issues == [
         {"feature": 2, "message": "no geometry"},
-        {"feature": 1, "message": "Point, not a line"},
+        {"feature": 1, "message": "Polygon, not a line or point"},
     ]
 
 
 def test_feature_ids_come_from_the_index():
-    gdf = features(LINE, Point(150, 150)).set_axis(["road-a", "road-b"])
+    gdf = features(LINE, box(150, 150, 160, 160)).set_axis(["road-a", "road-b"])
     with pytest.raises(InputError) as info:
         clean_custom_data(gdf, BBOX)
-    assert info.value.issues == [{"feature": "road-b", "message": "Point, not a line"}]
+    assert info.value.issues == [{"feature": "road-b", "message": "Polygon, not a line or point"}]
     assert "feature road-b" in str(info.value)
 
 

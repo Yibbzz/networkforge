@@ -67,6 +67,7 @@ from .tags import (
     EDITS_ATTR,
     FERRY_ROUTES,
     MODIFIED_TAG,
+    NODE_CHANGES_ATTR,
     NODE_TAGS,
     PART_COLUMN,
     ROUTING_WAY_TAGS,
@@ -369,6 +370,14 @@ def prepare_osm_data(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -
         node_tags = _row_tags(nodes, {key: key for key in NODE_TAGS})
     else:
         node_tags = [source.node_tags.get(node_id, {}) for node_id in node_ids]
+    node_changes = edges_gdf.attrs.get(NODE_CHANGES_ATTR) or {}
+    if node_changes:
+        # Points in the custom layer: tags set or (None) deleted.
+        node_tags = [
+            {k: v for k, v in {**tags, **node_changes[node_id]}.items() if v is not None}
+            if node_id in node_changes else tags
+            for node_id, tags in zip(node_ids, node_tags, strict=True)
+        ]
     osm_nodes = list(zip(
         node_ids,
         [round(x, 7) for x in nodes.geometry.x.tolist()],

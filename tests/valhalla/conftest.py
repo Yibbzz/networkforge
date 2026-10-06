@@ -16,7 +16,7 @@ from unittest import mock
 import geopandas as gpd
 import pytest
 from pyproj import Transformer
-from shapely.geometry import LineString, MultiLineString
+from shapely.geometry import LineString, MultiLineString, Point
 
 pytest.importorskip("valhalla", reason="pyvalhalla is not installed (uv sync installs it)")
 
@@ -73,11 +73,16 @@ class Scenario:
 
 
 def custom_layer(features) -> gpd.GeoDataFrame:
-    """features = [(coords or [coords, ...] for a multi-line, tags), ...] in grid CRS."""
-    geometries = [
-        MultiLineString(coords) if isinstance(coords[0][0], tuple | list) else LineString(coords)
-        for coords, _ in features
-    ]
+    """
+    features = [(coords, tags), ...] in grid CRS: coords of a line, [coords, ...] of a
+    multi-line, or a single [(x, y)] for a point.
+    """
+    def geometry(coords):
+        if isinstance(coords[0][0], tuple | list):
+            return MultiLineString(coords)
+        return Point(coords[0]) if len(coords) == 1 else LineString(coords)
+
+    geometries = [geometry(coords) for coords, _ in features]
     return gpd.GeoDataFrame([tags for _, tags in features], geometry=geometries, crs=UTM)
 
 

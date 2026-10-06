@@ -107,6 +107,10 @@ MODIFIED_TAG = "nf:modified"
 EDIT_COLUMN = "nf_edit"
 EDITS_ATTR = "networkforge_edits"
 
+# Node tags set (or, as None, deleted) by points in the custom layer:
+# {node id: {key: value or None}}, carried to export like the edits.
+NODE_CHANGES_ATTR = "networkforge_node_changes"
+
 # Turn restrictions resolved on the built network (turns.Turn), carried
 # to export like the edits.
 TURNS_ATTR = "networkforge_turns"

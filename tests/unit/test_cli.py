@@ -8,7 +8,7 @@ from importlib.metadata import version
 import geopandas as gpd
 import pandas as pd
 import pytest
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, box
 
 from networkforge.cli import (
     EXIT_INPUT,
@@ -200,11 +200,12 @@ def test_warnings_are_json_events_with_features_and_fields(id_file, capsys):
 def test_geometry_issues_name_features(tmp_path, capsys):
     path = tmp_path / "mixed.geojson"
     gpd.GeoDataFrame({"highway": ["primary", "primary"]},
-                     geometry=[LineString([(-3.19, 55.95), (-3.18, 55.96)]), Point(-3.18, 55.95)],
+                     geometry=[LineString([(-3.19, 55.95), (-3.18, 55.96)]),
+                               box(-3.18, 55.95, -3.179, 55.951)],
                      crs="EPSG:4326").to_file(path)
     code, events = run_json(capsys, "check", "--custom", str(path), "--bbox=-3.2,55.9,-3.1,56.0")
     assert code == EXIT_INPUT
-    assert events[-1]["issues"] == [{"feature": 1, "message": "Point, not a line"}]
+    assert events[-1]["issues"] == [{"feature": 1, "message": "Polygon, not a line or point"}]
 
 
 def test_text_mode_keeps_stdout_free_of_json(id_file, capsys):

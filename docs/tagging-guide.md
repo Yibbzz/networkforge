@@ -364,6 +364,29 @@ QGIS's own network tools) can't show them.
 | `doesn't follow a street on both sides of the junction` | One end isn't on a street that meets the junction. |
 | `... is not an OSM turn restriction` | Use one of the values above. |
 
+## Points: barriers, signals, crossings
+
+A **point** in the custom layer puts node tags on the network:
+`barrier=bollard`, `barrier=gate` (+ `access=no`), `barrier=cycle_barrier`,
+`highway=traffic_signals`, `highway=crossing` + `crossing=zebra`,
+`railway=level_crossing`, `traffic_calming=hump`, ...
+
+- Within `snap_tolerance` of a node (a junction, or any node of a
+  street), that node gets the tags - signals at an existing junction.
+- Otherwise the nearest street (new, existing or changed) is cut there
+  and a new node carries them - a bollard mid-block. A point where a
+  bridge crosses a street needs the `layer` of the one it is on.
+- `remove_tags=barrier` on a point at an existing node deletes the tag:
+  an existing bollard taken out.
+- The "before" network is never changed. The GeoPackage `nodes` layer
+  shows the tags; its car / bike / walk columns don't apply barriers
+  (routers do).
+
+As Valhalla 3.9 reads them: a bollard, `block` or `cycle_barrier` stops
+cars; a plain `gate` is open, and so is a gate with `access=private`;
+`access=no` closes it to everyone. Access tags on a point without a
+`barrier` are ignored by routers (the build warns).
+
 ## A network of your own lines
 
 If you already have a street network as a line layer (council

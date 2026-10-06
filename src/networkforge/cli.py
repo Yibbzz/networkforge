@@ -61,12 +61,14 @@ from .inputs import (
 from .modes import MODES, usable_modes
 from .network import JOIN_AT, build_network
 from .osm import NETWORK_TYPES
+from .points import check_point_tags, split_points
 from .presets import PRESETS, preset_tags
 from .tags import (
     EDIT_ID_COLUMN,
     EDIT_ID_COLUMNS,
     FERRY_ROUTES,
     MODIFIED_COLUMN,
+    NODE_CHANGES_ATTR,
     REMOVE_COLUMN,
     REMOVE_TAGS_COLUMN,
     REMOVED_ATTR,
@@ -170,9 +172,11 @@ def cmd_build(args, emit) -> int:
                       if MODIFIED_COLUMN in streets else 0)
     removed_edges = int(edges.attrs.get(REMOVED_ATTR, 0))
     turn_restrictions = len(edges.attrs.get(TURNS_ATTR) or [])
+    tagged_nodes = len(edges.attrs.get(NODE_CHANGES_ATTR) or {})
     emit({"event": "done", "outputs": outputs, "nodes": len(nodes), "edges": len(streets),
           "custom_edges": custom_edges, "modified_edges": modified_edges,
-          "removed_edges": removed_edges, "turn_restrictions": turn_restrictions},
+          "removed_edges": removed_edges, "turn_restrictions": turn_restrictions,
+          "tagged_nodes": tagged_nodes},
          text=f"Done: {len(nodes):,} nodes, {len(streets):,} edges ({custom_edges:,} custom, "
               f"{modified_edges:,} changed, {removed_edges:,} removed). "
               f"Wrote {', '.join(outputs.values())}")
@@ -191,6 +195,8 @@ def cmd_check(args, emit) -> int:
     # Changes to existing streets and turn restrictions are checked for
     # valid values only: where they apply is known once the network is
     # built.
+    custom, points = split_points(custom)
+    check_point_tags(points, strict=True)
     custom, turns = split_turns(custom)
     check_turn_tags(turns, strict=True)
     custom, edits = split_edits(custom)
@@ -212,9 +218,11 @@ def cmd_check(args, emit) -> int:
         summary = "; ".join(filter(None, [summary, f"{len(edits)} change existing streets"]))
     if len(turns):
         summary = "; ".join(filter(None, [summary, f"{len(turns)} turn restriction(s)"]))
-    features = len(custom) + len(edits) + len(turns)
+    if len(points):
+        summary = "; ".join(filter(None, [summary, f"{len(points)} point(s)"]))
+    features = len(custom) + len(edits) + len(turns) + len(points)
     emit({"event": "done", "features": features, "modes": dict(modes),
-          "edits": len(edits), "turn_restrictions": len(turns)},
+          "edits": len(edits), "turn_restrictions": len(turns), "points": len(points)},
          text=f"OK: {features} feature(s) - {summary}")
     return EXIT_OK
 

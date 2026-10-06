@@ -449,10 +449,10 @@ def unknown_values(tags: dict[str, str]) -> list[tuple[str, str]]:
     return unknown
 
 
-def warn_about_unknown_values(found: dict[tuple[str, str], list]) -> None:
+def warn_about_unknown_values(found: dict[tuple[str, str], list], known_values=None) -> None:
     """One warning per unknown (key, value), naming its features and the likely value."""
     for (key, value), features in found.items():
-        known = KNOWN_VALUES.get(key, {"up", "down"})
+        known = (known_values or KNOWN_VALUES).get(key, {"up", "down"})
         close = difflib.get_close_matches(value, known, n=1, cutoff=0.7)
         hint = f" - did you mean {close[0]!r}?" if close else ""
         log.warning(

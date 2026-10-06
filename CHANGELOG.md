@@ -28,6 +28,14 @@ minor version may include breaking changes).
   stretch (an empty attribute still means "no change"). Deleting
   `oneway` makes the street two-way. `info --json` has
   `remove_tags_field`.
+- **Points: barriers, signals, crossings.** A point in the custom layer
+  with node tags (`barrier=bollard`, `highway=traffic_signals`,
+  `crossing=zebra`, ...) tags the node it is on (within snap_tolerance)
+  or cuts the nearest street there with a new node - on new lines,
+  existing and changed streets alike. `remove_tags` on a point deletes
+  an existing node's tags (take out a bollard). `layer` picks the street
+  where a bridge crosses one. `check` / `build --json` report `points` /
+  `tagged_nodes`.
 
 ### Fixed
 - **A multi-part feature that changes an existing street** (`osm_id`)

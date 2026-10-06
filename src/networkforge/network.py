@@ -27,10 +27,12 @@ from .osm import (
     get_osm_data_from_bbox,
     get_osm_data_from_file,
 )
+from .points import check_point_tags, place_points, split_points
 from .presets import preset_tags
 from .projection import get_analysis_crs
 from .tags import (
     EDITS_ATTR,
+    NODE_CHANGES_ATTR,
     PART_COLUMN,
     REMOVE_COLUMN,
     REMOVE_TAGS_COLUMN,
@@ -315,6 +317,10 @@ def build_network(
     # the rest are new lines. Blanket tags are for new lines only.
     # Turn restriction lines aren't part of the network: they are matched
     # to it once it is built (turns.py).
+    # Points tag the network's nodes; they too are placed on the built
+    # network (points.py).
+    custom_data_gdf, points_gdf = split_points(custom_data_gdf)
+    check_point_tags(points_gdf, strict=strict)
     custom_data_gdf, turns_gdf = split_turns(custom_data_gdf)
     check_turn_tags(turns_gdf, strict=strict)
 
@@ -398,10 +404,22 @@ def build_network(
             # after network still needs its own table, or the turns would
             # land in the before network too.
             edges = edges.copy()
+        node_changes = {}
+        if not points_gdf.empty:
+            # Before the turn restrictions: cutting a street changes the
+            # neighbours of the junctions next to it.
+            taken = [int(nodes.index.max()) if len(nodes) else 0,
+                     int(osm_nodes_gdf.index.max()) if len(osm_nodes_gdf) else 0]
+            if source_data is not None:
+                taken += list(source_data.ferry_nodes)
+            nodes, edges, node_changes = place_points(
+                points_gdf, nodes, edges, snap_tolerance, max(taken) + 1,
+                source_data.node_tags if source_data is not None else {}, strict=strict)
         if source_data is not None:
             edges.attrs[SOURCE_ATTR] = source_data
             osm_edges_gdf.attrs[SOURCE_ATTR] = source_data
         edges.attrs[EDITS_ATTR] = changes
+        edges.attrs[NODE_CHANGES_ATTR] = node_changes
         edges.attrs[REMOVED_ATTR] = removed
         edges.attrs[TURNS_ATTR] = resolve_turns(
             turns_gdf, nodes, edges, snap_tolerance, strict=strict)
@@ -410,9 +428,10 @@ def build_network(
         return nodes, edges
 
     if custom_data_gdf.empty:
-        if not changes and not removed and turns_gdf.empty:
+        if not changes and not removed and turns_gdf.empty and points_gdf.empty:
             raise InputError("Nothing to build: no new lines, and no feature changes or "
-                             "removes an existing street or adds a turn restriction.",
+                             "removes an existing street, adds a turn restriction or "
+                             "tags a node (a point).",
                              guide="changing-existing-streets")
         log.info("No new lines: the network is OSM with %d change(s) and %d edge(s) removed",
                  len(changes), removed)

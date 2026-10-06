@@ -22,6 +22,8 @@ from .validation import RESERVED_COLUMNS
 log = logging.getLogger(__name__)
 
 LINE_TYPES = {"LineString", "MultiLineString"}
+# Points carry node tags (barriers, signals ...: see points.py).
+FEATURE_TYPES = LINE_TYPES | {"Point", "MultiPoint"}
 
 # Largest bounding box downloaded from the Overpass API. Overpass is a
 # free shared service (roughly 10,000 queries or 1 GB a day per user);
@@ -91,8 +93,8 @@ def clean_custom_data(
     edits: bool = True,
 ) -> gpd.GeoDataFrame:
     """
-    Check the custom data and return a cleaned copy: only line
-    features with geometry that reach into the bounding box, in 2D.
+    Check the custom data and return a cleaned copy: only line (and
+    point) features with geometry that reach into the bounding box, in 2D.
 
     bbox_gdf None: there is no box (a standalone network), so nothing
     is outside it. edits False: an OSM id attribute is not read as
@@ -119,7 +121,7 @@ def clean_custom_data(
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty
-    not_a_line = ~no_geometry & ~geometry.geom_type.isin(LINE_TYPES)
+    not_a_line = ~no_geometry & ~geometry.geom_type.isin(FEATURE_TYPES)
 
     # Coordinates that aren't numbers (NaN, inf) break every geometry operation.
     coords, owner = shapely.get_coordinates(geometry.to_numpy(), return_index=True)
@@ -143,8 +145,8 @@ def clean_custom_data(
     types = geometry[not_a_line].geom_type
     for mask, reason in (
         (no_geometry, "no geometry"),
-        (not_a_line, f"{'/'.join(sorted(set(types)))}, not a line (only LineString and "
-                     "MultiLineString can be routed)"),
+        (not_a_line, f"{'/'.join(sorted(set(types)))}, not a line or point (only lines can "
+                     "be routed; points tag the network's nodes)"),
         (bad_coordinates, "has coordinates that aren't numbers (NaN or infinite)"),
         (outside, "completely outside the bounding box"),
     ):
@@ -153,7 +155,7 @@ def clean_custom_data(
             issues += [{"feature": fid, "message": reason} for fid in custom.index[mask]]
     for issue in issues:  # say which geometry type each non-line is
         if issue["feature"] in types.index:
-            issue["message"] = f"{types.loc[issue['feature']]}, not a line"
+            issue["message"] = f"{types.loc[issue['feature']]}, not a line or point"
 
     if problems:
         message = "Some custom features can't be used - " + "; ".join(problems) + "."
