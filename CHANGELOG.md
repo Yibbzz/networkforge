@@ -13,9 +13,6 @@ Found by further testing (odd inputs, larger areas):
 - **Attributes that aren't tags kept their type.** All attributes were
   turned into text, so a number such as a surveyed travel time reached
   the GeoPackage as `'1.5'` and couldn't be used as a cost in QGIS.
-- **Attribute names in other letter case are read as tags**: `HIGHWAY`,
-  `MaxSpeed`, `OSM_ID` (as ArcGIS and Shapefile layers often have them)
-  used to fail with "no highway tag".
 - **A coordinate that isn't a number** (NaN, infinite) is reported for
   its feature instead of crashing the build with a GEOS error.
 - When every feature is outside the box, the message suggests checking

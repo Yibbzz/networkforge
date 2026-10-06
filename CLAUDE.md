@@ -23,6 +23,9 @@ correctly in Valhalla" is the output that matters most. docs/network-analyst.md 
 feature to its tag and its test, and lists what is not covered; keep it in sync.
 Lint: `uv run ruff check .`. Coverage: `uv run pytest --cov`.
 The package is installed editable by `uv sync` (hatchling build-system), no PYTHONPATH needed.
+In the dev container the environment is `/opt/venv` (`UV_PROJECT_ENVIRONMENT`, set in the
+Dockerfile), NOT `/workspace/.venv`: that folder is shared with the host, whose uv uses another
+Python and rebuilt it under the container (and vice versa). The host keeps its own `.venv`.
 
 ## Source (`src/networkforge/`)
 - `cli.py` - `networkforge build|check|presets|info` (console script; also `python -m networkforge`).

@@ -114,12 +114,12 @@ def test_bus_only_feature_is_accepted_with_a_note(tags, caplog):
 
 def test_boolean_and_empty_attributes_are_read_as_gis_layers_mean_them():
     """
-    A boolean field is yes / no (NetworkForge's own GeoPackage stores
-    oneway that way), and empty text is "no value", as NULL is.
+    A boolean field is yes / no, and empty text is "no value", as NULL
+    is. Text values themselves are OSM's: "True" is not turned into yes.
     """
     gdf = gpd.GeoDataFrame(
         {"highway": ["residential", "residential", "residential"],
-         "oneway": [True, False, "True"], "maxspeed": ["", "  ", None], "name": ["", "A", "B"]},
+         "oneway": [True, False, "yes"], "maxspeed": ["", "  ", None], "name": ["", "A", "B"]},
         geometry=[LINE, LINE, LINE], crs="EPSG:32630",
     )
     resolved = resolve_custom_tags(gdf, {})
@@ -128,6 +128,11 @@ def test_boolean_and_empty_attributes_are_read_as_gis_layers_mean_them():
     assert resolved["oneway"].tolist() == ["yes", "no", "yes"]
     assert resolved["maxspeed"].isna().all()
     assert resolved["name"].tolist()[1:] == ["A", "B"] and resolved["name"].isna()[0]
+
+
+def test_text_true_is_not_an_osm_oneway_value():
+    with pytest.raises(ValueError, match="oneway='True' is not a valid OSM value"):
+        check(custom(highway="primary", oneway="True"), {})
 
 
 def test_reserved_column_rejected():

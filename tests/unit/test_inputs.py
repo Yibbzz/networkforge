@@ -167,18 +167,14 @@ def test_reserved_attribute_names_are_set_aside(caplog):
     assert "Ignoring custom attribute(s) key, length" in caplog.text
 
 
-def test_attribute_names_in_other_letter_case_are_read_as_tags():
-    """ArcGIS and Shapefile layers often have HIGHWAY, MaxSpeed, OSM_ID."""
-    from networkforge.inputs import match_attribute_names
+def test_attribute_names_must_be_osm_keys_as_written():
+    """OSM keys are lower case: HIGHWAY is not highway (and is reported as missing)."""
+    from networkforge.validation import check_custom_tags, resolve_custom_tags
 
-    gdf = gpd.GeoDataFrame({"HIGHWAY": ["primary"], "MaxSpeed": ["30 mph"], "OSM_ID": [5],
-                            "Notes": ["x"]}, geometry=[LineString([(0, 0), (1, 1)])])
-    assert list(match_attribute_names(gdf).columns) == [
-        "highway", "maxspeed", "osm_id", "Notes", "geometry"]
-
-    both = gpd.GeoDataFrame({"highway": ["primary"], "HIGHWAY": ["footway"]},
-                            geometry=[LineString([(0, 0), (1, 1)])])
-    assert list(match_attribute_names(both).columns) == ["highway", "HIGHWAY", "geometry"]
+    gdf = gpd.GeoDataFrame({"HIGHWAY": ["primary"]},
+                           geometry=[LineString([(0, 0), (1, 1)])], crs="EPSG:32630")
+    with pytest.raises(InputError, match="no highway tag"):
+        check_custom_tags(resolve_custom_tags(gdf, {}), "all")
 
 
 def test_coordinates_that_are_not_numbers_are_refused_not_a_crash():

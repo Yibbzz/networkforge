@@ -295,7 +295,7 @@ def _tag_value(value) -> str | None:
     """
     An attribute value as tag text; None if the feature has no value.
     GIS layers hold "no value" as NULL or as empty text, and yes/no as a
-    boolean (as NetworkForge's own GeoPackage does for oneway).
+    boolean field. Text is taken as it is: tag values are OSM's.
     """
     if value is None or (isinstance(value, float) and value != value):
         return None
@@ -304,8 +304,6 @@ def _tag_value(value) -> str | None:
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     text = str(value).strip()
-    if text in ("True", "False"):  # a boolean that went through a text field
-        return "yes" if text == "True" else "no"
     return text or None
 
 

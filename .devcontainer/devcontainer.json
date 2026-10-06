@@ -9,8 +9,15 @@
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
     "workspaceFolder": "/workspace",
 
+    // The environment is /opt/venv inside the container (see the Dockerfile);
+    // this installs networkforge into it, editable, once the source is mounted.
+    "postCreateCommand": "uv sync",
+
     "customizations": {
         "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/venv/bin/python"
+            },
             "extensions": [
                 "ms-python.python",
                 "ms-python.vscode-pylance"
