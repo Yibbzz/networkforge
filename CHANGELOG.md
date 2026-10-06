@@ -7,6 +7,8 @@ minor version may include breaking changes).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-06
+
 ### Added
 - **Turn restrictions.** A line in the custom layer drawn from one street,
   through a junction, onto another, with OSM's `restriction` tag
@@ -358,7 +360,8 @@ with Valhalla on the raw data:
 - Initial pipeline: merge custom lines into an OSMnx network and export
   OSM XML.
 
-[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/Yibbzz/networkforge/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Yibbzz/networkforge/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/Yibbzz/networkforge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Yibbzz/networkforge/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Yibbzz/networkforge/compare/v0.9.0...v0.10.0
