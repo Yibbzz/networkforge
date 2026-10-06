@@ -84,7 +84,8 @@ attributes route exactly like the same streets in OpenStreetMap
 `test_streets_given_as_lines_route_like_the_same_streets_in_osm`). What
 is lost against full OpenStreetMap is what lines can't carry: turn
 restrictions and barriers on nodes - unless you draw them (turn
-restriction lines; ferries are lines with `route=ferry`).
+restriction lines, points with `barrier=`, `highway=traffic_signals` ...;
+ferries are lines with `route=ferry`). Points: `tests/valhalla/test_points.py`.
 
 ## Changing the existing network
 
@@ -124,7 +125,6 @@ stretch between two OSM nodes.
 | **Public transport** (connectivity groups, multimodal networks, GTFS) | Not modelled. |
 | **End Point connectivity** and **elevation fields** (`F_ZLEV`, `T_ZLEV`) or **z coordinates** | A network of your own lines joins at crossings or at shared vertices, and keeps levels apart with `bridge`, `tunnel` and `layer`. Data prepared for ArcGIS with elevation fields needs those turned into `layer` (or bridges split out) first. |
 | **Cost and restriction attributes from your own fields** (`FT_Minutes`, `AR_AUTO = 'N'`, `ONEWAY = 'FT'`) | Routers read OSM tags, so fields have to be expressed as tags (`maxspeed`, `motor_vehicle=no`, `oneway=yes`), e.g. with QGIS's field calculator. Other attributes are kept, with their type, in the GeoPackage, where QGIS's network tools can use them as costs. |
-| **Points on the network**: barriers, gates, signals on your own lines | Kept from OpenStreetMap; can't be added to your own lines. |
 | **County- or country-sized networks** | Limited by memory: a 600 km2 area of Luxembourg (475,000 edges) takes about 3.5 GB and 80 s; the whole country (2,600 km2) needs more than 6 GB. ArcGIS builds national networks. |
 | **Solvers beyond routing**: closest facility with many facilities, vehicle routing with time windows and capacities, location-allocation | Not part of building the network. Valhalla (in the QGIS plugin) does routes, isochrones, matrices and optimised (travelling salesman) routes; QGIS adds service areas and shortest paths on the GeoPackage. |
 

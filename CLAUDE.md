@@ -73,6 +73,11 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   the line 3 m before/after it. Stored as `Turn`s in `edges.attrs[TURNS_ATTR]`; export cuts the
   member ways at the via node (`_cut_at_junctions`) and writes relations (`_turn_relations`,
   ids above the source's). Value vs drawn direction mismatch only warns.
+- `points.py` - Point features with node tags (`POINT_TAG_KEYS`): split off in step 1
+  (`split_points`, before turns), placed on the FINISHED network in `finish()` before turns
+  (`place_points`): node within snap_tolerance gets the tags, else the nearest edge (and its
+  reverse copy) is cut with a new node (`layer` picks one at a bridge). `remove_tags` deletes node
+  tags. Changes in `edges.attrs[NODE_CHANGES_ATTR]` {node: {key: value|None}}, merged by export.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
 - `osm.py` - existing network from Overpass (`get_osm_data_from_bbox`, OSMnx cache in
