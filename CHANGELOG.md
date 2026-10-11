@@ -8,6 +8,18 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-11
+
+### Fixed
+- On Windows, an OSM file in a folder with accented or other non-English
+  letters in its name (`C:\Users\Zoë\Documents\...`) could not be read
+  ("Open failed ... The system cannot find the file specified"), and
+  `.osm.pbf`, `.osm.gz` and `.osm.bz2` output could not be written to
+  one. The same went for such letters in the file's own name.
+
+### Tests
+- The offline tests now also run on Windows on every push.
+
 ## [1.0.0] - 2026-10-06
 
 The first stable release: every OSM feature a network build needs -

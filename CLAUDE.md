@@ -98,6 +98,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `filter_graph_by_mode`, `load_graph(osm_file, mode)`, `keep_mode_tags()` (way + node tags to keep).
 - `tags.py` - tags written for CUSTOM features and kept as edge/node columns (single source);
   `ROUTING_NODE_KEYS` (which extract nodes are read), relation types kept, `PART_COLUMN`.
+- `paths.py` - `readable(path)` / `writable(path)`: the name to give osmium. On Windows osmium
+  can't open a path with non-ASCII letters (narrow-character `open`), so these chdir into the
+  folder and pass the bare name; a non-ASCII file name is read through a temporary hard link and
+  written under a plain name, then renamed. ALWAYS go through them when src/ hands osmium a path.
+  Tests force it on any system with `paths._NARROW_NAMES_ONLY` (tests/integration/test_file_names.py);
+  the `windows` CI job is the real check.
 - `projection.py` - picks a projected UTM analysis CRS from the bbox; WGS84 helpers.
 - `validation.py` - pre-build `resolve_custom_tags` (feature attributes vs blanket tags, `overwrite`)
   + `check_custom_tags` (also warns on misspelt/truncated attribute names) (valid OSM tag values, usable by >= 1 mode / by the

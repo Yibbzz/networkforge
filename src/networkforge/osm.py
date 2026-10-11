@@ -36,6 +36,7 @@ from shapely.geometry import box
 
 from .errors import InputError, OSMDownloadError
 from .modes import _passes_osmnx_filter, is_ferry, keep_mode_tags
+from .paths import readable
 from .tags import FERRY_ROUTES, RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
 
 log = logging.getLogger(__name__)
@@ -318,7 +319,9 @@ def get_osm_data_from_file(
 def _check_file_covers(path: Path, polygon) -> None:
     """Refuse a file whose header says it doesn't reach the area."""
     try:
-        box = osmium.io.Reader(str(path), osmium.osm.osm_entity_bits.NOTHING).header().box()
+        with (readable(path) as name,
+              osmium.io.Reader(name, osmium.osm.osm_entity_bits.NOTHING) as reader):
+            box = reader.header().box()
     except RuntimeError as exc:
         raise InputError(f"Can't read {path.name} as an OSM file ({exc}).") from exc
 
@@ -354,49 +357,52 @@ def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
 
     # Only objects with a highway, node-routing or relation-type tag reach
     # Python; the location cache still sees every node, so ways get coordinates.
-    processor = (
-        osmium.FileProcessor(str(path))
-        .with_locations()
-        .with_filter(osmium.filter.KeyFilter("highway", "type", "route", *ROUTING_NODE_KEYS))
-    )
     try:
-        for obj in processor:
-            if obj.is_node():
-                if inside(obj.location.lon, obj.location.lat):
-                    tags = {tag.k: tag.v for tag in obj.tags}
-                    if any(key in tags for key in ROUTING_NODE_KEYS):
-                        tagged_nodes[obj.id] = tags
-                continue
+        with readable(path) as name:
+            processor = (
+                osmium.FileProcessor(name)
+                .with_locations()
+                .with_filter(
+                    osmium.filter.KeyFilter("highway", "type", "route", *ROUTING_NODE_KEYS))
+            )
+            for obj in processor:
+                if obj.is_node():
+                    if inside(obj.location.lon, obj.location.lat):
+                        tags = {tag.k: tag.v for tag in obj.tags}
+                        if any(key in tags for key in ROUTING_NODE_KEYS):
+                            tagged_nodes[obj.id] = tags
+                    continue
 
-            tags = {tag.k: tag.v for tag in obj.tags}
-            if obj.is_relation():
-                if _keeps_relation(tags):
-                    relations.append({"type": "relation", "id": obj.id, "tags": tags, "members": [
-                        {"type": {"n": "node", "w": "way", "r": "relation"}[m.type],
-                         "ref": m.ref, "role": m.role} for m in obj.members]})
-                continue
-            if not obj.is_way():
-                continue
+                tags = {tag.k: tag.v for tag in obj.tags}
+                if obj.is_relation():
+                    if _keeps_relation(tags):
+                        members = [{"type": {"n": "node", "w": "way", "r": "relation"}[m.type],
+                                    "ref": m.ref, "role": m.role} for m in obj.members]
+                        relations.append({"type": "relation", "id": obj.id, "tags": tags,
+                                          "members": members})
+                    continue
+                if not obj.is_way():
+                    continue
 
-            if not is_ferry(tags) and (
-                "highway" not in tags or not _passes_osmnx_filter(tags, network_type)
-            ):
-                continue
-            nodes = [(n.ref, (n.location.lon, n.location.lat)) if n.location.valid()
-                     else (n.ref, None) for n in obj.nodes]
-            if not any(loc and inside(*loc) for _, loc in nodes):
-                continue
+                if not is_ferry(tags) and (
+                    "highway" not in tags or not _passes_osmnx_filter(tags, network_type)
+                ):
+                    continue
+                nodes = [(n.ref, (n.location.lon, n.location.lat)) if n.location.valid()
+                         else (n.ref, None) for n in obj.nodes]
+                if not any(loc and inside(*loc) for _, loc in nodes):
+                    continue
 
-            # An extract can cut a way at its edge, leaving refs to nodes it
-            # doesn't contain. Keep each unbroken run of known nodes.
-            runs = _known_runs(nodes)
-            if len(runs) != 1 or len(runs[0]) != len(nodes):
-                cut_ways += 1
-            for number, run in enumerate(runs):
-                way_id = obj.id if number == 0 else next(extra_way_ids)
-                ways.append({"type": "way", "id": way_id, "tags": tags,
-                             "nodes": [ref for ref, _ in run]})
-                locations.update(run)
+                # An extract can cut a way at its edge, leaving refs to nodes it
+                # doesn't contain. Keep each unbroken run of known nodes.
+                runs = _known_runs(nodes)
+                if len(runs) != 1 or len(runs[0]) != len(nodes):
+                    cut_ways += 1
+                for number, run in enumerate(runs):
+                    way_id = obj.id if number == 0 else next(extra_way_ids)
+                    ways.append({"type": "way", "id": way_id, "tags": tags,
+                                 "nodes": [ref for ref, _ in run]})
+                    locations.update(run)
     except RuntimeError as exc:
         raise InputError(f"Can't read {path.name} as an OSM file ({exc}).") from exc
 
