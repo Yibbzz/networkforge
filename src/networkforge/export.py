@@ -59,6 +59,7 @@ import shapely
 from .errors import InputError
 from .modes import allows_mode, car_speed_kph, mode_tag_keys
 from .osm import SOURCE_ATTR, OSMSource
+from .paths import writable
 from .tags import (
     BASE_WAY_TAGS,
     CUSTOM_COLUMN,
@@ -821,14 +822,16 @@ def _write_with_osmium(data: OSMData, path: str | Path) -> None:
     header.add_box(osmium.osm.Box(osmium.osm.Location(min_lon, min_lat),
                                   osmium.osm.Location(max_lon, max_lat)))
 
-    writer = osmium.SimpleWriter(str(path), header=header, overwrite=True)
-    try:
-        for node_id, lon, lat, tags in data.nodes:
-            writer.add_node(osmium.osm.mutable.Node(id=node_id, location=(lon, lat), tags=tags))
-        for way_id, refs, tags in data.ways:
-            writer.add_way(osmium.osm.mutable.Way(id=way_id, nodes=refs, tags=tags))
-        for relation_id, members, tags in data.relations:
-            writer.add_relation(osmium.osm.mutable.Relation(
-                id=relation_id, members=members, tags=tags))
-    finally:
-        writer.close()
+    with writable(path) as name:
+        writer = osmium.SimpleWriter(name, header=header, overwrite=True)
+        try:
+            for node_id, lon, lat, tags in data.nodes:
+                writer.add_node(
+                    osmium.osm.mutable.Node(id=node_id, location=(lon, lat), tags=tags))
+            for way_id, refs, tags in data.ways:
+                writer.add_way(osmium.osm.mutable.Way(id=way_id, nodes=refs, tags=tags))
+            for relation_id, members, tags in data.relations:
+                writer.add_relation(osmium.osm.mutable.Relation(
+                    id=relation_id, members=members, tags=tags))
+        finally:
+            writer.close()

@@ -45,6 +45,28 @@ jobs:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  windows:
+    name: Offline tests on Windows
+    # Most people who use the QGIS plugin are on Windows. What differs
+    # there is mostly file names: tests/integration/test_file_names.py
+    # builds in folders with accents, which osmium can't open by itself.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Offline tests
+        run: uv run pytest
+
   valhalla:
     name: PBF in Valhalla
     # Builds before / after networks, builds Valhalla's routing graph from
