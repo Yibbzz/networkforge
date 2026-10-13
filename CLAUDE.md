@@ -110,6 +110,14 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
   self-loops, custom lines unbroken. Custom lines not connected to the network only WARN in the
   build (naming features; kept in the output) - tests assert `assert_all_custom_edges_are_connected`.
+- **Priority (decided 2026-10-13): the OSM PBF is the product, the GeoPackage a nice-to-have.**
+  Proper routers read the PBF and know cycle lanes, surfaces, turn restrictions, barriers and
+  vehicle sizes; the GeoPackage is a simplified view for QGIS's own tools (allowed or not, one
+  speed) and will never carry all of that. So: a new feature is done when a router test in
+  tests/valhalla proves it in the PBF; GeoPackage columns follow only where cheap. Never hold back
+  or bend a PBF feature to keep the GeoPackage in step, and when the two disagree fix the PBF
+  first. Cycling shows the gap: tests/valhalla/test_cycling.py (lanes, tracks, bicycle types) has
+  no GeoPackage counterpart, on purpose.
 - Outputs have two audiences: OSM/PBF (`write_osm`) for routers (Valhalla, GraphHopper), which read
   tags themselves; GeoPackage (`write_gpkg` -> `analysis_edges`) for QGIS network analysis, with
   car/bike/walk flags (same `allows_mode` rules, car = "drive"), speed_kph (`modes.car_speed_kph`),

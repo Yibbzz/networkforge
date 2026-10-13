@@ -116,6 +116,40 @@ layer or a QuickOSM layer, edit an attribute, add it to the custom layer
 Not possible yet: moving a street, and changing or removing part of a
 stretch between two OSM nodes.
 
+## Cycling infrastructure
+
+Esri's tutorial has no cycling. These are tested in
+`tests/valhalla/test_cycling.py`: two new streets join the same two
+junctions, one 13% longer than the other, and a cyclist who takes the
+longer one does so because of what is on it.
+
+| On the street | What Valhalla's cyclist does | Test |
+|---|---|---|
+| `cycleway=lane` (a painted lane) | Goes out of the way for it; cars and walkers don't | `test_cycling_infrastructure_draws_cyclists_and_nobody_else` |
+| `cycleway=track` (apart from the traffic) | The same, and it counts for more than a lane | the same, and `test_a_track_counts_for_more_than_a_lane` |
+| `highway=cycleway` | The same | the same |
+| `cycleway:left=track`, `cycleway:right=track` | Counts in one direction only: the side traffic drives on is the direction the line was drawn | `test_a_track_on_one_side_serves_one_direction` |
+| A lane added to an existing street (`osm_id` + `cycleway=lane`) | The street costs a cyclist less; the same time, and no change for cars or walkers | `test_a_lane_added_to_an_existing_street_makes_it_cheaper_to_cycle` |
+| `surface=compacted`, `dirt`, `gravel` | Closed to the bicycles that can't take it. Valhalla's default bicycle is a hybrid: it rides `compacted`, not `dirt` or `gravel` | `test_an_unpaved_street_is_only_for_the_bicycles_that_can_take_it` |
+
+Written to the file, but Valhalla 3.9 doesn't route by them
+(`test_tags_valhalla_does_not_route_by` fails when that changes):
+
+| Tag | Use instead |
+|---|---|
+| `cycleway:both=lane` | `cycleway=lane`, or `cycleway:left` and `cycleway:right` |
+| `cycleway=shared_lane` | Valhalla reads it, but it is too weak to move a route |
+| `bicycle_road=yes`, `cyclestreet=yes` | nothing equivalent |
+
+The cyclist is a setting of the router, not of the network: how happy
+they are among cars (`use_roads`, 0 to 1; at 1 they no longer go out of
+the way for a cycleway) and the kind of bicycle (`bicycle_type`: road,
+hybrid, cross, mountain), which decides the surfaces they can ride.
+
+The GeoPackage knows none of this: its `bike` column says whether
+cycling is allowed, and `bike_minutes` assumes 15 km/h everywhere. A
+cycle lane only shows in a router's results.
+
 ## What is not covered
 
 | Esri | Status |
@@ -148,6 +182,9 @@ stretch between two OSM nodes.
   modes that can use it; Valhalla and NetworkForge's own routing measure
   every trip the same.
 - `test_random_lines.py`: the same agreement for random lines.
+- `test_cycling.py`: two new streets between the same junctions, one a
+  little longer; which one a cyclist, a driver and a walker take as
+  cycling infrastructure is put on the longer one.
 - `test_edits.py`: changes to existing streets.
 - `tests/live/test_valhalla_real_data.py` (nightly): the same on a real
   extract (Monaco).
