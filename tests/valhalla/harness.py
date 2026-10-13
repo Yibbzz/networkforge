@@ -35,6 +35,7 @@ LonLat = tuple[float, float]
 class Route:
     length_m: float
     time_s: float
+    cost: float                # what Valhalla weighed: time plus its likes and dislikes
     way_ids: tuple[int, ...]   # OSM way ids travelled, in order, without repeats
     names: tuple[str, ...]     # street names in the directions, in order
     shape: str                 # encoded polyline (6 decimals)
@@ -118,6 +119,7 @@ class Router:
         return Route(
             length_m=trip["summary"]["length"] * 1000,
             time_s=trip["summary"]["time"],
+            cost=trip["summary"]["cost"],
             way_ids=self._way_ids(leg["shape"], costing, options),
             names=tuple(names),
             shape=leg["shape"],

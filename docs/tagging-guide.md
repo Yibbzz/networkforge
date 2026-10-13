@@ -177,6 +177,15 @@ and on the OSM network: `oneway:bicycle` (contraflow cycling),
 list in `src/networkforge/tags.py`). On nodes, barriers (`barrier=bollard`,
 `gate`), traffic signals and crossings are kept.
 
+Cycling: Valhalla sends cyclists out of their way for `cycleway=lane`
+and more so for `cycleway=track`, and reads `cycleway:left` / `:right`
+for one direction each. It does not act on `cycleway:both`,
+`bicycle_road` or `cyclestreet`: use `cycleway=lane` or `track`. Its
+default bicycle doesn't ride `surface=gravel` or `dirt` at all, so a new
+gravel path changes no cycling route unless the router is set to a
+mountain or cross bicycle. See
+[network-analyst.md](network-analyst.md#cycling-infrastructure).
+
 For `surface`, `smoothness`, `tracktype`, `sac_scale`, `sidewalk`,
 `cycleway` (and `:left/:right/:both`), `segregated`, `lit`, `toll`,
 `junction`, `bridge`, `tunnel` and `incline` the build **warns** about a

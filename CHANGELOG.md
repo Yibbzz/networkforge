@@ -8,6 +8,18 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Tests
+- Cycling infrastructure is now tested in Valhalla
+  (`tests/valhalla/test_cycling.py`): a cycle lane, a track or a
+  cycleway draws cyclists off a shorter street and nobody else; a lane
+  added to an existing street makes it cheaper to cycle; unpaved
+  surfaces close a street to the bicycles that can't take them.
+
+### Documentation
+- [network-analyst.md](docs/network-analyst.md#cycling-infrastructure)
+  says which cycling tags Valhalla routes by and which it ignores
+  (`cycleway:both`, `bicycle_road`, `cyclestreet`).
+
 ## [1.0.1] - 2026-10-11
 
 ### Fixed
