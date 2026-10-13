@@ -15,6 +15,12 @@ a breaking change means a new major version.
   added to an existing street makes it cheaper to cycle; unpaved
   surfaces close a street to the bicycles that can't take them.
 
+- Wheelchair routing (`tests/valhalla/test_wheelchair.py`): steps,
+  `wheelchair=no` and gravel turn a wheelchair back and nobody else.
+- Less common tags (`tests/valhalla/test_less_common_tags.py`):
+  motorcycles, mopeds and taxis, buses against a one-way street,
+  roundabouts, `maxspeed:hgv`, rough surfaces and mountain paths.
+
 ### Documentation
 - [network-analyst.md](docs/network-analyst.md#cycling-infrastructure)
   says which cycling tags Valhalla routes by and which it ignores
