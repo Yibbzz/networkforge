@@ -90,6 +90,15 @@ in Valhalla).
 - [network-analyst.md](docs/network-analyst.md#cycling-infrastructure)
   says which cycling tags Valhalla routes by and which it ignores
   (`cycleway:both`, `bicycle_road`, `cyclestreet`).
+- [tagging-guide.md](docs/tagging-guide.md) brought up to date. The
+  quick start shows the command line, the PBF and the GeoPackage, plus
+  a table of Python options with their CLI flags. Points are allowed in
+  the layer, and lines that join nothing are kept with a warning (the
+  guide said both were refused). Attributes that aren't tags are kept in
+  the GeoPackage. The reserved names list is complete. New: `wheelchair`,
+  `maxspeed:hgv`, time-of-day access, line ends that nearly meet, loops,
+  an error table for points, and a list of the warnings and what to do
+  about each.
 
 ## [1.0.1] - 2026-10-11
 
