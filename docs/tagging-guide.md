@@ -22,31 +22,56 @@ Contents:
 [Attributes](#attributes) ·
 [Changing existing streets](#changing-existing-streets) ·
 [Turn restrictions](#turn-restrictions) ·
+[Points](#points-barriers-signals-crossings) ·
 [A network of your own lines](#a-network-of-your-own-lines) ·
 [Recipes](#recipes) ·
-[Fixing tag errors](#fixing-tag-errors)
+[Fixing tag errors](#fixing-tag-errors) ·
+[Warnings](#warnings)
+
+Where the existing network comes from (Overpass or a downloaded file)
+is in [osm-data.md](osm-data.md); which routing features each tag
+gives you in Valhalla is in [network-analyst.md](network-analyst.md).
 
 ## Quick start
 
 Everything in the layer is the same kind of road:
 
+```bash
+networkforge build --extent extent.gpkg --custom proposed.gpkg \
+    --preset primary_road --tag "maxspeed=40 mph" \
+    --out after.osm.pbf --baseline-out before.osm.pbf \
+    --gpkg after.gpkg --baseline-gpkg before.gpkg
+```
+
+or in Python:
+
 ```python
 import logging
 import geopandas as gpd
-from networkforge import build_network, write_osm_xml
+from networkforge import build_network, write_gpkg, write_osm
 
 logging.basicConfig(level=logging.INFO)  # show the build steps
 
 bbox = gpd.read_file("extent.gpkg")
 custom = gpd.read_file("proposed.gpkg")
 
-nodes, edges = build_network(
+nodes, edges, before_nodes, before_edges = build_network(
     bbox, custom,
     preset="primary_road",
     network_tags={"maxspeed": "40 mph"},
+    return_source_osm=True,
 )
-write_osm_xml(nodes, edges, "network.osm")
+write_osm(nodes, edges, "after.osm.pbf")              # for routers (Valhalla, GraphHopper)
+write_osm(before_nodes, before_edges, "before.osm.pbf")
+write_gpkg(nodes, edges, "after.gpkg")                # for QGIS's own network tools
 ```
+
+The **OSM file** (`.osm.pbf`, or `.osm`) is the full result: routers
+read every tag in it - cycle lanes, surfaces, turn restrictions,
+barriers, vehicle sizes. The **GeoPackage** is a simpler view for QGIS:
+each street is open or closed to car / bike / walk, with one speed and
+travel times. "Before" is the network as OpenStreetMap has it, so the
+two can be compared.
 
 A mix of infrastructure: give each feature a `highway` attribute (and
 any others from [Attributes](#attributes)), then call `build_network`
@@ -62,20 +87,49 @@ without a preset:
 nodes, edges = build_network(bbox, custom)
 ```
 
+The same options on the command line and in Python:
+
+| Python | Command line |
+|---|---|
+| `preset="cycleway"` | `--preset cycleway` |
+| `network_tags={"maxspeed": "20 mph"}` | `--tag "maxspeed=20 mph"` (repeat for more) |
+| `overwrite_tags=True` | `--overwrite-tags` |
+| `snap_tolerance=2` | `--snap-tolerance 2` |
+| `strict=False` | `--no-strict` |
+| `osm_source="area.osm.pbf"` | `--osm-source area.osm.pbf` |
+| `standalone=True` | `--no-osm` |
+| the data's index | `--id-field name` |
+
+`networkforge check` runs the tag checks alone, without building, and
+`networkforge presets` lists the presets.
+
 ## Preparing your data
 
-- **Lines only.** Features must be LineString or MultiLineString.
-  Points, polygons and features with no geometry are rejected
-  (`strict=True`, the default) or dropped with a warning (`strict=False`).
+- **Lines and points.** Lines (LineString, MultiLineString) are new
+  streets, [changes to existing ones](#changing-existing-streets) or
+  [turn restrictions](#turn-restrictions); points put
+  [barriers, signals and crossings](#points-barriers-signals-crossings)
+  on the network. All can be in one layer. Polygons and features with no
+  geometry are rejected (`strict=True`, the default) or dropped with a
+  warning (`strict=False`). Each part of a multi-part line is treated as
+  its own line.
 - **Any CRS**, as long as the layer has one. NetworkForge reprojects to
-  a local metric CRS for the work.
-- **Inside the bounding box.** Parts outside the box can't join the
-  OSM network; features entirely outside are rejected.
+  a local metric CRS for the work (a projection in feet is replaced too).
+- **Inside the bounding box.** Features entirely outside it are
+  rejected; parts outside it can't join the OSM network (a warning names
+  the features).
 - **Draw lines to where they should join.** A custom line joins the
   network wherever it crosses a way at the same level, and wherever it
   comes within `snap_tolerance` (default 1 m) of an existing junction or
-  street. Lines further than that from everything are rejected, because
-  a router could never reach them.
+  street: the custom line is moved onto it, never the existing street.
+  Line ends within `snap_tolerance` of each other join too. A line that
+  reaches nothing is kept, with a warning that a router can't reach it;
+  only if *no* line reaches the network does the build stop.
+- **Empty and yes/no attributes.** An empty attribute means "no value"
+  (the blanket tags can fill it). A true/false (boolean) field is
+  written as `yes` / `no`.
+- **Feature ids must be unique** (the data's index, or `--id-field`):
+  messages use them to name features.
 - **Use GeoPackage (or GeoJSON), not Shapefile.** Shapefiles cut
   attribute names to 10 characters (`motor_vehicle` becomes
   `motor_vehi`) and can't hold names with a colon. NetworkForge warns
@@ -103,12 +157,18 @@ replaced; other attributes (e.g. `name`, `bridge`) are kept. Use it to
 test a whole layer as something else, e.g. "what if these roads were
 cycleways?".
 
-Attributes that aren't tags (an `id` or `notes` column, for example)
-are ignored. A few names are used internally, so attributes called
-`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed`, `length`,
-`nf_part`, `index_left` or `index_right`, or like the GeoPackage's
-analysis columns (`car`, `bike`, `walk`, `length_m` ...), are
-set aside with a warning (they aren't OSM tags, so nothing is lost).
+Attributes that aren't tags (an `id`, `notes` or `cost` column, for
+example) are not written to the OSM file, but they are kept in the
+GeoPackage, so QGIS can use them (e.g. as a cost). A few names are used
+internally, so attributes called `u`, `v`, `key`, `custom`, `split`,
+`reversed`, `length`, `modified`, `nf_part`, `nf_edit`, `index_left` or
+`index_right`, or like the GeoPackage's analysis columns (`car`,
+`bike`, `walk`, `speed_kph`, `length_m`, `car_minutes`,
+`car_direction` ...), are set aside with a warning (they aren't OSM
+tags, so nothing is lost). `osmid` / `osm_id` means "this is an
+existing street" ([changing existing streets](#changing-existing-streets)).
+In the GeoPackage, `fid`, or a name that differs from another only in
+capitals, gets a trailing `_`.
 
 Messages name features by row number, or by an id attribute you choose
 (`--id-field` on the command line; the data's index in Python).
@@ -150,7 +210,7 @@ the build (or are logged with `strict=False`).
 |---|---|---|
 | `highway` | **Required** (except on a [ferry](#ferries)). Roads: `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `unclassified`, `residential`, `living_street`, `service`, `road`, and `*_link` slip roads. Paths: `cycleway`, `footway`, `path`, `pedestrian`, `bridleway`, `steps`, `track`, `corridor`. Buses: `busway`, `bus_guideway`. | The kind of way. Decides which modes may use it (see the preset table). |
 | `maxspeed` | `30 mph`, `50` (km/h), `20 knots`, `none`, `walk`, `signals`, `variable`, or a country code like `GB:nsl_single` | Car speed (above 0). **A number with no unit is km/h**, so write `mph` for UK limits. Without it, a default for the road type is used. |
-| `oneway` | `yes`, `no`, `-1` (against the drawn direction), `reversible`, `alternating` | One-way traffic. Direction = the direction the line was drawn. Walking ignores it. |
+| `oneway` | `yes`, `no`, `-1` (against the drawn direction), `reversible`, `alternating` (`true`/`1`, `false`/`0` are read as yes / no) | One-way traffic. Direction = the direction the line was drawn. Walking ignores it. |
 | `lanes` | whole number ≥ 1 | Kept in the output for routing engines that use it. |
 | `access` | `yes`, `no`, `private`, `permissive`, `destination`, `designated`, `customers`, `delivery`, `agricultural`, `forestry`, `discouraged`, `permit`, `use_sidepath`, `dismount`, `official`, `restricted`, `military`, `emergency`, `unknown` | Access for everyone. See [Who may use a way](#who-may-use-a-way). |
 | `vehicle` | same values as `access` | Access for all vehicles (cars and bikes, not pedestrians). |
@@ -158,6 +218,7 @@ the build (or are logged with `strict=False`).
 | `bicycle` | same values as `access` | Access for bikes. `bicycle=designated` on a footway makes it a shared-use path. |
 | `foot` | same values as `access` | Access for pedestrians. `foot=yes` on a cycleway lets people walk on it. |
 | `bus`, `psv`, `hgv`, `goods`, `taxi`, `motorcycle`, `moped`, `emergency`, `horse`, `hov` | same values as `access` | Access for other vehicles, for routers that have such a profile (Valhalla: bus, truck, taxi, motorcycle). `access=no` + `bus=yes` is a bus-only road. |
+| `wheelchair` | `yes`, `no`, `limited`, ... | `no` keeps wheelchair routing off it (Valhalla's wheelchair profile also avoids steps and rough surfaces). |
 | `motorroad` | `yes`, `no` | `yes`: motorway rules on any road - no walking or cycling. |
 | `maxheight`, `maxwidth`, `maxlength` | metres: `3.5`, `3.5 m`; or `12 ft`, `11'6"` | Size limit. Routers keep taller / wider / longer vehicles off it (set the vehicle's size in the router). |
 | `maxweight`, `maxaxleload` | tonnes: `7.5`, `7.5 t`; or `5 st`, `12000 lbs` | Weight limit, used the same way. |
@@ -174,9 +235,13 @@ and on the OSM network: `oneway:bicycle` (contraflow cycling),
 `cycleway`, `cycleway:left/right/both`, `segregated`, `surface`,
 `smoothness`, `tracktype`, `lit`, `incline`, `sac_scale`, `toll`,
 `hgv`, `bus`, `psv`, `maxweight`, `maxheight`, `maxwidth`,
-`maxspeed:forward/backward`, `lanes:forward/backward` and more (full
+`maxspeed:forward/backward`, `maxspeed:hgv` (lorries),
+`lanes:forward/backward`, time-of-day access such as
+`motor_vehicle:conditional=no @ (Mo-Fr 07:00-09:00)`, and more (full
 list in `src/networkforge/tags.py`). On nodes, barriers (`barrier=bollard`,
-`gate`), traffic signals and crossings are kept.
+`gate`), traffic signals and crossings are kept. The OSM file carries all
+of these; the GeoPackage only uses the access tags, `oneway` and
+`maxspeed`.
 
 Cycling: Valhalla sends cyclists out of their way for `cycleway=lane`
 and more so for `cycleway=track`, and reads `cycleway:left` / `:right`
@@ -243,6 +308,10 @@ A line that **ends** on a motorway, bridge or tunnel still joins it:
 that's how you add a new slip road. Only crossings are skipped - and a
 bridge's or tunnel's own vertices between its ends join nothing either,
 even one drawn exactly on a junction or on another line's vertex.
+
+A line that crosses itself (a loop) gets a junction where it crosses,
+unless it is a bridge or tunnel. A line meeting a street right beside
+the dead end of another way joins the street it meets, not the dead end.
 
 Trunk roads are treated as ordinary roads (many have at-grade
 junctions); tag the custom line `bridge=yes` if it goes over one.
@@ -410,6 +479,19 @@ cars; a plain `gate` is open, and so is a gate with `access=private`;
 `access=no` closes it to everyone. Access tags on a point without a
 `barrier` are ignored by routers (the build warns).
 
+Other node tags a point may carry: `traffic_calming` (`hump`, `table`
+...), `kerb`, `entrance`, `toll`, `direction`, `maxheight`, `maxwidth`,
+`maxweight`, `name`, and per-vehicle access (`bus`, `hgv`, `wheelchair`
+...) on a barrier.
+
+| Message | Meaning |
+|---|---|
+| `a point needs node tags` | The point has no node tag: give it e.g. `barrier=bollard` or `highway=traffic_signals`. |
+| `highway='...' is not a value for a point` | Points take node values (`traffic_signals`, `crossing`, `stop`, `give_way` ...), not street types. |
+| `no node within N m to delete tags from` | `remove_tags` on a point must sit on the node that has the tags. |
+| `another point sets ... on the same node` | Two points ask for different values on one node. |
+| `changes nothing` (warning) | `remove_tags` named tags the node doesn't have. |
+
 ## A network of your own lines
 
 If you already have a street network as a line layer (council
@@ -490,6 +572,8 @@ every problem, one per feature. What each message means:
 | `duration='...' must be hours and minutes` | Write `00:25` or `01:10:30`: routers ignore a plain number of minutes. |
 | `highway='...' is not a routable highway value` | Use a value from the [Attributes](#attributes) table. Planned or disused values (`proposed`, `construction`) can't be routed: tag what it *will* be. |
 | `maxspeed='...' is not a valid OSM speed` | Write a number with an optional unit: `30 mph`, `50`. |
+| `maxspeed='0' must be above 0` | A speed limit of 0 makes the street endless to drive: close it with `access=no` instead. |
+| `maxheight='...' is not a valid OSM limit` (or `maxweight`, ...) | Write `3.5`, `3.5 m`, `12 ft`, `11'6"`, `7.5 t`. |
 | `oneway='...' is not a valid OSM value` | Use `yes`, `no` or `-1`. |
 | `lanes='...' must be a positive whole number` | Use `1`, `2`, ... |
 | `layer='...' must be a whole number` | Use `1`, `-1`, ... |
@@ -502,9 +586,9 @@ Other errors (all are subclasses of `networkforge.NetworkForgeError`):
 
 | Error | Meaning |
 |---|---|
-| `InputError` | An argument or the data can't be used: no CRS, no features, not lines, outside the box. See [Preparing your data](#preparing-your-data). |
+| `InputError` | An argument or the data can't be used: no CRS, no features, polygons, outside the box, repeated feature ids, an OSM id that isn't a whole number, or (on the command line) an output file that would replace an input or another output. See [Preparing your data](#preparing-your-data). |
 | `NoIntersectionError` | No custom line comes within `snap_tolerance` of the OSM network. |
-| `OSMDownloadError` | The OSM download failed (no internet, Overpass busy) or the box has no streets. |
+| `OSMDownloadError` | The OSM download failed (no internet, Overpass busy) or the box has no streets. A box over 1,000 km² needs a [downloaded file](osm-data.md). |
 | `NetworkIntegrityError` | The built network broke a structural rule. This is likely a NetworkForge bug; please report it with your data. |
 
 A custom line that doesn't connect to the rest of the network is not an
@@ -513,3 +597,23 @@ connect to the rest of the network"). They are kept in the output, but
 no router can reach them - extend them to meet a street (within
 `snap_tolerance`) if they should connect. Only when *no* line reaches
 the network does the build stop (`NoIntersectionError`).
+
+## Warnings
+
+Warnings don't stop the build; they point at something you may want to
+fix. With `--json` each is a `warning` event naming the features
+(`features`) or attributes (`fields`).
+
+| Warning | Meaning |
+|---|---|
+| `don't connect to the rest of the network` | These lines reach no street: extend them to meet one (within `snap_tolerance`). |
+| `partly outside the bounding box` | The parts outside can't join the network. Make the box bigger. |
+| `shorter than the snap tolerance collapsed onto a single node and were dropped` | A line under 1 m long (or under `snap_tolerance`) between two nodes has nothing left to add. |
+| `is not a tag NetworkForge uses - did you mean ...?` | A misspelt or Shapefile-cut attribute name; it is not written as a tag. |
+| `Ignoring custom attribute(s) ...: the names are used internally` | [Reserved attribute names](#how-tags-combine), set aside. |
+| `... is not a value routers know - did you mean ...?` | A misspelt tag value (`surface=asphault`); routers ignore it. |
+| `change nothing` | A change to an existing street, or a point, matches OpenStreetMap already. |
+| `is drawn as a ... but tagged ...` | A turn restriction's value doesn't match the turn drawn. |
+| `has access tags but no barrier` | Routers ignore access tags on a point without `barrier`. |
+| `has no streets in about N% of the area` | The downloaded OSM file stops part way across the area (a region's file ends at its boundary), so those streets are missing. See [osm-data.md](osm-data.md#things-to-check). |
+| `reference nodes the file doesn't contain` | The downloaded file cuts ways at its edge; crop a bigger one. |
