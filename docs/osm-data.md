@@ -61,7 +61,23 @@ local extract is also simply faster.
   that doesn't overlap the box at all is refused. One that only partly
   covers it builds a partial network: country and region extracts stop
   at borders (a box around Monaco reaches into France, and Geofabrik's
-  Monaco file stops at the border).
+  Monaco file stops at the border; a box around Reading reaches across
+  the Thames into Oxfordshire, where the Berkshire file stops).
+  NetworkForge **warns** when part of the area has no streets at all in
+  the file, naming where:
+
+  ```
+  berkshire-latest.osm.pbf has no streets in about 18% of the area
+  (7.2 km2 to the north-east: lon -0.960..-0.896, lat 51.467..51.495).
+  The file probably stops there ...
+  ```
+
+  Download the next region up (England rather than Berkshire), or draw
+  your own box at BBBike, and crop it. The check looks for a part of
+  the area **reaching its edge**, covering **at least 5%** of it, with
+  no street, path or track; the sea side of a coastline doesn't count.
+  A large lake or open moorland at the edge of the box can also set it
+  off: if that part really has no streets, ignore the warning.
 - **Roads cut at the file's edge:** if the extract contains ways whose
   nodes it doesn't include, NetworkForge keeps the parts it can and logs
   a warning. Download a bigger extract (or crop with osmium's default

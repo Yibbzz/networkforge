@@ -8,6 +8,17 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Added
+- A warning when a local OSM file (`osm_source=` / `--osm-source`)
+  doesn't cover the whole area. A region's extract stops at its
+  boundary, so a box reaching across it quietly lost streets: built from
+  Geofabrik's Berkshire file, a box around Reading lost about 1,800
+  streets north of the Thames, with no warning. The build now finds the
+  part of the area where the file has no streets at all, reaching the
+  area's edge and covering at least 5% of it, and says where it is.
+  The sea side of a coastline doesn't count. With `--json` the warning
+  event carries `gaps`, a `[west, south, east, north]` box for each part.
+
 ### Fixed
 Found by probing the build with shapes the tests didn't draw
 (`tests/integration/test_edge_cases.py`; the first four changed routes

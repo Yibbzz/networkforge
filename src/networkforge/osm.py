@@ -34,6 +34,7 @@ from osmnx.graph import _create_graph
 from pyproj import CRS
 from shapely.geometry import box
 
+from .coverage import warn_about_gaps
 from .errors import InputError, OSMDownloadError
 from .modes import _passes_osmnx_filter, is_ferry, keep_mode_tags
 from .paths import readable
@@ -308,7 +309,8 @@ def get_osm_data_from_file(
 
     _check_file_covers(path, polygon)
 
-    elements = _read_elements(path, polygon_buffered.bounds, network_type)
+    coastlines = []
+    elements = _read_elements(path, polygon_buffered.bounds, network_type, coastlines)
     if not any(element["type"] == "way" and not is_ferry(element["tags"])
                for element in elements):
         raise InputError(
@@ -316,6 +318,7 @@ def get_osm_data_from_file(
             "Check the file covers the area.",
             guide="osm-data.md#getting-an-extract",
         )
+    warn_about_gaps(elements, coastlines, polygon, analysis_crs, path.name)
 
     return _network_from_elements(elements, polygon, polygon_buffered, network_type, analysis_crs)
 
@@ -342,11 +345,14 @@ def _check_file_covers(path: Path, polygon) -> None:
         )
 
 
-def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
+def _read_elements(path: Path, bounds, network_type: str,
+                   coastlines: list | None = None) -> list[dict]:
     """
     The ways in `path` within `bounds` (filtered like the Overpass query
     for network_type) with their nodes, and the relations kept with them
-    (see OSMSource), as Overpass JSON elements.
+    (see OSMSource), as Overpass JSON elements. `coastlines`, if given,
+    gets the [(lon, lat), ...] of every natural=coastline way reaching
+    `bounds` (for coverage.warn_about_gaps: which side is sea).
     """
     west, south, east, north = bounds
 
@@ -366,8 +372,8 @@ def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
             processor = (
                 osmium.FileProcessor(name)
                 .with_locations()
-                .with_filter(
-                    osmium.filter.KeyFilter("highway", "type", "route", *ROUTING_NODE_KEYS))
+                .with_filter(osmium.filter.KeyFilter(
+                    "highway", "type", "route", "natural", *ROUTING_NODE_KEYS))
             )
             for obj in processor:
                 if obj.is_node():
@@ -386,6 +392,13 @@ def _read_elements(path: Path, bounds, network_type: str) -> list[dict]:
                                           "members": members})
                     continue
                 if not obj.is_way():
+                    continue
+                if tags.get("natural") == "coastline" and "highway" not in tags:
+                    if coastlines is not None:
+                        line = [(n.location.lon, n.location.lat) for n in obj.nodes
+                                if n.location.valid()]
+                        if any(inside(*loc) for loc in line):
+                            coastlines.append(line)
                     continue
 
                 if not is_ferry(tags) and (
