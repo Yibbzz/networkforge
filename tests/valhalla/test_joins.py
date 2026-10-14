@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from tests.integration.grid import TUNNEL_NODES, grid_with_tunnel
+from tests.integration.grid import TUNNEL_NODES, grid_with_dead_end, grid_with_tunnel
 from tests.valhalla.conftest import AFTER_THE_TURN, at, turn_metres, xy
 
 ROAD = {"highway": "residential"}
@@ -216,6 +216,51 @@ def test_custom_bridge_over_a_custom_road(scenario):
     # Between the two only by way of a street, not at the crossing (85 m).
     route = shortest(built, at(3.2, 3.2), at(3.8, 3.2), "pedestrian")
     assert route.length_m > 150
+
+
+@pytest.mark.parametrize("bridge", [
+    [xy(0, 0.3), xy(0.5, 0.3), xy(1, 0.3)],       # a vertex right over the road
+    [xy(0, 0.3), xy(0.506, 0.3), xy(1, 0.3)],     # ... or 0.6 m to one side
+    [xy(0, 0.3), xy(1, 0.3)],                     # none: the case that always worked
+], ids=["vertex over the road", "vertex beside the road", "no vertex"])
+def test_custom_bridge_with_a_vertex_over_a_custom_road(scenario, bridge):
+    """
+    A road north from Row 0 Street, and a bridge over it from Column 0
+    Avenue to Column 1 Avenue. From the road to the bridge is 160 m by
+    the streets, and would be 60 m if the two joined where they cross.
+    """
+    built = scenario([([xy(0.5, 0), xy(0.5, 0.9)], ROAD),
+                      (bridge, {**ROAD, "bridge": "yes", "layer": "1"})])
+    road, over = built.custom_ways
+
+    assert not set(built.after.ways[road][0]) & set(built.after.ways[over][0])
+    for costing in ("auto", "pedestrian"):
+        assert shortest(built, at(0.5, 0.6), at(0.8, 0.3), costing).length_m == pytest.approx(
+            160, abs=3)
+
+
+def test_custom_bridge_with_a_vertex_on_the_junction_below(scenario):
+    """Its middle vertex was drawn (snapped) on node 7; it joins only at its ends."""
+    bridge = [xy(0, 1.5), xy(1, 1), xy(1.5, 0)]
+    built = scenario([(bridge, {**ROAD, "bridge": "yes", "layer": "1"})])
+    assert 7 not in built.after.ways[built.custom_ways[0]][0]
+    # From the bridge to Row 1 Street: 75 m if it joined at node 7.
+    assert shortest(built, at(0.6, 1.2), at(1.3, 1), "pedestrian").length_m > 200
+
+
+@pytest.mark.parametrize("line", [
+    [xy(1.2, 1.3), xy(1.8, 0.7)],     # crosses Row 1 Street beside the dead end
+    [xy(1.2, 1.3), xy(1.5, 1.0)],     # ends on it
+], ids=["crossing", "ending"])
+def test_line_joins_the_street_it_meets_beside_a_dead_end(scenario, line):
+    """
+    Short Street stops half a metre short of Row 1 Street. A new road
+    meeting Row 1 Street right there joins Row 1 Street - not just the
+    dead end, which left it 250 m away by road.
+    """
+    built = scenario([(line, ROAD), ([xy(1, 2), line[0]], ROAD)], elements=grid_with_dead_end())
+    route = shortest(built, at(1.3, 1.2), at(1.7, 1), "pedestrian")
+    assert route.length_m == pytest.approx(48, abs=3)
 
 
 # ---------------------------------------------------------------------

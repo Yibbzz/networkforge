@@ -150,6 +150,41 @@ The GeoPackage knows none of this: its `bike` column says whether
 cycling is allowed, and `bike_minutes` assumes 15 km/h everywhere. A
 cycle lane only shows in a router's results.
 
+## Wheelchairs
+
+Valhalla's walking costing takes `type=wheelchair`
+(`tests/valhalla/test_wheelchair.py`). A wheelchair is slower than a
+walker and is kept off `highway=steps`, anything tagged `wheelchair=no`,
+and `surface=gravel`; an existing path changed to steps (by its
+`osm_id`) sends wheelchairs round and nobody else. `incline` is written
+but not acted on: Valhalla would need elevation data.
+
+`ramp:wheelchair` is not among the tags written for your own lines (it
+is kept on existing OpenStreetMap ways). Valhalla doesn't read it; R5
+does.
+
+## Less common tags
+
+Tested in `tests/valhalla/test_less_common_tags.py`, each on one new
+street:
+
+| Tags | What Valhalla does |
+|---|---|
+| `motorcycle=no`, `moped=no`, `taxi=no` | Keeps out that vehicle only (Valhalla's `motorcycle`, `motor_scooter` and `taxi` costings) |
+| `motor_vehicle=no` + `taxi=yes` | Taxis only, of the motor vehicles |
+| `oneway=yes` + `oneway:bus=no` | Buses may go against the flow; `oneway:psv=no` lets taxis too |
+| `junction=roundabout` | One-way in the direction the line is drawn, without `oneway` |
+| `maxspeed:hgv` | Slows lorries only |
+| `highway=living_street`, `service=alley` | Open to all, slower to drive |
+| `smoothness=impassable` | Closed to everyone, walkers included |
+| `smoothness=horrible` | Closed to mopeds, slower by bicycle |
+| `highway=track` + `tracktype=grade5` | Very slow to drive, closed to mopeds |
+| `highway=path` + `sac_scale=demanding_mountain_hiking` | Closed to walkers unless the router's `max_hiking_difficulty` is raised |
+
+Written, but Valhalla 3.9 doesn't route by them (the tests fail when
+that changes): `ford`, `hov`, and `maxspeed:forward` / `:backward`,
+which slows **both** directions, not one.
+
 ## What is not covered
 
 | Esri | Status |
@@ -182,6 +217,8 @@ cycle lane only shows in a router's results.
   modes that can use it; Valhalla and NetworkForge's own routing measure
   every trip the same.
 - `test_random_lines.py`: the same agreement for random lines.
+- `test_wheelchair.py` and `test_less_common_tags.py`: one new street
+  per tag, and which travellers take it in each direction.
 - `test_cycling.py`: two new streets between the same junctions, one a
   little longer; which one a cyclist, a driver and a walker take as
   cycling infrastructure is put on the longer one.

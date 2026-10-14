@@ -40,6 +40,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 from shapely.geometry import box
 
 from .edits import check_edit_tags, split_edits, take_edit_ids
@@ -126,6 +127,7 @@ def cmd_build(args, emit) -> int:
     if not (args.out or args.gpkg or args.baseline_out or args.baseline_gpkg):
         raise InputError("Nothing to write: give --out, --gpkg, --baseline-out or --baseline-gpkg.")
 
+    _check_output_paths(args)
     bbox = None if args.no_osm else _read_extent(args)
     custom = _read_custom(args)
     baseline = bool(args.baseline_out or args.baseline_gpkg)
@@ -389,6 +391,27 @@ def _check_build_arguments(parser, args) -> None:
                          "network or before network)")
 
 
+def _check_output_paths(args) -> None:
+    """
+    Before the build (and the download): no output may replace an input
+    or another output, and each needs a folder that exists.
+    """
+    inputs = {"--custom": args.custom, "--extent": args.extent, "--osm-source": args.osm_source}
+    outputs = {"--out": args.out, "--baseline-out": args.baseline_out,
+               "--gpkg": args.gpkg, "--baseline-gpkg": args.baseline_gpkg}
+    seen = {Path(path).resolve(): flag for flag, path in inputs.items() if path}
+    for flag, path in outputs.items():
+        if not path:
+            continue
+        resolved = Path(path).resolve()
+        if resolved in seen:
+            raise InputError(f"{flag} {path} is the same file as {seen[resolved]}: it would "
+                             "be overwritten. Give the output a name of its own.")
+        seen[resolved] = flag
+        if not resolved.parent.is_dir():
+            raise InputError(f"The folder for {flag} doesn't exist: {resolved.parent}")
+
+
 # ---------------------------------------------------------------- helpers
 
 def _join_negative_bbox(argv: Sequence[str]) -> list[str]:
@@ -450,6 +473,8 @@ def _read_extent(args) -> gpd.GeoDataFrame:
             raise InputError("--bbox needs west < east and south < north")
         return gpd.GeoDataFrame(geometry=[box(west, south, east, north)], crs="EPSG:4326")
     extent = _read_layer(args.extent, args.extent_layer, "extent")
+    if extent.empty or not np.isfinite(extent.total_bounds).all():
+        raise InputError(f"The extent file has no features with geometry: {args.extent}")
     return gpd.GeoDataFrame(geometry=[box(*extent.total_bounds)], crs=extent.crs)
 
 

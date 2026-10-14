@@ -24,6 +24,7 @@ from .inputs import MAX_LISTED, check_bbox, clean_custom_data
 from .osm import (
     NETWORK_TYPES,
     SOURCE_ATTR,
+    OSMSource,
     get_osm_data_from_bbox,
     get_osm_data_from_file,
 )
@@ -44,7 +45,9 @@ from .topology import (
     assign_point_ids_to_lines,
     check_line_node_consistency,
     create_points_from_gdf,
+    cuts_after_snapping,
     filter_split_lines,
+    keep_grade_separated_vertices_apart,
     remove_duplicates_and_combine_nodes,
     snap_crossings_to_network,
     snap_line_ends_together,
@@ -181,6 +184,28 @@ def _warn_about_separate_pieces(
                 more, snap_tolerance, extra={"features": features})
 
 
+def _lone_ferry_terminals(
+    source: OSMSource | None,
+    nodes_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    The ends of existing ferries that no street reaches (a pier, say),
+    as rows like nodes_gdf's: a custom line ENDING there joins the
+    ferry, as one ending on a street node joins the street. They aren't
+    on any edge, so lines only snap to them, never split or cross them.
+    """
+    ids = sorted(set() if source is None else source.ferry_terminals - set(nodes_gdf.index))
+    lon, lat = (np.array([source.ferry_nodes[i][k] for i in ids]) for k in (0, 1))
+    terminals = gpd.GeoDataFrame(
+        {"y": lat, "x": lon},
+        geometry=gpd.points_from_xy(lon, lat, crs="EPSG:4326"),
+        index=pd.Index(ids, name=nodes_gdf.index.name),
+    ).to_crs(nodes_gdf.crs)
+    for key in nodes_gdf.columns.difference(["x", "y", "geometry", "street_count"]):
+        terminals[key] = [source.node_tags.get(i, {}).get(key) for i in ids]
+    return terminals
+
+
 def _no_network(crs) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Empty OSM nodes and edges, with the columns the pipeline reads."""
     nodes = gpd.GeoDataFrame(
@@ -288,8 +313,9 @@ def build_network(
             f"Unknown network_type {network_type!r}. "
             f"Choose one of: {', '.join(NETWORK_TYPES)}"
         )
-    if not snap_tolerance > 0:
-        raise InputError(f"snap_tolerance must be positive, got {snap_tolerance!r}")
+    if not 0 < snap_tolerance < float("inf"):
+        raise InputError(f"snap_tolerance must be a positive number of metres, "
+                         f"got {snap_tolerance!r}")
 
     if join_at not in JOIN_AT:
         raise InputError(f"Unknown join_at {join_at!r}. Choose one of: {', '.join(JOIN_AT)}")
@@ -455,13 +481,22 @@ def build_network(
         custom_parts_gdf, cuts = split_at_self_crossings(custom_parts_gdf)
     custom_parts_gdf = snap_line_ends_together(
         custom_parts_gdf, snap_tolerance, every_vertex=at_vertices, not_ends=cuts)
+    # Line ends may also land on a ferry's end that no street reaches.
+    terminals = _lone_ferry_terminals(source_data, nodes_gdf)
+    nodes_and_terminals = (pd.concat([nodes_gdf, terminals]) if len(terminals)
+                           else nodes_gdf)
     custom_data_gdf = snap_line_vertices_to_network(
         custom_parts_gdf,
-        nodes_gdf,
+        nodes_and_terminals,
         edges_gdf,
         snap_tolerance,
         not_ends=cuts,
     )
+
+    cuts = cuts_after_snapping(custom_parts_gdf, custom_data_gdf, cuts)
+    if not at_vertices:
+        custom_data_gdf = keep_grade_separated_vertices_apart(
+            custom_data_gdf, nodes_gdf, edges_gdf)
 
     if custom_data_gdf.empty:
         raise InputError(
@@ -552,7 +587,7 @@ def build_network(
     # above. Merging by distance here joined such ways to each other.
     combined_points_gdf = remove_duplicates_and_combine_nodes(
         custom_points_gdf[["geometry"]],
-        nodes_gdf,
+        nodes_and_terminals,
         buffer_distance=ON_NODE_TOLERANCE,
         first_new_id=max(taken) + 1,
     )
@@ -603,6 +638,9 @@ def build_network(
         split_lines_gdf.drop(not_edges),
         updated_lines,
     )
+    # Ferry ends no new line reached stay out of the street network.
+    unreached = terminals.index.difference(pd.concat([final_lines_gdf["u"], final_lines_gdf["v"]]))
+    combined_points_gdf = combined_points_gdf.drop(unreached)
 
     # =========================================================
     # 11. Validate topology

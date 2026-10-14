@@ -13,6 +13,8 @@ docs/tagging-guide.md that explains the fix, where there is one.
     └── NetworkIntegrityError                the built network breaks a structural rule
 """
 
+import math
+
 DOCS = "docs"
 GUIDE = f"{DOCS}/tagging-guide.md"
 
@@ -21,6 +23,8 @@ def feature_id(value):
     """A feature id (custom data index value) as a plain JSON-friendly value."""
     if hasattr(value, "item"):  # numpy scalar
         value = value.item()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None  # a feature without an id: NaN is not JSON
     return value if isinstance(value, int | float | str) or value is None else str(value)
 
 

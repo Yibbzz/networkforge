@@ -21,16 +21,27 @@ ON_LINE_TOLERANCE = 1e-6
 # puts points exactly on nodes; this only allows for rounding.
 ON_NODE_TOLERANCE = 1e-3
 
+# A middle vertex of a line that sits exactly on something the line may
+# not join there (a bridge's vertex on the junction below it) is moved
+# this far (projected CRS units), so it gets a node of its own. More than
+# ON_NODE_TOLERANCE, far less than anything a router can tell apart.
+APART = 5e-3
+
 # Highway types that never have at-grade junctions. Trunk roads are left
 # out on purpose: many (e.g. UK A roads) have ordinary junctions.
 GRADE_SEPARATED_HIGHWAYS = {"motorway", "motorway_link"}
 
 
+# Values that mean a bridge/tunnel tag is not there (routers read 0 and
+# false as no too).
+_ABSENT = {"no", "0", "false"}
+
+
 def _tag_present(value) -> bool:
-    """True for a real tag value other than 'no' (None/NaN = absent)."""
+    """True for a real tag value other than no/0/false (None/NaN = absent)."""
     if value is None or (isinstance(value, float) and value != value):
         return False
-    return str(value) != "no"
+    return str(value).strip().lower() not in _ABSENT
 
 
 def _layer(tags) -> int:
@@ -160,10 +171,16 @@ def snap_points_to_nodes(
     points_gdf: gpd.GeoDataFrame,
     nodes_gdf: gpd.GeoDataFrame,
     tolerance: float,
+    edges_gdf: gpd.GeoDataFrame | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Move every point within `tolerance` of an OSM node exactly onto
     the nearest such node. Points further away are left as they are.
+
+    edges_gdf: a point that already lies ON one of these edges only
+    moves onto an end node of that edge. Otherwise a line crossing a
+    street right beside the dead end of another way was pulled onto the
+    dead end, and never joined the street it crosses.
 
     Snapping BEFORE lines are split means every split happens at an
     exact node position, so later steps never have to guess which
@@ -177,20 +194,36 @@ def snap_points_to_nodes(
     if snapped.empty or nodes_gdf.empty:
         return snapped
 
-    node_geoms = gpd.GeoDataFrame(geometry=nodes_gdf.geometry.values, crs=nodes_gdf.crs)
+    points = snapped.geometry.to_numpy()
+    node_geometries = nodes_gdf.geometry.to_numpy()
+    point, node = shapely.STRtree(node_geometries).query(
+        points, predicate="dwithin", distance=tolerance)
+    if not len(point):
+        return snapped
 
-    nearest = gpd.sjoin_nearest(
-        snapped[["geometry"]],
-        node_geoms,
-        how="inner",
-        max_distance=tolerance,
-    )
-    # Equidistant nodes produce several rows per point: keep one.
-    nearest = nearest[~nearest.index.duplicated(keep="first")]
+    if edges_gdf is not None and not edges_gdf.empty:
+        on_point, on_edge = shapely.STRtree(edges_gdf.geometry.to_numpy()).query(
+            points, predicate="dwithin", distance=ON_LINE_TOLERANCE)
+        if len(on_point):
+            ends = set(zip(on_point.tolist(), edges_gdf["u"].to_numpy()[on_edge].tolist(),
+                           strict=True))
+            ends |= set(zip(on_point.tolist(), edges_gdf["v"].to_numpy()[on_edge].tolist(),
+                            strict=True))
+            lies_on_an_edge = np.zeros(len(points), dtype=bool)
+            lies_on_an_edge[on_point] = True
+            node_ids = nodes_gdf.index.to_numpy()[node].tolist()
+            allowed = np.array([not lies_on_an_edge[p] or (p, n) in ends
+                                for p, n in zip(point.tolist(), node_ids, strict=True)])
+            point, node = point[allowed], node[allowed]
+            if not len(point):
+                return snapped
 
-    snapped.loc[nearest.index, "geometry"] = (
-        node_geoms.geometry.iloc[nearest["index_right"]].values
-    )
+    # The nearest node of each point (equidistant nodes: the first).
+    distance = shapely.distance(points[point], node_geometries[node])
+    order = np.lexsort((node, distance, point))
+    point, node = point[order], node[order]
+    first = np.r_[True, point[1:] != point[:-1]]
+    snapped.loc[point[first], "geometry"] = node_geometries[node[first]]
 
     return snapped
 
@@ -243,7 +276,7 @@ def snap_points_to_network(
     nearest OSM node if one is in range, otherwise onto the nearest OSM
     edge. Points further away stay put.
     """
-    near_node = snap_points_to_nodes(points_gdf, nodes_gdf, tolerance)
+    near_node = snap_points_to_nodes(points_gdf, nodes_gdf, tolerance, edges_gdf)
     return snap_points_to_edges(near_node, edges_gdf, tolerance)
 
 
@@ -420,11 +453,129 @@ def snap_line_vertices_to_network(
     return lines[~collapsed]
 
 
+def cuts_after_snapping(
+    before: gpd.GeoDataFrame,
+    after: gpd.GeoDataFrame,
+    cuts: np.ndarray,
+) -> np.ndarray:
+    """
+    Where the `cuts` (see split_at_self_crossings) are once
+    snap_line_vertices_to_network has moved the lines: `after` is its
+    result for `before`. A cut that snapping moved was no longer found
+    in the list, and so passed for a line end - which may join a
+    motorway or a tunnel.
+    """
+    if not len(cuts) or after.empty:
+        return cuts
+    old = before.geometry.to_numpy()[after.index.to_numpy()]
+    new = after.geometry.to_numpy()
+    moved = [shapely.get_coordinates(shapely.get_point(new, which))[
+                 _rows_in(shapely.get_coordinates(shapely.get_point(old, which)), cuts)]
+             for which in (0, -1)]
+    return np.unique(np.vstack([cuts, *moved]), axis=0)
+
+
+def keep_grade_separated_vertices_apart(
+    lines_gdf: gpd.GeoDataFrame,
+    nodes_gdf: gpd.GeoDataFrame,
+    edges_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Only the ENDS of a bridge, tunnel or ferry join what they meet, and
+    only ends join a motorway. But nodes are told apart by where they
+    are: a middle vertex drawn exactly on a junction, or on a vertex of
+    another line, would share its node and so join it. Such vertices are
+    moved APART (a few millimetres):
+
+    - middle vertices of grade-separated lines that sit on an existing
+      node or on a vertex of another line;
+    - middle vertices of other lines that sit on a node only
+      grade-separated ways use (a motorway's), or on a vertex of a
+      grade-separated line.
+    """
+    geometries = lines_gdf.geometry.to_numpy()
+    if not len(geometries):
+        return lines_gdf
+    coords, line = shapely.get_coordinates(geometries, return_index=True)
+    is_end = np.r_[True, line[1:] != line[:-1]] | np.r_[line[1:] != line[:-1], True]
+    separated = _separated_mask(lines_gdf)[line]
+    points = shapely.points(coords)
+    move = np.zeros(len(coords), dtype=bool)
+
+    def on_any(targets: np.ndarray) -> np.ndarray:
+        found = np.zeros(len(coords), dtype=bool)
+        if len(targets):
+            hit, _ = shapely.STRtree(targets).query(
+                points, predicate="dwithin", distance=ON_NODE_TOLERANCE)
+            found[hit] = True
+        return found
+
+    joinable_nodes, _ = joinable_network(nodes_gdf, edges_gdf)
+    every_node = nodes_gdf.geometry.to_numpy()
+    separated_nodes = nodes_gdf.geometry[~nodes_gdf.index.isin(joinable_nodes.index)].to_numpy()
+    move |= ~is_end & separated & on_any(every_node)
+    move |= ~is_end & ~separated & on_any(separated_nodes)
+
+    # Vertices of different lines in the same place, one of them the
+    # middle of a grade-separated line: that one moves (of two such
+    # lines, the first).
+    a, b = shapely.STRtree(points).query(points, predicate="dwithin", distance=ON_NODE_TOLERANCE)
+    other_moves = separated[b] & ~is_end[b] & (line[b] < line[a])
+    pair = (line[a] != line[b]) & separated[a] & ~is_end[a] & ~other_moves
+    move[a[pair]] = True
+
+    if not move.any():
+        return lines_gdf
+    coords = coords.copy()
+    coords[move, 0] += APART
+    new_geometries = geometries.copy()
+    for number in np.unique(line[move]).tolist():
+        new_geometries[number] = shapely.linestrings(coords[line == number])
+    return lines_gdf.set_geometry(new_geometries, crs=lines_gdf.crs)
+
+
 # What each junction point may join, carried with the points:
 #   is_end     it is an end of a custom line (ends may join anything)
 #   separated  every custom line it belongs to is a bridge / tunnel
 #   layers     the layers of the custom lines it belongs to
 POINT_COLUMNS = ["is_end", "separated", "layers"]
+
+
+def _same_place(coords: np.ndarray, first: np.ndarray | None = None) -> np.ndarray:
+    """
+    (x, y) rows with every group of rows within ON_LINE_TOLERANCE of each
+    other given one position: that of the group's first row (`first`:
+    rows to prefer). Where a line end is moved onto a street, GEOS works
+    out the crossing a hair (1e-10 m) from the end itself; left as two
+    points they became two nodes in one place, joined by an edge of no
+    length.
+    """
+    if len(coords) < 2:
+        return coords
+    points = shapely.points(coords)
+    a, b = shapely.STRtree(points).query(points, predicate="dwithin", distance=ON_LINE_TOLERANCE)
+    near = (a != b) & (coords[a] != coords[b]).any(axis=1)
+    if not near.any():
+        return coords
+
+    rank = np.arange(len(coords))
+    if first is not None:  # preferred rows first, each kind in its own order
+        rank = np.argsort(np.argsort(~first, kind="stable"))
+    group = np.arange(len(coords))
+
+    def find(i: int) -> int:
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+
+    for i, j in zip(a[near].tolist(), b[near].tolist(), strict=True):
+        keep, other = sorted((find(i), find(j)), key=rank.__getitem__)
+        group[other] = keep
+    involved = np.unique(a[near])
+    coords = coords.copy()
+    coords[involved] = coords[[find(i) for i in involved.tolist()]]
+    return coords
 
 
 def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
@@ -434,6 +585,8 @@ def _merge_points(records: pd.DataFrame, crs) -> gpd.GeoDataFrame:
     """
     if records.empty:
         return gpd.GeoDataFrame({column: [] for column in POINT_COLUMNS}, geometry=[], crs=crs)
+    records = records.reset_index(drop=True)
+    records[["x", "y"]] = _same_place(records[["x", "y"]].to_numpy(dtype=float))
     groups = records.groupby(["x", "y"], sort=False)
     merged = groups.agg(is_end=("is_end", "any"), separated=("separated", "all"))
     layers = (records.drop_duplicates(["x", "y", "layer"]).sort_values("layer", kind="stable")
@@ -504,8 +657,12 @@ def create_points_from_gdf(
             "separated": separated[line], "layer": layers[line],
         }))
 
-    records = pd.concat(frames) if frames else pd.DataFrame(
+    records = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
         columns=["x", "y", "is_end", "separated", "layer"])
+    if len(frames) == 2:
+        # A crossing a hair away from a vertex is that vertex.
+        is_vertex = np.r_[np.zeros(len(frames[0]), dtype=bool), np.ones(len(frames[1]), dtype=bool)]
+        records[["x", "y"]] = _same_place(records[["x", "y"]].to_numpy(dtype=float), is_vertex)
     return _merge_points(records, lines_gdf.crs)
 
 
@@ -597,6 +754,25 @@ def split_lines_with_buffered_points(
         ]
         on_line[rows[~np.array(may_join, dtype=bool)]] = False
     custom = ~is_osm
+    if custom.any() and not own_vertices_only and set(POINT_COLUMNS) <= set(points_gdf.columns):
+        # A custom line is cut at its own vertices, and at other points in
+        # reach only if it may meet what is there: the end of a line, or
+        # lines at grade on its layer. Cutting it at every point in reach
+        # joined a bridge to the road below wherever either had a vertex
+        # near the crossing.
+        rows = np.flatnonzero(custom)
+        lines = sjoin_lines.iloc[rows]
+        points = points_gdf.loc[lines["index_right"]]
+        own = shapely.distance(shapely.extract_unique_points(lines.geometry.to_numpy()),
+                               points.geometry.to_numpy()) <= ON_NODE_TOLERANCE
+        line_separated, line_layer = _separated_mask(lines), _layers(lines)
+        may_join = np.array([
+            is_end or (not point_separated and not separated and layer in layers)
+            for is_end, point_separated, layers, separated, layer in zip(
+                points["is_end"], points["separated"], points["layers"],
+                line_separated, line_layer, strict=True)
+        ], dtype=bool)
+        custom[rows[~(own | may_join)]] = False
     if own_vertices_only and custom.any():
         rows = np.flatnonzero(custom)
         vertices = shapely.extract_unique_points(sjoin_lines.geometry.to_numpy()[rows])

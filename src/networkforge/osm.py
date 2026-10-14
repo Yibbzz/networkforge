@@ -92,6 +92,8 @@ class OSMSource:
     ferries:    way id -> (node ids, all tags) of ferry routes inside the
                 area (see FERRY_ROUTES): written to OSM files as they are
     ferry_nodes: node id -> (lon, lat) of the ferries' nodes
+    ferry_terminals: the ferries' end nodes inside the area (not the
+                ends of a piece cropped at its edge)
     """
 
     ways: dict[int, tuple[list[int], dict[str, str]]] = field(default_factory=dict)
@@ -100,6 +102,7 @@ class OSMSource:
         default_factory=list)
     ferries: dict[int, tuple[list[int], dict[str, str]]] = field(default_factory=dict)
     ferry_nodes: dict[int, tuple[float, float]] = field(default_factory=dict)
+    ferry_terminals: set[int] = field(default_factory=set)
 
     # pandas deep-copies .attrs on most operations; the source is
     # read-only, so share it rather than copy a whole city each time.
@@ -120,7 +123,7 @@ def _keeps_relation(tags: dict[str, str]) -> bool:
 def _source_from_elements(elements: list[dict], polygon) -> OSMSource:
     """`polygon`: the area itself (not buffered); ferries are cropped to it."""
     ways, node_tags, relations = {}, {}, []
-    ferries, ferry_nodes, locations = {}, {}, {}
+    ferries, ferry_nodes, ferry_terminals, locations = {}, {}, set(), {}
     for element in elements:
         tags = element.get("tags") or {}
         if element["type"] == "way" and not is_ferry(tags):
@@ -140,13 +143,14 @@ def _source_from_elements(elements: list[dict], polygon) -> OSMSource:
             way_id = element["id"] if number == 0 else next(extra_ids)
             ferries[way_id] = ([ref for ref, _ in run], dict(element["tags"]))
             ferry_nodes.update(run)
+        ferry_terminals |= {ref for ref, where in (inside[0], inside[-1]) if where}
     for element in elements:
         if element["type"] != "relation" or not _keeps_relation(element.get("tags") or {}):
             continue
         members = [(m["type"][0], m["ref"], m.get("role", "")) for m in element["members"]]
         if any(kind == "w" and ref in ways for kind, ref, _ in members):
             relations.append((element["id"], dict(element["tags"]), members))
-    return OSMSource(ways, node_tags, relations, ferries, ferry_nodes)
+    return OSMSource(ways, node_tags, relations, ferries, ferry_nodes, ferry_terminals)
 
 
 def _network_from_elements(

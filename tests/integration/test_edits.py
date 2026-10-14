@@ -356,12 +356,24 @@ def test_turn_restriction_follows_a_changed_way(build, tmp_path):
 @pytest.mark.parametrize("coords, tags, message", [
     (ONE_BLOCK, {"osm_id": 987654, "oneway": "yes"}, "OSM way 987654 is not in this network"),
     (block(3, 3, 4), {"osm_id": ROW_1, "oneway": "yes"}, f"doesn't lie along OSM way {ROW_1}"),
+    # Across the block from node 7 to node 8, through its middle.
+    ([(X0 + 150, Y0 + 90), (X0 + 150, Y0 + 110)], {"osm_id": ROW_1, "oneway": "yes"},
+     f"doesn't lie along OSM way {ROW_1}"),
 ])
 def test_edit_that_cannot_be_placed_is_refused(build, coords, tags, message):
     with pytest.raises(InputError, match=message) as info:
         build([(coords, tags)])
     assert info.value.issues[0]["feature"] == 0
     assert info.value.guide == "changing-existing-streets"
+
+
+def test_edit_slightly_askew_still_lies_along_the_block(build):
+    """Drawn by hand, 2 m off at one end: still the block from node 7 to node 8."""
+    result = build([([(X0 + 100, Y0 + 100), (X0 + 200, Y0 + 102)],
+                     {"osm_id": ROW_1, "maxspeed": "20 mph"})])
+    changed = result.edges[result.edges.modified == "yes"]
+    assert {frozenset(pair) for pair in zip(changed.u, changed.v, strict=True)} == {
+        frozenset((7, 8))}
 
 
 def test_two_different_changes_to_the_same_stretch_are_refused(build):

@@ -13,6 +13,10 @@ from networkforge.topology import crosses_at_grade, is_grade_separated
     ({"highway": "primary", "bridge": "yes"}, True),
     ({"highway": "primary", "bridge": "viaduct"}, True),
     ({"highway": "primary", "bridge": "no"}, False),
+    ({"highway": "primary", "bridge": "0"}, False),
+    ({"highway": "primary", "bridge": "false"}, False),
+    ({"highway": "primary", "bridge": "False"}, False),
+    ({"highway": "footway", "tunnel": "0"}, False),
     ({"highway": "footway", "tunnel": "yes"}, True),
     ({"highway": "primary", "bridge": float("nan")}, False),
 ])

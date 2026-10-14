@@ -74,6 +74,8 @@ def test_strict_false_only_warns(caplog):
     ({"highway": "proposed"}, "not a routable highway value"),
     ({"highway": "primary", "access": "private"}, "unusable by every mode"),
     ({"highway": "primary", "maxspeed": "fast"}, "not a valid OSM speed"),
+    ({"highway": "primary", "maxspeed": "0"}, "must be above 0"),
+    ({"highway": "primary", "maxspeed": "0 mph"}, "must be above 0"),
     ({"highway": "primary", "oneway": "maybe"}, "oneway='maybe'"),
     ({"highway": "primary", "lanes": "0"}, "positive whole number"),
     ({"highway": "primary", "foot": "nope"}, "foot='nope'"),

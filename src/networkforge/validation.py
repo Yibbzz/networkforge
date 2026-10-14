@@ -44,6 +44,7 @@ from .modes import (
 from .tags import (
     BASE_WAY_TAGS,
     EDIT_COLUMN,
+    GPKG_ANALYSIS_COLUMNS,
     MODIFIED_COLUMN,
     PART_COLUMN,
     ROUTING_WAY_TAGS,
@@ -330,6 +331,9 @@ DURATION_PATTERN = re.compile(r"^\d+:[0-5]\d(:[0-5]\d)?$")
 RESERVED_COLUMNS = {
     "u", "v", "key", "osmid", "custom", "split", "reversed", "length",
     PART_COLUMN, MODIFIED_COLUMN, EDIT_COLUMN,
+    # Spatial joins name their columns so (and leave them in layers made
+    # with one); the GeoPackage's analysis columns are worked out afresh.
+    "index_left", "index_right", *GPKG_ANALYSIS_COLUMNS,
 }
 
 # Tag keys the pipeline understands (checked, used for routing or
@@ -403,6 +407,8 @@ def tag_value_problems(tags: dict[str, str]) -> tuple[list[str], set[str]]:
     if maxspeed is not None:
         if not MAXSPEED_PATTERN.match(maxspeed):
             problems.append(f"maxspeed={maxspeed!r} is not a valid OSM speed")
+        elif maxspeed[:1].isdigit() and float(maxspeed.split()[0]) == 0:
+            problems.append(f"maxspeed={maxspeed!r} must be above 0")
         elif maxspeed.replace(".", "").isdigit():
             notes.add(f"maxspeed={maxspeed} has no unit and is read as km/h")
 

@@ -229,3 +229,56 @@ def test_info_describes_the_engine(capsys):
     assert "motor_vehicle" in info["tag_values"] and "bicycle" in info["tag_values"]
     assert info["max_overpass_area_km2"] == MAX_OVERPASS_AREA_KM2
     assert info["gpkg_edge_columns"] == list(GPKG_ANALYSIS_COLUMNS)
+
+
+def test_feature_without_an_id_is_null_in_json(tmp_path, capsys):
+    """NaN is not JSON: a strict reader (JavaScript, Qt) rejects the whole event."""
+    path = tmp_path / "custom.gpkg"
+    gpd.GeoDataFrame(
+        {"highway": ["primary", "nonsense"], "ref_id": ["a", None]},
+        geometry=[LineString([(-3.19, 55.95), (-3.18, 55.96)]),
+                  LineString([(-3.18, 55.95), (-3.17, 55.96)])], crs="EPSG:4326").to_file(path)
+    main(["check", "--custom", str(path), "--id-field", "ref_id", "--json"])
+
+    def strict(constant):
+        raise AssertionError(f"{constant} in the JSON output")
+
+    events = [json.loads(line, parse_constant=strict)
+              for line in capsys.readouterr().out.splitlines()]
+    assert events[-1]["issues"][0]["feature"] is None
+
+
+@pytest.mark.parametrize("flag", ["--out", "--gpkg", "--baseline-out", "--baseline-gpkg"])
+def test_output_may_not_replace_an_input(custom_file, capsys, flag):
+    """--gpkg custom.gpkg used to delete the custom layer and report success."""
+    before = custom_file.read_bytes()
+    code, events = run_json(capsys, "build", "--bbox=-3.2,55.9,-3.1,56.0",
+                            "--custom", str(custom_file), flag, str(custom_file))
+    assert code == EXIT_INPUT
+    assert "same file as --custom" in events[-1]["message"]
+    assert custom_file.read_bytes() == before
+
+
+def test_two_outputs_need_two_names(custom_file, tmp_path, capsys):
+    out = str(tmp_path / "network.osm.pbf")
+    code, events = run_json(capsys, "build", "--bbox=-3.2,55.9,-3.1,56.0",
+                            "--custom", str(custom_file), "--out", out, "--baseline-out", out)
+    assert code == EXIT_INPUT
+    assert "same file as --out" in events[-1]["message"]
+
+
+def test_output_folder_is_checked_before_the_build(custom_file, tmp_path, capsys):
+    code, events = run_json(capsys, "build", "--bbox=-3.2,55.9,-3.1,56.0", "--custom",
+                            str(custom_file), "--out", str(tmp_path / "missing" / "n.osm.pbf"))
+    assert code == EXIT_INPUT
+    assert "folder for --out doesn't exist" in events[-1]["message"]
+    assert not any(e["event"] == "progress" for e in events)
+
+
+def test_extent_file_without_features_is_an_input_error(custom_file, tmp_path, capsys):
+    extent = tmp_path / "extent.gpkg"
+    gpd.GeoDataFrame(geometry=[], crs="EPSG:4326").to_file(extent)
+    code, events = run_json(capsys, "build", "--extent", str(extent), "--custom",
+                            str(custom_file), "--out", str(tmp_path / "n.osm.pbf"))
+    assert code == EXIT_INPUT
+    assert "no features with geometry" in events[-1]["message"]

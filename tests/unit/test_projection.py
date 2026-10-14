@@ -59,3 +59,11 @@ def test_convert_to_wgs84_adds_rounded_xy():
 def test_convert_to_wgs84_assumes_wgs84_when_crs_missing():
     result = convert_to_wgs84_and_add_xy(gpd.GeoDataFrame(geometry=[Point(1, 2)]))
     assert result.crs.to_epsg() == 4326
+
+
+@pytest.mark.parametrize("epsg", [2263, 2227])  # US State Plane, in feet
+def test_projection_in_feet_is_not_used_for_measuring(epsg):
+    """Lengths, speeds and the snap distance are metres: 100 ft would count as 100 m."""
+    bbox = gpd.GeoDataFrame(geometry=[box(-74.0, 40.7, -73.9, 40.8)], crs="EPSG:4326")
+    crs = get_analysis_crs(bbox.to_crs(epsg))
+    assert crs.to_epsg() == 32618  # the UTM zone, in metres

@@ -8,7 +8,7 @@ the block between nodes 7 and 8 that the edits change.
 
 import pytest
 
-from tests.integration.grid import NO_LEFT_TURN, SLIP_ROAD
+from tests.integration.grid import LOOP_WAY, NO_LEFT_TURN, SLIP_ROAD, grid_with_loop
 from tests.integration.test_edits import ROW_1, SLIP, way_id
 from tests.valhalla.conftest import at, turn_metres, xy
 
@@ -45,6 +45,25 @@ def test_one_way_reversed_by_drawing_the_feature_the_other_way(scenario):
     built = scenario([(BLOCK[::-1], {"osm_id": ROW_1, "oneway": "yes"})])
     assert metres(built, "after", EAST, WEST, "auto") == 300
     assert metres(built, "after", WEST, EAST, "auto") == 500
+
+
+@pytest.mark.parametrize("reverse, with_it, against_it", [
+    (False, (0.9, -0.6), (1.1, -0.6)),
+    (True, (1.1, -0.6), (0.9, -0.6)),
+], ids=["as the way is drawn", "the other way round"])
+def test_loop_street_made_one_way_in_the_direction_drawn(scenario, reverse, with_it, against_it):
+    """
+    Loop Close leaves node 2 and comes back to it, one OSM way whose
+    first node is its last. Two points 20 m apart on its far side: with
+    the traffic 20 m, against it right round the loop.
+    """
+    around = [xy(1, 0), xy(0.7, -0.6), xy(1.3, -0.6), xy(1, 0)]
+    drawn = around[::-1] if reverse else around
+    built = scenario([(drawn, {"osm_id": LOOP_WAY, "oneway": "yes"})], elements=grid_with_loop())
+
+    assert metres(built, "before", at(*against_it), at(*with_it), "auto") <= 20
+    assert metres(built, "after", at(*with_it), at(*against_it), "auto") <= 20
+    assert metres(built, "after", at(*against_it), at(*with_it), "auto") > 150
 
 
 def test_contraflow_cycling_on_the_new_one_way(scenario):

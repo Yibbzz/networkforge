@@ -49,7 +49,9 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `osmid`, `EDIT_ID_COLUMNS`) are split off in step 1 (`split_edits`) and applied to a COPY of the
   OSM edge table right after download (`apply_edits`); the before network is never touched. Only
   tags differing from the source way's tags are changes; a feature claims the edges of that way
-  whose midpoint is within snap_tolerance (nearest feature wins; equal claims must agree). `oneway`
+  whose midpoint is within snap_tolerance and which it runs along (`MAX_ANGLE`, 45 degrees: a
+  line drawn across a block passes its midpoint too); nearest feature wins, equal claims must
+  agree. `oneway`
   is relative to the feature's drawn direction and stored in way terms; one-way changes rebuild
   the stretch's edges OSMnx-style (`_in_direction`). Edges get `modified="yes"` + `nf_edit` (edit
   number); tag changes travel in `edges.attrs[EDITS_ATTR]`. Export writes each edited run as its
@@ -205,6 +207,17 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   never by distance - both let a path near a tunnel/bridge node weld the tunnel to the street.
 - "A custom line is stranded" = its piece of network has no existing street (not "outside the
   largest piece": the OSM network itself can be several pieces).
+- Nodes are told apart by position, so "must not join" at the SAME position needs the vertex
+  moved: `keep_grade_separated_vertices_apart` shifts a bridge's middle vertex 5 mm (`APART`) off
+  a junction / another line's vertex it was drawn on. And a custom line is only cut at a point in
+  reach if it is its own vertex, a line END, or at grade on its layer (`split_lines_with_buffered_points`).
+- A point already ON an edge only snaps to that edge's end nodes (`snap_points_to_nodes(edges_gdf=)`):
+  any node in reach pulled crossings onto the dead end of another way, off the street crossed.
+- Points within `ON_LINE_TOLERANCE` of each other are one point (`_same_place`, vertices win): GEOS
+  puts a crossing 1e-10 m from the line end snapped there; two nodes, a zero-length edge.
+- Edits orient a way by its (node, next node) steps, never by node position along it: a closed
+  way has its first node twice. Tests: tests/integration/test_edge_cases.py (`grid_with_loop`,
+  `grid_with_dead_end`, `grid_with_via_way_restriction`).
 - `snap_line_ends_together` runs before OSM snapping: custom line ends within snap_tolerance of
   each other move onto one point (else each line bent to the other's end: doubled-back stubs).
 - `projection.get_analysis_crs` only keeps a projected CRS if it is regional (`_is_local`, under
@@ -218,6 +231,8 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   platforms or `area=yes` squares (tested), so OSMnx's "all" filter loses nothing but ferries.
   Ferries (`osm.is_ferry`, `OSMSource.ferries` / `ferry_nodes`, cropped to the bbox) bypass the
   edge table and are written verbatim by export; new node ids must start above ferry node ids.
+  Their ends no street reaches (`ferry_terminals`, `network._lone_ferry_terminals`) are added to
+  the nodes for steps 3-7 only, so a custom line END snaps onto them; unreached ones are dropped.
   NEW ferries (custom `route=ferry`, no highway; `modes.is_ferry`) DO go in the edge table: open to
   all modes unless access closes them, grade-separated (join only at their ends), 10 km/h or
   `duration` over the whole line (`export._ferry_speeds`), as Valhalla reads them.
