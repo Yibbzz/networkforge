@@ -504,6 +504,8 @@ class _WarningEvents(logging.Handler):
             event["features"] = [feature_id(f) for f in record.features]
         if getattr(record, "fields", None) or getattr(record, "field", None):
             event["fields"] = list(getattr(record, "fields", None) or [record.field])
+        if getattr(record, "gaps", None):
+            event["gaps"] = [list(bounds) for bounds in record.gaps]
         self.emit_event(event)
 
 

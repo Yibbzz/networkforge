@@ -93,6 +93,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `edges.attrs[SOURCE_ATTR]`; build_network re-attaches it to its results and export writes the
   existing network from it. Ways cut at an extract's edge keep their known runs.
   `network_type` = OSMnx download filter; keep `"all"` so one build serves every mode.
+- `coverage.py` - `warn_about_gaps`: after reading a local file, warns (once, naming each part;
+  `extra={"gaps": bounds}` -> `gaps` in the CLI's JSON warning event) when part of the area has no
+  street at all: cells (~40 across) no way crosses, joined side to side, reaching the area's
+  edge, >= 5% of it. Cells on the sea side of the nearest `natural=coastline` segment (land on
+  its left; `_read_elements(coastlines=)`) count as covered. Geofabrik keeps boundary-crossing
+  ways whole, so the "cut at the extract's edge" warning never fires for them.
 - `modes.py` - transport-mode access rules: OSMnx's own network filters (by way type) + the OSM access
   hierarchy (`ACCESS_HIERARCHY`, most specific tag wins; `DENIED_ACCESS`; busways closed unless a
   mode tag opens them; `OPENABLE` e.g. footway+bicycle=designated). OSMnx's own access clauses are
