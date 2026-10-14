@@ -44,7 +44,9 @@ from .topology import (
     assign_point_ids_to_lines,
     check_line_node_consistency,
     create_points_from_gdf,
+    cuts_after_snapping,
     filter_split_lines,
+    keep_grade_separated_vertices_apart,
     remove_duplicates_and_combine_nodes,
     snap_crossings_to_network,
     snap_line_ends_together,
@@ -288,8 +290,9 @@ def build_network(
             f"Unknown network_type {network_type!r}. "
             f"Choose one of: {', '.join(NETWORK_TYPES)}"
         )
-    if not snap_tolerance > 0:
-        raise InputError(f"snap_tolerance must be positive, got {snap_tolerance!r}")
+    if not 0 < snap_tolerance < float("inf"):
+        raise InputError(f"snap_tolerance must be a positive number of metres, "
+                         f"got {snap_tolerance!r}")
 
     if join_at not in JOIN_AT:
         raise InputError(f"Unknown join_at {join_at!r}. Choose one of: {', '.join(JOIN_AT)}")
@@ -462,6 +465,11 @@ def build_network(
         snap_tolerance,
         not_ends=cuts,
     )
+
+    cuts = cuts_after_snapping(custom_parts_gdf, custom_data_gdf, cuts)
+    if not at_vertices:
+        custom_data_gdf = keep_grade_separated_vertices_apart(
+            custom_data_gdf, nodes_gdf, edges_gdf)
 
     if custom_data_gdf.empty:
         raise InputError(

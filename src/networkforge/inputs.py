@@ -118,6 +118,10 @@ def clean_custom_data(
     check_feature_ids(custom_gdf)
     custom = take_edit_ids(custom_gdf) if edits else custom_gdf
     custom = drop_reserved_columns(custom.copy(), quiet=EDIT_ID_COLUMN in custom.columns)
+    if custom.geometry.name != "geometry":
+        # As the network's tables call it (e.g. "geom" from a database):
+        # two geometry columns can't be written to a GeoPackage.
+        custom = custom.drop(columns="geometry", errors="ignore").rename_geometry("geometry")
     geometry = custom.geometry
 
     no_geometry = geometry.isna() | geometry.is_empty

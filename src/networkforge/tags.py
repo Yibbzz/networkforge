@@ -118,3 +118,11 @@ TURNS_ATTR = "networkforge_turns"
 # Numbers the custom lines, so the pieces a line is cut into at
 # junctions can be written as one way again.
 PART_COLUMN = "nf_part"
+
+# Columns export.analysis_edges() adds to the GeoPackage edges for QGIS
+# network analysis.
+GPKG_ANALYSIS_COLUMNS = (
+    "car", "bike", "walk", "speed_kph", "length_m",
+    "car_minutes", "bike_minutes", "walk_minutes",
+    "car_direction", "bike_direction",
+)

@@ -8,6 +8,49 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Fixed
+Found by probing the build with shapes the tests didn't draw
+(`tests/integration/test_edge_cases.py`; the first four changed routes
+in Valhalla).
+
+- A custom bridge, tunnel, ferry or line on another `layer` was joined
+  to a custom road it crosses wherever either had a vertex within
+  `snap_tolerance` of the crossing. A vertex of a bridge drawn exactly
+  on a junction (or of a road on a motorway's node) joined it too. Only
+  ends join now, as documented.
+- A line crossing or ending on a street right beside the dead end of
+  another way (within `snap_tolerance`) was pulled onto the dead end and
+  never joined the street.
+- Making a street one-way when its OSM way closes on itself (a loop, a
+  crescent): drawn against the way's direction it was written the wrong
+  way round, and the closing stretch was reversed in the GeoPackage
+  either way.
+- An existing turn restriction over a via way was dropped, silently,
+  when any part of one of its ways was changed. It now follows the
+  pieces, as restrictions with a via node did. (It still goes, rightly,
+  if part of the via way is removed.)
+- About one line end in ten moved onto a street mid-block became two
+  nodes in one place joined by an edge of no length; so did three lines
+  crossing at one point.
+- `--gpkg` (or another output) naming the `--custom` file overwrote the
+  custom data and reported success. Outputs that would replace an input
+  or each other are refused, and a missing output folder is reported
+  before the build rather than after it.
+- An extent or custom layer in a projection measured in feet (US State
+  Plane) was built in feet: `length_m` and travel times 3.28 times too
+  large. Such projections are replaced by the UTM zone.
+- Attributes named `index_right` / `index_left` crashed the build; `fid`,
+  a name differing from another only in capitals, or a GeoPackage
+  analysis column name (`car`, `length_m` ...) stopped the GeoPackage
+  being written. The first and last are set aside with the other
+  internal names; the others get a trailing underscore in the
+  GeoPackage.
+- `--json`: a feature whose `--id-field` is empty was written as `NaN`,
+  which is not JSON; it is `null`.
+- Control characters in a tag value made OSM XML that could not be read;
+  an extent file without features and an infinite `--snap-tolerance` are
+  input errors (exit 3), not crashes.
+
 ### Tests
 - Cycling infrastructure is now tested in Valhalla
   (`tests/valhalla/test_cycling.py`): a cycle lane, a track or a

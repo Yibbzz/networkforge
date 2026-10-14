@@ -255,7 +255,7 @@ def apply_edits(
 
     # 1. What each feature would change, and which edges it lies along.
     wanted: dict[int, dict[str, str]] = {}
-    positions: dict[int, dict[int, int]] = {}
+    way_steps: dict[int, set[tuple[int, int]]] = {}
     claims = []  # (edge label, distance of its middle from the feature, edit number)
     for number, (feature, row) in enumerate(edits_gdf[edit_columns].iterrows()):
         way_id = int(row[EDIT_ID_COLUMN])
@@ -277,13 +277,11 @@ def apply_edits(
             continue
 
         refs, current = source.ways[way_id]
-        position = {ref: i for i, ref in reversed(list(enumerate(refs)))}
-        ends = set(edges.loc[covered, "u"]) | set(edges.loc[covered, "v"])
-        ordered = sorted((ref for ref in ends if ref in position), key=position.get)
-        along_way = (
-            len(ordered) < 2
-            or line.project(node_xy.loc[ordered[0]]) <= line.project(node_xy.loc[ordered[-1]])
-        )
+        # The way's own steps, node to node. (Not positions along it: a
+        # way that closes on itself has its first node twice, and the
+        # closing step was read backwards.)
+        steps = set(zip(refs, refs[1:], strict=False))
+        along_way = _drawn_along(line, edges.loc[covered], steps, node_xy)
 
         change = {}
         if REMOVE_COLUMN in row and wants_removal(row[REMOVE_COLUMN]):
@@ -306,7 +304,7 @@ def apply_edits(
             unchanged.append(feature)
             continue
 
-        wanted[number], positions[number] = change, position
+        wanted[number], way_steps[number] = change, steps
         claims += zip(covered, distances[distances <= tolerance], [number] * len(covered),
                       strict=True)
 
@@ -359,7 +357,7 @@ def apply_edits(
         if "oneway" in change and not bidirectional:
             drop.append(rows)
             way_tags = source.ways[int(edges.at[rows[0], "osmid"])][1]
-            rebuilt += _in_direction(edges.loc[rows], positions[number],
+            rebuilt += _in_direction(edges.loc[rows], way_steps[number],
                                      _oneway_state(change["oneway"], {**way_tags, **change}))
     if drop:
         edges = pd.concat([edges.drop(drop[0].append(drop[1:])), *rebuilt], ignore_index=True)
@@ -387,18 +385,38 @@ def apply_edits(
     return edges, changes, removed
 
 
-def _in_direction(stretch: gpd.GeoDataFrame, position: dict[int, int], state: str) -> list:
+def _drawn_along(line, covered: gpd.GeoDataFrame, steps: set, node_xy) -> bool:
+    """
+    Is the feature `line` drawn in the direction of the way's nodes?
+    Each covered step of the way votes: does a point early on it come
+    before a point late on it, along the line.
+    """
+    votes = 0
+    for u, v in {(int(u), int(v)) for u, v in zip(covered["u"], covered["v"], strict=True)}:
+        if (u, v) not in steps:
+            if (v, u) not in steps:
+                continue
+            u, v = v, u
+        step = shapely.LineString([node_xy.loc[u], node_xy.loc[v]])
+        early, late = (line.project(step.interpolate(part, normalized=True))
+                       for part in (0.25, 0.75))
+        votes += (late > early) - (late < early)
+    return votes >= 0
+
+
+def _in_direction(stretch: gpd.GeoDataFrame, steps: set[tuple[int, int]], state: str) -> list:
     """
     The edges of some stretches of one way, rebuilt for a new one-way
     state the way OSMnx holds them: a one-way stretch is one edge in the
     direction of travel; a two-way stretch is two, the second marked
-    reversed.
+    reversed. `steps`: the way's (node, next node) pairs.
     """
     if "reversed" in stretch:
         stretch = stretch[stretch["reversed"] != True]  # noqa: E712 - one row per stretch
 
     # Each row oriented along the way (from the earlier node to the later).
-    against = stretch["u"].map(position).to_numpy() > stretch["v"].map(position).to_numpy()
+    against = np.array([(int(u), int(v)) not in steps and (int(v), int(u)) in steps
+                        for u, v in zip(stretch["u"], stretch["v"], strict=True)], dtype=bool)
     forward = stretch.copy()
     forward.loc[against, ["u", "v"]] = stretch.loc[against, ["v", "u"]].to_numpy()
     geometries = forward.geometry.to_numpy().copy()

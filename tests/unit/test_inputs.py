@@ -167,6 +167,23 @@ def test_reserved_attribute_names_are_set_aside(caplog):
     assert "Ignoring custom attribute(s) key, length" in caplog.text
 
 
+def test_names_other_tools_leave_behind_are_set_aside():
+    """
+    index_right is what a spatial join leaves in a layer (and what the
+    build's own joins need free); car, length_m ... come with a row copied
+    from NetworkForge's GeoPackage and are worked out afresh.
+    """
+    gdf = features(LINE).assign(index_right=3, car=True, length_m=12.5, highway="primary")
+    cleaned = clean_custom_data(gdf, BBOX)
+    assert {"index_right", "car", "length_m"}.isdisjoint(cleaned.columns)
+
+
+def test_geometry_column_of_any_name():
+    gdf = features(LINE).assign(highway="primary").rename_geometry("geom")
+    cleaned = clean_custom_data(gdf, BBOX)
+    assert cleaned.geometry.name == "geometry" and "geom" not in cleaned.columns
+
+
 def test_attribute_names_must_be_osm_keys_as_written():
     """OSM keys are lower case: HIGHWAY is not highway (and is reported as missing)."""
     from networkforge.validation import check_custom_tags, resolve_custom_tags

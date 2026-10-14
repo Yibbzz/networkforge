@@ -106,9 +106,10 @@ def test_connected_lines_give_no_disconnected_warning(build, caplog):
     assert_all_custom_edges_are_connected(result.edges)
 
 
-def test_bad_snap_tolerance_rejected(build):
+@pytest.mark.parametrize("metres", [0, -1, float("nan"), float("inf")])
+def test_bad_snap_tolerance_rejected(build, metres):
     with pytest.raises(InputError, match="snap_tolerance"):
-        build([(ROAD_ACROSS, {"highway": "primary"})], snap_tolerance=0)
+        build([(ROAD_ACROSS, {"highway": "primary"})], snap_tolerance=metres)
 
 
 @pytest.mark.parametrize("failure, message", [

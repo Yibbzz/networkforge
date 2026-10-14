@@ -205,6 +205,72 @@ def grid_with_tunnel() -> list[dict]:
     ]
 
 
+def _extra_node(nid: int, x: float, y: float) -> dict:
+    """A node at (x, y) metres from the grid's corner, as an Overpass element."""
+    lon, lat = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True).transform(X0 + x, Y0 + y)
+    return {"type": "node", "id": nid, "lon": lon, "lat": lat, "tags": {}}
+
+
+LOOP_NODES = (601, 602)
+LOOP_WAY = 820
+
+
+def grid_with_loop() -> list[dict]:
+    """
+    grid_elements() plus a street that leaves node 2 southwards and comes
+    back to it, "Loop Close": ONE way, 2 > 601 > 602 > 2, whose first
+    node is also its last (as crescents and roundabouts are drawn).
+    """
+    return [
+        *grid_elements(), _extra_node(601, 70, -60), _extra_node(602, 130, -60),
+        {"type": "way", "id": LOOP_WAY, "nodes": [node_id(0, 1), *LOOP_NODES, node_id(0, 1)],
+         "tags": {**RESIDENTIAL, "name": "Loop Close"}},
+    ]
+
+
+DEAD_END_NODES = (701, 702)
+DEAD_END_WAY = 830
+
+
+def grid_with_dead_end() -> list[dict]:
+    """
+    grid_elements() plus a street that comes north from mid-block and
+    stops half a metre short of Row 1 Street, between nodes 7 and 8,
+    without joining it: a common slip in OpenStreetMap.
+    """
+    return [
+        *grid_elements(), _extra_node(701, 150, 40), _extra_node(702, 150, 99.5),
+        {"type": "way", "id": DEAD_END_WAY, "nodes": list(DEAD_END_NODES),
+         "tags": {**RESIDENTIAL, "name": "Short Street"}},
+    ]
+
+
+VIA_WAY_RESTRICTION = 9100
+# from Column 2 Avenue (13-18), along Row 3 Street (18-19-20), into Column 4 Avenue
+VIA_FROM, VIA_VIA, VIA_TO = (
+    (node_id(2, 2), node_id(3, 2)), (node_id(3, 2), node_id(3, 3)), (node_id(2, 4), node_id(3, 4)))
+
+
+def grid_with_via_way_restriction() -> list[dict]:
+    """
+    grid_elements() plus a turn restriction whose via is a way, not a
+    node (as no-U-turn restrictions across dual carriageways are).
+    """
+    elements = grid_elements()
+
+    def way_with(u, v):
+        return next(e["id"] for e in elements if e["type"] == "way" and any(
+            {a, b} == {u, v} for a, b in zip(e["nodes"], e["nodes"][1:], strict=False)))
+
+    return [*elements, {
+        "type": "relation", "id": VIA_WAY_RESTRICTION,
+        "tags": {"type": "restriction", "restriction": "no_u_turn"},
+        "members": [{"type": "way", "ref": way_with(*VIA_FROM), "role": "from"},
+                    {"type": "way", "ref": way_with(*VIA_VIA), "role": "via"},
+                    {"type": "way", "ref": way_with(*VIA_TO), "role": "to"}],
+    }]
+
+
 def synthetic_graph() -> nx.MultiDiGraph:
     """The grid as OSMnx builds a graph from it (simplify=False)."""
     keep_mode_tags()

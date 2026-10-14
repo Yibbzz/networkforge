@@ -205,6 +205,17 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   never by distance - both let a path near a tunnel/bridge node weld the tunnel to the street.
 - "A custom line is stranded" = its piece of network has no existing street (not "outside the
   largest piece": the OSM network itself can be several pieces).
+- Nodes are told apart by position, so "must not join" at the SAME position needs the vertex
+  moved: `keep_grade_separated_vertices_apart` shifts a bridge's middle vertex 5 mm (`APART`) off
+  a junction / another line's vertex it was drawn on. And a custom line is only cut at a point in
+  reach if it is its own vertex, a line END, or at grade on its layer (`split_lines_with_buffered_points`).
+- A point already ON an edge only snaps to that edge's end nodes (`snap_points_to_nodes(edges_gdf=)`):
+  any node in reach pulled crossings onto the dead end of another way, off the street crossed.
+- Points within `ON_LINE_TOLERANCE` of each other are one point (`_same_place`, vertices win): GEOS
+  puts a crossing 1e-10 m from the line end snapped there; two nodes, a zero-length edge.
+- Edits orient a way by its (node, next node) steps, never by node position along it: a closed
+  way has its first node twice. Tests: tests/integration/test_edge_cases.py (`grid_with_loop`,
+  `grid_with_dead_end`, `grid_with_via_way_restriction`).
 - `snap_line_ends_together` runs before OSM snapping: custom line ends within snap_tolerance of
   each other move onto one point (else each line bent to the other's end: doubled-back stubs).
 - `projection.get_analysis_crs` only keeps a projected CRS if it is regional (`_is_local`, under

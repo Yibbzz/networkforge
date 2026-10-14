@@ -43,7 +43,10 @@ def _is_local(crs: CRS) -> bool:
     world-wide projections such as Web Mercator (EPSG:3857, the default
     of many web maps), which stretches distances by 1/cos(latitude):
     lengths and the snap distance would be wrong by 80% in Scotland.
+    Nor for one measured in feet: everything here is in metres.
     """
+    if any(axis.unit_name != "metre" for axis in crs.axis_info):
+        return False  # feet (US State Plane): lengths and the snap distance are metres
     area = crs.area_of_use
     if area is None:
         return True  # a custom CRS: trust it

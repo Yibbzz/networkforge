@@ -105,8 +105,9 @@ cycleways?".
 
 Attributes that aren't tags (an `id` or `notes` column, for example)
 are ignored. A few names are used internally, so attributes called
-`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed`, `length` or
-`nf_part` are
+`u`, `v`, `key`, `osmid`, `custom`, `split`, `reversed`, `length`,
+`nf_part`, `index_left` or `index_right`, or like the GeoPackage's
+analysis columns (`car`, `bike`, `walk`, `length_m` ...), are
 set aside with a warning (they aren't OSM tags, so nothing is lost).
 
 Messages name features by row number, or by an id attribute you choose
@@ -239,7 +240,9 @@ doesn't join when either side is:
 - on a different `layer`.
 
 A line that **ends** on a motorway, bridge or tunnel still joins it:
-that's how you add a new slip road. Only crossings are skipped.
+that's how you add a new slip road. Only crossings are skipped - and a
+bridge's or tunnel's own vertices between its ends join nothing either,
+even one drawn exactly on a junction or on another line's vertex.
 
 Trunk roads are treated as ordinary roads (many have at-grade
 junctions); tag the custom line `bridge=yes` if it goes over one.

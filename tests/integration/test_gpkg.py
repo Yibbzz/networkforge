@@ -158,6 +158,21 @@ def test_other_attributes_reach_the_geopackage_with_their_type(build, tmp_path):
     assert set(custom.maxspeed) == {"30 mph"}  # tags are OSM text
 
 
+def test_attribute_names_a_geopackage_cannot_hold(build, tmp_path):
+    """
+    `fid` is the GeoPackage's own row id (and a property of every GeoJSON
+    QGIS exports from one); its field names don't tell Highway from
+    highway. Both stopped the file being written.
+    """
+    result = build([(ROAD_ACROSS, {**ROAD_TAGS, "fid": 7, "Highway": "A1"})])
+    write_gpkg(result.nodes, result.edges, tmp_path / "network.gpkg")
+    layer = gpd.read_file(tmp_path / "network.gpkg", layer="edges")
+    custom = layer[layer.custom == "yes"]
+
+    assert set(custom["fid_"]) == {7} and set(custom["Highway_"]) == {"A1"}
+    assert set(custom.highway) == {"primary"}
+
+
 def test_new_roundabout_is_one_way_without_saying_so(build):
     """OSM (and Valhalla) treat junction=roundabout as one-way in its drawn direction."""
     ring = [(500_300.0, 6_200_300.0), (500_350.0, 6_200_320.0), (500_370.0, 6_200_360.0),

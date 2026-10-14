@@ -45,6 +45,7 @@ and tags come from the columns.
 """
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +68,7 @@ from .tags import (
     EDIT_COLUMN,
     EDITS_ATTR,
     FERRY_ROUTES,
+    GPKG_ANALYSIS_COLUMNS,
     MODIFIED_TAG,
     NODE_CHANGES_ATTR,
     NODE_TAGS,
@@ -84,13 +86,6 @@ GENERATOR = "NetworkForge"
 # Constant speeds for bike and walk travel times in the GeoPackage.
 BIKE_KPH = 15.0
 WALK_KPH = 5.0
-
-# Columns analysis_edges() adds for QGIS network analysis.
-GPKG_ANALYSIS_COLUMNS = (
-    "car", "bike", "walk", "speed_kph", "length_m",
-    "car_minutes", "bike_minutes", "walk_minutes",
-    "car_direction", "bike_direction",
-)
 
 # Edge columns that only mean something inside the pipeline.
 INTERNAL_COLUMNS = ["key", "split", "reversed", "length", PART_COLUMN, EDIT_COLUMN]
@@ -162,12 +157,33 @@ def write_gpkg(
         "edges": analysis_edges(nodes_gdf, edges_gdf),
     }
     for name, gdf in layers.items():
-        gdf = gdf.copy()
+        gdf = gdf.rename(columns=_gpkg_names(gdf.columns.drop(gdf.geometry.name)))
         for column in gdf.columns.drop(gdf.geometry.name):
             if gdf[column].dtype == object:  # OSMnx can merge values into lists
                 gdf[column] = gdf[column].map(
                     lambda v: ";".join(map(str, v)) if isinstance(v, list) else v)
         gdf.to_file(path, layer=name, driver="GPKG")
+
+
+def _gpkg_names(columns) -> dict:
+    """
+    New names for the columns a GeoPackage can't hold as they are: `fid`
+    is its own row id, and its field names don't tell capitals from
+    small letters (a `Highway` attribute beside `highway`). They get a
+    trailing underscore.
+    """
+    renamed, taken = {}, {"fid"}
+    for column in columns:
+        name = str(column)
+        while name.lower() in taken:
+            name += "_"
+        taken.add(name.lower())
+        if name != column:
+            renamed[column] = name
+    if renamed:
+        log.info("GeoPackage: column(s) renamed - %s",
+                 ", ".join(f"{old} to {new}" for old, new in renamed.items()))
+    return renamed
 
 
 def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -260,7 +276,9 @@ def analysis_edges(nodes_gdf: gpd.GeoDataFrame, edges_gdf: gpd.GeoDataFrame) -> 
         "bike_direction": bike_direction.to_numpy(),
     }, index=edges.index)
 
-    edges = edges.drop(columns=[c for c in INTERNAL_COLUMNS if c in edges.columns])
+    # Columns already called what the analysis columns are give way to them.
+    edges = edges.drop(columns=[c for c in (*INTERNAL_COLUMNS, *GPKG_ANALYSIS_COLUMNS)
+                                if c in edges.columns])
     return pd.concat([edges, analysis], axis=1).reset_index(drop=True)
 
 
@@ -726,22 +744,74 @@ def _relations(
                 relations.append((relation_id, present, dict(tags)))
             continue
 
-        via_nodes = [ref for kind, ref, role in members if kind == "n" and role == "via"]
-        written = []
-        for kind, ref, role in members:
-            if kind == "n" and ref in node_ids:
-                written.append((kind, ref, role))
-            elif kind == "w":
-                # With a via way instead of a node, only an unbroken way will do.
-                on_via = [way_id for way_id, refs in pieces.get(ref, [])
-                          if all(node in refs for node in via_nodes)]
-                if on_via and (via_nodes or len(pieces[ref]) == 1):
-                    # Cut at the via node itself: the piece with the way's own id.
-                    written.append((kind, ref if ref in on_via else on_via[0], role))
-        if len(written) == len(members):
+        written = _restriction_members(members, source, pieces, node_ids)
+        if written is not None:
             relations.append((relation_id, written, dict(tags)))
 
     return sorted(relations)
+
+
+def _restriction_members(
+    members: list[tuple[str, int, str]],
+    source: OSMSource,
+    pieces: dict[int, list[tuple[int, list[int]]]],
+    node_ids: set[int],
+) -> list[tuple[str, int, str]] | None:
+    """
+    A turn restriction's members in the written network, or None if one
+    of them is gone. A from or to way now in several pieces means the
+    piece at the junction: the one holding the via node, or meeting the
+    via way. A via way in pieces is written as all of them, in the order
+    of travel - if they still run unbroken from junction to junction.
+    """
+    via_nodes = [ref for kind, ref, role in members if kind == "n" and role == "via"]
+    via_ways = [ref for kind, ref, role in members if kind == "w" and role == "via"]
+
+    def original(way: int) -> list[int]:
+        return source.ways[way][0] if way in source.ways else []
+
+    def junction(way: int, role: str) -> set[int]:
+        """Where the way meets the via: the via node(s), or the nearest via way."""
+        if via_nodes or not via_ways:
+            return set(via_nodes)
+        return set(original(way)) & set(original(via_ways[-1 if role == "to" else 0]))
+
+    from_way = next((ref for kind, ref, role in members if kind == "w" and role == "from"), None)
+    written = []
+    for kind, ref, role in members:
+        if kind == "n":
+            if ref not in node_ids:
+                return None
+            written.append((kind, ref, role))
+        elif kind != "w":
+            return None
+        elif role == "via":
+            parts = pieces.get(ref, [])
+            unbroken = all(first[-1] == second[0] for (_, first), (_, second)
+                           in zip(parts, parts[1:], strict=False))
+            if not parts or not unbroken or [parts[0][1][0], parts[-1][1][-1]] != [
+                    original(ref)[0], original(ref)[-1]]:
+                return None
+            # Starting from the end the from way arrives at.
+            arrives_at = set(original(from_way)) if from_way is not None else set()
+            if parts[-1][1][-1] in arrives_at and parts[0][1][0] not in arrives_at:
+                parts = parts[::-1]
+            written += [(kind, way_id, role) for way_id, _ in parts]
+        else:
+            parts = pieces.get(ref, [])
+            at = junction(ref, role)
+            if at:
+                parts = [(way_id, refs) for way_id, refs in parts
+                         if all(node in refs for node in at)
+                         or (not via_nodes and at & set(refs))]
+            elif len(parts) != 1:
+                return None
+            if not parts:
+                return None
+            # Cut at the junction itself: the piece with the way's own id.
+            ids = [way_id for way_id, _ in parts]
+            written.append((kind, ref if ref in ids else ids[0], role))
+    return written
 
 
 def _row_tags(gdf: gpd.GeoDataFrame, columns: dict[str, str]) -> list[dict[str, str]]:
@@ -780,11 +850,21 @@ def _tag_text(value) -> str | None:
     return str(value)
 
 
+# Characters XML 1.0 can't hold at all (control characters other than
+# tab, new line and carriage return): a file with one can't be read back.
+_NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def _xml_text(text: str) -> str:
+    return _NOT_XML.sub("", text)
+
+
 def _write_xml(data: OSMData, path: str | Path) -> None:
     """Stream OSM XML straight to the file (no in-memory element tree)."""
 
     def tag_lines(tags: dict[str, str]) -> str:
-        return "".join(f"    <tag k={quoteattr(k)} v={quoteattr(v)}/>\n" for k, v in tags.items())
+        return "".join(f"    <tag k={quoteattr(_xml_text(k))} v={quoteattr(_xml_text(v))}/>\n"
+                       for k, v in tags.items())
 
     min_lon, min_lat, max_lon, max_lat = data.bounds
     with open(path, "w", encoding="utf-8") as out:

@@ -6,6 +6,8 @@ sorted as OSM tools expect, keep routing-relevant node and way tags,
 and route identically.
 """
 
+import xml.etree.ElementTree as ET
+
 import geopandas as gpd
 import osmium
 import osmnx as ox
@@ -177,6 +179,16 @@ def test_osm_tags_without_a_column_reach_the_file(build, tmp_path, monkeypatch):
     assert "maxweightrating:hgv" not in result.edges.columns
     assert ways[elements[N * N + 2]["id"]][1]["maxweightrating:hgv"] == "7.5"
     assert nodes[elements[0]["id"]][2]["traffic_signals:direction"] == "forward"
+
+
+def test_characters_xml_cannot_hold_are_left_out(build, tmp_path):
+    """A control character in a name (pasted text) made a file no XML reader would open."""
+    result = build([(ROAD_ACROSS, {**ROAD_TAGS, "name": "High\x00 \x01Street & <Lane>"})])
+    write_osm(result.nodes, result.edges, tmp_path / "network.osm")
+
+    names = {tag.get("v") for tag in ET.parse(tmp_path / "network.osm").iter("tag")
+             if tag.get("k") == "name"}
+    assert "High Street & <Lane>" in names
 
 
 def test_cropped_way_is_written_as_the_part_inside(tmp_path, fake_osm):
