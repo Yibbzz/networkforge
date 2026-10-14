@@ -71,7 +71,7 @@ def test_check_reports_tag_problems_as_json(custom_file, capsys):
     assert code == EXIT_INPUT
     (error,) = json_lines(capsys)
     assert error["type"] == "InvalidTagsError"
-    assert error["guide"] == "fixing-tag-errors"
+    assert error["guide"] == "network-rules.md#fixing-tag-errors"
     assert len(error["problems"]) == 3  # 2x bad maxspeed, 1x missing highway
 
 

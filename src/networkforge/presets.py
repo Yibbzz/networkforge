@@ -12,7 +12,7 @@ which is how you add a speed limit:
 Presets deliberately don't set maxspeed: limits differ by country, and
 without one the fixed DEFAULT_SPEEDS_KPH for the road type apply.
 
-See docs/tagging-guide.md for what each preset means and who can use it.
+See docs/network-rules.md for what each preset means and who can use it.
 """
 
 from .errors import InputError

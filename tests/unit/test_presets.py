@@ -1,4 +1,4 @@
-"""Presets are valid, and docs/tagging-guide.md describes them truthfully."""
+"""Presets are valid, and docs/network-rules.md describes them truthfully."""
 
 import re
 from pathlib import Path
@@ -12,7 +12,7 @@ from networkforge.modes import usable_modes
 from networkforge.presets import PRESETS, preset_tags
 from networkforge.validation import check_custom_tags, resolve_custom_tags
 
-GUIDE = Path(__file__).parents[2] / "docs" / "tagging-guide.md"
+GUIDE = Path(__file__).parents[2] / "docs" / "network-rules.md"
 
 
 def guide_rows() -> dict[str, tuple[str, str, str, str]]:
@@ -54,4 +54,4 @@ def test_preset_tags_are_a_copy():
 def test_unknown_preset_lists_the_options():
     with pytest.raises(InputError, match="primary_road") as info:
         preset_tags("primary road")
-    assert info.value.guide == "presets"
+    assert info.value.guide == "network-rules.md#presets"

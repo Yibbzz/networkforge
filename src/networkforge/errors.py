@@ -3,7 +3,7 @@ Exceptions raised by NetworkForge.
 
 Catch NetworkForgeError to handle anything the pipeline rejects. Every
 error has a plain-language message; `guide` names the section of
-docs/tagging-guide.md that explains the fix, where there is one.
+docs/network-rules.md that explains the fix, where there is one.
 
     NetworkForgeError
     ├── InputError (also a ValueError)       bad arguments or input data
@@ -16,7 +16,7 @@ docs/tagging-guide.md that explains the fix, where there is one.
 import math
 
 DOCS = "docs"
-GUIDE = f"{DOCS}/tagging-guide.md"
+GUIDE = "network-rules.md"
 
 
 def feature_id(value):
@@ -32,8 +32,9 @@ class NetworkForgeError(Exception):
     """
     Base class for every error NetworkForge raises on purpose.
 
-    `guide` is a section of the tagging guide ("presets") or another
-    doc in docs/ ("osm-data.md#getting-an-extract").
+    `guide` is a section of the network rules ("presets", stored as
+    "network-rules.md#presets") or of another doc in docs/
+    ("osm-data.md#getting-an-extract"): always "<file>.md[#anchor]".
 
     `issues` pinpoints problems per custom feature, as a list of
     {"feature": id, "message": text} (feature None for problems that
@@ -43,15 +44,14 @@ class NetworkForgeError(Exception):
 
     def __init__(self, message: str, guide: str | None = None, issues: list | None = None):
         super().__init__(message)
-        self.guide = guide
+        self.guide = guide if guide is None or ".md" in guide else f"{GUIDE}#{guide}"
         self.issues = [{"feature": feature_id(i["feature"]), "message": i["message"]}
                        for i in issues or []]
 
     def __str__(self) -> str:
         message = super().__str__()
         if self.guide:
-            where = f"{DOCS}/{self.guide}" if ".md" in self.guide else f"{GUIDE}#{self.guide}"
-            message += f"\n(see {where})"
+            message += f"\n(see {DOCS}/{self.guide})"
         return message
 
 

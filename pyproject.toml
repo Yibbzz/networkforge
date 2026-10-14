@@ -37,7 +37,7 @@ networkforge = "networkforge.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Yibbzz/networkforge"
-Documentation = "https://github.com/Yibbzz/networkforge/blob/main/docs/tagging-guide.md"
+Documentation = "https://github.com/Yibbzz/networkforge/blob/main/docs/network-rules.md"
 Changelog = "https://github.com/Yibbzz/networkforge/blob/main/CHANGELOG.md"
 Issues = "https://github.com/Yibbzz/networkforge/issues"
 

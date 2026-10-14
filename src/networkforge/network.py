@@ -249,9 +249,9 @@ def build_network(
 
     With standalone=True there is no OSM network: the custom lines are
     the whole network, joined to each other by the same rules (see
-    "A network of your own lines" in docs/tagging-guide.md).
+    "A network of your own lines" in docs/network-rules.md).
 
-    Tags (see docs/tagging-guide.md):
+    Tags (see docs/network-rules.md):
         Each custom feature's own attributes (highway, maxspeed, ...)
         are its tags. The blanket options add to them:
           preset         name of a ready-made tag set (presets.PRESETS)

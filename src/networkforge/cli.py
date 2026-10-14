@@ -288,7 +288,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Build and edit routable street networks: add your own roads, cycleways "
                     "and paths to OpenStreetMap, change or remove existing streets, or "
                     "build a network from your own lines alone.",
-        epilog="Tagging guide: docs/tagging-guide.md. Large areas: docs/osm-data.md.",
+        epilog="Network rules: docs/network-rules.md. Large areas: docs/osm-data.md.",
     )
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {version('networkforge')}")

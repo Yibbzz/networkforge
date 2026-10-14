@@ -199,7 +199,7 @@ def test_tag_errors_are_typed_and_link_the_guide():
     error = info.value
     assert isinstance(error, NetworkForgeError) and isinstance(error, ValueError)
     assert len(error.problems) == 2
-    assert "tagging-guide.md#fixing-tag-errors" in str(error)
+    assert "docs/network-rules.md#fixing-tag-errors" in str(error)
 
 
 def test_invalid_layer_rejected():

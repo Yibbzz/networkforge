@@ -47,7 +47,7 @@ them and they are kept: `test_existing_turn_restriction_is_obeyed_before_and_aft
 ArcGIS stores turns in a turn feature class: short lines drawn across a
 junction, from one edge to another. Here a turn is drawn the same way,
 in the custom layer, with OSM's `restriction` tag; it becomes an OSM
-turn restriction relation ([how](tagging-guide.md#turn-restrictions)).
+turn restriction relation ([how](network-rules.md#turn-restrictions)).
 Tests in `tests/valhalla/test_turns.py`:
 
 | Case | Test |
@@ -71,7 +71,7 @@ itself).
 
 ArcGIS builds a network from any street feature class. `networkforge
 build --no-osm` does the same from a line layer, with no OpenStreetMap
-([how](tagging-guide.md#a-network-of-your-own-lines)). ArcGIS's
+([how](network-rules.md#a-network-of-your-own-lines)). ArcGIS's
 **connectivity policy** is `--join-at`:
 
 | ArcGIS | Here | Test |
@@ -95,7 +95,7 @@ ferries are lines with `route=ferry`). Points: `tests/valhalla/test_points.py`.
 In ArcGIS you edit the street features and rebuild. Here a feature that
 carries a street's OSM id changes that street: copy it from the "before"
 layer or a QuickOSM layer, edit an attribute, add it to the custom layer
-([how](tagging-guide.md#changing-existing-streets)). Tests in
+([how](network-rules.md#changing-existing-streets)). Tests in
 `tests/valhalla/test_edits.py`:
 
 | Change | Tag | Test |

@@ -90,7 +90,16 @@ in Valhalla).
 - [network-analyst.md](docs/network-analyst.md#cycling-infrastructure)
   says which cycling tags Valhalla routes by and which it ignores
   (`cycleway:both`, `bicycle_road`, `cyclestreet`).
-- [tagging-guide.md](docs/tagging-guide.md) brought up to date. The
+- The tagging guide is now [network-rules.md](docs/network-rules.md),
+  "Network rules: how your lines become a network", written for people
+  using the QGIS plugin. It opens with a short summary of the rules
+  instead of code, names each setting as the QGIS form does, and ends
+  with a table of each setting in QGIS, on the command line and in
+  Python. The code examples are in the README. `docs/tagging-guide.md`
+  is now a short page pointing to the new one. Errors' `guide` (in
+  `--json` error events too) now names the file:
+  `network-rules.md#presets`, not `presets`.
+- The guide brought up to date. The
   quick start shows the command line, the PBF and the GeoPackage, plus
   a table of Python options with their CLI flags. Points are allowed in
   the layer, and lines that join nothing are kept with a warning (the

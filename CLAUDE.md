@@ -40,11 +40,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `logging` (never print in src/) and calls optional `progress(step, total, text)`.
   Tags: feature attributes + blanket (`preset` then `network_tags`), `overwrite_tags` flips priority.
 - `presets.py` - named tag sets (`PRESETS`); no maxspeed on purpose. Every preset must appear in
-  the docs/tagging-guide.md table with correct tags and Car/Bike/Walk ticks (test_presets.py checks).
+  the docs/network-rules.md table with correct tags and Car/Bike/Walk ticks (test_presets.py checks).
 - `inputs.py` - pre-build checks: bbox/custom GeoDataFrames, CRS, lines only, inside bbox, 2D.
   Boxes over `MAX_OVERPASS_AREA_KM2` (1,000) are refused unless `osm_source` is given.
 - `errors.py` - exception hierarchy (NetworkForgeError; InputError is also a ValueError). Raise these,
-  not bare ValueError/AssertionError; pass `guide=` anchor into docs/tagging-guide.md where useful.
+  not bare ValueError/AssertionError; pass `guide=` anchor into docs/network-rules.md where useful
+  (stored and sent in JSON as "network-rules.md#anchor"; the QGIS plugin links "<file>.md#anchor" as is).
 - `edits.py` - changing existing streets: custom features with an OSM way id (`osm_id` /
   `osmid`, `EDIT_ID_COLUMNS`) are split off in step 1 (`split_edits`) and applied to a COPY of the
   OSM edge table right after download (`apply_edits`); the before network is never touched. Only
@@ -182,8 +183,11 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   pyproject), the Valhalla job and the QGIS check on push/PR/nightly; live tests + thorough
   Hypothesis nightly.
 
-Docs: `docs/tagging-guide.md` is the user-facing reference (presets, attributes, recipes, errors);
-`docs/osm-data.md` covers Overpass vs local extracts. Error `guide=` is a tagging-guide anchor or
+Docs: `docs/network-rules.md` is the user-facing reference, written for QGIS plugin users (the
+plugin's tutorial links to it): how lines join, presets, attributes, edits, turns, points, recipes,
+errors, warnings, and a QGIS / CLI / Python settings table at the end. No code in it: Python and CLI
+examples live in README.md. (Renamed from tagging-guide.md 2026-10-14; a stub keeps old links.)
+`docs/osm-data.md` covers Overpass vs local extracts. Error `guide=` is a network-rules anchor or
 "file.md#anchor" in docs/.
 Keep it in sync with presets.py/validation.py when tags or messages change.
 

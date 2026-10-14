@@ -206,7 +206,7 @@ def test_turn_line_that_cannot_be_placed(build, line, message):
     with pytest.raises(InputError, match=message) as info:
         build([(line, {"restriction": "no_left_turn"})])
     assert info.value.issues[0]["feature"] == 0
-    assert info.value.guide == "turn-restrictions"
+    assert info.value.guide == "network-rules.md#turn-restrictions"
 
 
 @pytest.mark.parametrize("tags, message", [

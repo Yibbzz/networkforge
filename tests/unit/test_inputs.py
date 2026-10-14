@@ -92,7 +92,7 @@ def test_custom_data_needs_a_crs():
 def test_unusable_features_rejected_when_strict(bad, message):
     with pytest.raises(InputError, match=message) as info:
         clean_custom_data(features(LINE, bad), BBOX)
-    assert info.value.guide == "preparing-your-data"
+    assert info.value.guide == "network-rules.md#preparing-your-data"
 
 
 def test_unusable_features_dropped_with_warning_when_not_strict(caplog):

@@ -16,12 +16,12 @@ and as a GeoPackage for QGIS.
   bridge, a tunnel or on another layer.
 - **Change** existing streets: copy one into your layer and edit an
   attribute to make it one-way, close it, pedestrianise it or change its
-  speed limit ([how](docs/tagging-guide.md#changing-existing-streets)).
+  speed limit ([how](docs/network-rules.md#changing-existing-streets)).
 - **Remove** existing streets (`remove=yes`).
 - **Ban or force turns** at junctions, drawn as short lines through the
-  junction ([how](docs/tagging-guide.md#turn-restrictions)).
+  junction ([how](docs/network-rules.md#turn-restrictions)).
 - **Build a network from your own lines alone**, with no OpenStreetMap
-  ([how](docs/tagging-guide.md#a-network-of-your-own-lines)).
+  ([how](docs/network-rules.md#a-network-of-your-own-lines)).
 - **Before and after**: the untouched network and the changed one, to
   compare routes, travel times and catchments.
 - **Describe streets with OpenStreetMap tags** as plain attributes
@@ -54,8 +54,7 @@ is not a full transport model:
   travel times come from speed limits (or default speeds per road type).
 - **Turn restrictions are for routers.** Existing ones and the ones you
   draw are written to the OSM file and Valhalla obeys them; the
-  GeoPackage (QGIS's own network tools) can't show them. Restrictions
-  through a stretch of street ("via way") can't be drawn yet.
+  GeoPackage (QGIS's own network tools) can't show them.
 - **The GeoPackage is simpler than a router.** Its `car`, `bike` and
   `walk` columns say who may use each street and in which direction,
   which is what QGIS's network tools need. It knows nothing of turn
@@ -104,8 +103,11 @@ networkforge build --help         # every option
 
 - `--json` puts one JSON object per line on stdout; readable logs stay on
   stderr. Events: `progress`, `warning` (with the `features` or `fields`
-  it's about), `done` (output paths and counts), `error` (with `type`,
-  `message`, `guide`, and `issues`: `[{"feature": 3, "message": ...}]`).
+  it's about, and `gaps` - `[west, south, east, north]` boxes - when a
+  local OSM file doesn't cover the area), `done` (output paths and
+  counts), `error` (with `type`, `message`, `guide`, and `issues`:
+  `[{"feature": 3, "message": ...}]`). `guide` is the page and section
+  in `docs/` that explains the fix, e.g. `network-rules.md#presets`.
 - `--id-field NAME` names features in warnings and issues by that
   attribute, e.g. `--id-field fid` for a GeoPackage's feature ids, so a
   front end can select the features concerned. Default: row number.
@@ -196,7 +198,8 @@ except motorways, bridges, tunnels and other layers, which they pass
 over or under. Tags are checked against OSM rules before anything is
 downloaded.
 
-**[Tagging guide](docs/tagging-guide.md)**: presets, every supported
+**[Network rules](docs/network-rules.md)**: how lines join the network,
+presets, every supported
 attribute, recipes (bypass, cycle route, bus gate, bridge, slip road),
 and what each error message means.
 

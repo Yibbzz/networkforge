@@ -364,7 +364,7 @@ def test_edit_that_cannot_be_placed_is_refused(build, coords, tags, message):
     with pytest.raises(InputError, match=message) as info:
         build([(coords, tags)])
     assert info.value.issues[0]["feature"] == 0
-    assert info.value.guide == "changing-existing-streets"
+    assert info.value.guide == "network-rules.md#changing-existing-streets"
 
 
 def test_edit_slightly_askew_still_lies_along_the_block(build):
@@ -478,7 +478,7 @@ def test_cli_reports_an_edit_that_cannot_be_placed(fake_osm, files, capsys):
     assert code == EXIT_INPUT
     assert error["issues"] == [{"feature": 41, "message": error["issues"][0]["message"]}]
     assert "not in this network" in error["issues"][0]["message"]
-    assert error["guide"] == "changing-existing-streets"
+    assert error["guide"] == "network-rules.md#changing-existing-streets"
 
 
 def test_info_lists_the_edit_id_fields(capsys):
