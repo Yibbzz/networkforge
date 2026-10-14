@@ -149,7 +149,7 @@ the build (or are logged with `strict=False`).
 | Attribute | Values | What it does |
 |---|---|---|
 | `highway` | **Required** (except on a [ferry](#ferries)). Roads: `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `unclassified`, `residential`, `living_street`, `service`, `road`, and `*_link` slip roads. Paths: `cycleway`, `footway`, `path`, `pedestrian`, `bridleway`, `steps`, `track`, `corridor`. Buses: `busway`, `bus_guideway`. | The kind of way. Decides which modes may use it (see the preset table). |
-| `maxspeed` | `30 mph`, `50` (km/h), `20 knots`, `none`, `walk`, `signals`, `variable`, or a country code like `GB:nsl_single` | Car speed. **A number with no unit is km/h**, so write `mph` for UK limits. Without it, a default for the road type is used. |
+| `maxspeed` | `30 mph`, `50` (km/h), `20 knots`, `none`, `walk`, `signals`, `variable`, or a country code like `GB:nsl_single` | Car speed (above 0). **A number with no unit is km/h**, so write `mph` for UK limits. Without it, a default for the road type is used. |
 | `oneway` | `yes`, `no`, `-1` (against the drawn direction), `reversible`, `alternating` | One-way traffic. Direction = the direction the line was drawn. Walking ignores it. |
 | `lanes` | whole number ≥ 1 | Kept in the output for routing engines that use it. |
 | `access` | `yes`, `no`, `private`, `permissive`, `destination`, `designated`, `customers`, `delivery`, `agricultural`, `forestry`, `discouraged`, `permit`, `use_sidepath`, `dismount`, `official`, `restricted`, `military`, `emergency`, `unknown` | Access for everyone. See [Who may use a way](#who-may-use-a-way). |
@@ -162,8 +162,8 @@ the build (or are logged with `strict=False`).
 | `maxheight`, `maxwidth`, `maxlength` | metres: `3.5`, `3.5 m`; or `12 ft`, `11'6"` | Size limit. Routers keep taller / wider / longer vehicles off it (set the vehicle's size in the router). |
 | `maxweight`, `maxaxleload` | tonnes: `7.5`, `7.5 t`; or `5 st`, `12000 lbs` | Weight limit, used the same way. |
 | `surface` | `asphalt`, `paved`, `gravel`, `unpaved`, `dirt`, ... | Unpaved surfaces are slower, and routers can be told to avoid them. |
-| `bridge` | `yes`, `viaduct`, ... (`no` = not a bridge) | Passes **over** the ways it crosses instead of joining them. |
-| `tunnel` | `yes`, `building_passage`, ... (`no` = not a tunnel) | Passes **under** the ways it crosses instead of joining them. |
+| `bridge` | `yes`, `viaduct`, ... (`no`, `0`, `false` = not a bridge) | Passes **over** the ways it crosses instead of joining them. |
+| `tunnel` | `yes`, `building_passage`, ... (`no`, `0`, `false` = not a tunnel) | Passes **under** the ways it crosses instead of joining them. |
 | `layer` | whole number, e.g. `1`, `-1` (default `0`) | Ways on different layers cross without joining. |
 | `name`, `ref` | any text | Kept in the output. |
 | `route` | `ferry`, `shuttle_train` (with no `highway`) | A [ferry](#ferries) or car shuttle train. |
@@ -264,6 +264,9 @@ it crosses on the way, like a bridge.
   ferry's time. NetworkForge's own OSMnx routing uses the default speed
   and ignores `duration`.
 - A line with both `highway` and `route=ferry` is a street.
+- **Existing ferries** from OpenStreetMap are kept as they are. If no
+  street reaches a ferry's pier, a new line ending on it (or within
+  `snap_tolerance`) joins the ferry there.
 
 ## Changing existing streets
 
@@ -318,7 +321,7 @@ changed street still apply.
 | Message | Meaning |
 |---|---|
 | `OSM way N is not in this network` | The id isn't a street inside the area: it is outside the box, isn't a routable way, or OpenStreetMap changed since the layer was made. Copy the street from the "before" layer of a fresh build. |
-| `doesn't lie along OSM way N` | The feature's line isn't on that street. Its geometry must follow the street (within the snap tolerance). |
+| `doesn't lie along OSM way N` | The feature's line isn't on that street. Its geometry must follow the street (within the snap tolerance), running the same way: a line drawn across a block doesn't change it. |
 | `overlaps feature X on OSM way N with a different change` | Two features ask for different things on the same stretch. Put both changes on one feature. |
 | `remove= is for existing streets` (or `remove_tags=`) | A feature has `remove` or `remove_tags` set but no OSM id, so there is no street to change. |
 | `remove_tags can't delete highway` | Use `remove=yes` to take the street out. |

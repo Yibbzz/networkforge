@@ -72,6 +72,11 @@ ONEWAY_BACKWARD = {"-1", "reverse", "t"}
 # Two features this close (m) to the same stretch are both on it.
 ON_FEATURE = 0.01
 
+# A feature lies along a stretch if, beside the stretch's middle, the two
+# run within this angle (degrees) of each other: one drawn ACROSS a block
+# passes its middle too.
+MAX_ANGLE = 45
+
 # The "change" a feature with remove=yes asks for.
 REMOVAL = {REMOVE_COLUMN: "yes"}
 
@@ -271,7 +276,8 @@ def apply_edits(
         middles = shapely.line_interpolate_point(
             edges.geometry.to_numpy()[of_way], 0.5, normalized=True)
         distances = shapely.distance(middles, line)
-        covered = edges.index[of_way][distances <= tolerance]
+        near = (distances <= tolerance) & _parallel(edges.geometry.to_numpy()[of_way], line)
+        covered = edges.index[of_way][near]
         if len(covered) == 0:
             issues.append((feature, f"doesn't lie along OSM way {way_id}"))
             continue
@@ -305,7 +311,7 @@ def apply_edits(
             continue
 
         wanted[number], way_steps[number] = change, steps
-        claims += zip(covered, distances[distances <= tolerance], [number] * len(covered),
+        claims += zip(covered, distances[near], [number] * len(covered),
                       strict=True)
 
     # 2. One feature per edge. A stretch shorter than the tolerance is also
@@ -383,6 +389,24 @@ def apply_edits(
     if not changes:
         edges = edges.drop(columns=[MODIFIED_COLUMN, EDIT_COLUMN])
     return edges, changes, removed
+
+
+def _direction(lines, at) -> np.ndarray:
+    """Unit vectors along `lines` at distances `at` along them (1 m each side)."""
+    lengths = shapely.length(lines)
+    ahead = shapely.line_interpolate_point(lines, np.minimum(at + 1, lengths))
+    behind = shapely.line_interpolate_point(lines, np.maximum(at - 1, 0))
+    vectors = shapely.get_coordinates(ahead) - shapely.get_coordinates(behind)
+    return vectors / np.maximum(np.linalg.norm(vectors, axis=1), 1e-12)[:, None]
+
+
+def _parallel(stretches: np.ndarray, line) -> np.ndarray:
+    """For each stretch: does `line`, where nearest its middle, run along it (MAX_ANGLE)?"""
+    middles = shapely.line_interpolate_point(stretches, 0.5, normalized=True)
+    along = _direction(stretches, shapely.length(stretches) / 2)
+    feature = np.full(len(stretches), line, dtype=object)
+    drawn = _direction(feature, shapely.line_locate_point(feature, middles))
+    return np.abs((along * drawn).sum(axis=1)) >= np.cos(np.radians(MAX_ANGLE))
 
 
 def _drawn_along(line, covered: gpd.GeoDataFrame, steps: set, node_xy) -> bool:

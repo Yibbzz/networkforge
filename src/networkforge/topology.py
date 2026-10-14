@@ -32,11 +32,16 @@ APART = 5e-3
 GRADE_SEPARATED_HIGHWAYS = {"motorway", "motorway_link"}
 
 
+# Values that mean a bridge/tunnel tag is not there (routers read 0 and
+# false as no too).
+_ABSENT = {"no", "0", "false"}
+
+
 def _tag_present(value) -> bool:
-    """True for a real tag value other than 'no' (None/NaN = absent)."""
+    """True for a real tag value other than no/0/false (None/NaN = absent)."""
     if value is None or (isinstance(value, float) and value != value):
         return False
-    return str(value) != "no"
+    return str(value).strip().lower() not in _ABSENT
 
 
 def _layer(tags) -> int:

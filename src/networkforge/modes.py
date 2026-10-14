@@ -285,12 +285,14 @@ def maxspeed_kph(value) -> float | None:
     """
     A maxspeed tag in km/h: "50" (km/h), "30 mph", "20 knots", or
     ";"-separated values (averaged, as OSMnx does). None if there's no
-    number (e.g. "signals", "GB:nsl_single").
+    number above 0 (e.g. "signals", "GB:nsl_single", "0"): a speed of 0
+    would make every trip on the way take forever.
     """
     text = _as_text(value)
     if text is None:
         return None
-    speeds = [float(m[1]) * _TO_KPH[m[2]] for m in map(_SPEED.match, text.split(";")) if m]
+    speeds = [float(m[1]) * _TO_KPH[m[2]] for m in map(_SPEED.match, text.split(";"))
+              if m and float(m[1]) > 0]
     return sum(speeds) / len(speeds) if speeds else None
 
 
@@ -321,8 +323,14 @@ def add_travel_times(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
                if is_ferry(data)]
     for edge in ferries:
         graph.edges[edge]["highway"] = graph.edges[edge]["route"]
+    # OSMnx reads maxspeed=0 as 0 km/h (an endless trip): hide it, as
+    # maxspeed_kph does, so the way gets its type's speed.
+    zero = {(u, v, k): data.pop("maxspeed") for u, v, k, data in graph.edges(keys=True, data=True)
+            if "maxspeed" in data and maxspeed_kph(data["maxspeed"]) is None}
     graph = ox.add_edge_speeds(graph, hwy_speeds={**DEFAULT_SPEEDS_KPH, **FERRY_SPEEDS_KPH},
                                fallback=30)
     for edge in ferries:
         del graph.edges[edge]["highway"]
+    for edge, value in zero.items():
+        graph.edges[edge]["maxspeed"] = value
     return ox.add_edge_travel_times(graph)

@@ -65,6 +65,13 @@ def test_vertex_of_a_bridge_near_the_road_below_does_not_join_it(build, over, ta
     assert not nodes_of(edges, 0) & nodes_of(edges, 1)
 
 
+@pytest.mark.parametrize("value", ["0", "false"])
+def test_bridge_0_or_false_is_not_a_bridge(build, value):
+    """Routers read bridge=0 / false as no: the crossing is a junction."""
+    edges = build([(ROAD_NORTH, ROAD), ([at(0, 30), at(100, 30)], {**ROAD, "bridge": value})]).edges
+    assert len(nodes_of(edges, 0) & nodes_of(edges, 1)) == 1
+
+
 def test_vertex_of_a_road_under_a_bridge_does_not_join_it(build):
     road = [at(50, 0), at(50, 30), at(50, 90)]
     edges = build([(road, ROAD), ([at(0, 30), at(100, 30)], BRIDGE)]).edges

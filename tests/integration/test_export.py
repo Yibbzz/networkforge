@@ -12,6 +12,7 @@ import geopandas as gpd
 import osmium
 import osmnx as ox
 import pytest
+import shapely
 from shapely.geometry import LineString, box
 
 from networkforge import osm, write_osm
@@ -25,6 +26,8 @@ from tests.integration.grid import (
     FERRY_ID,
     FERRY_NODE,
     NO_ACCESS,
+    PIER_FERRY_ID,
+    PIER_NODES,
     RESTRICTION_ID,
     ROAD_ACROSS,
     ROAD_TAGS,
@@ -35,6 +38,7 @@ from tests.integration.grid import (
     all_pair_costs,
     grid_elements,
     grid_with_ferry,
+    grid_with_pier_ferry,
     synthetic_graph,
 )
 
@@ -299,6 +303,30 @@ def test_ferry_is_cropped_to_the_area(tmp_path, monkeypatch):
 
     assert ways[FERRY_ID][0] == [1, FERRY_NODE]
     assert all(ref in nodes for refs, _ in ways.values() for ref in refs)
+
+
+@pytest.mark.parametrize("end", [(150, -40), (150.6, -39.5)], ids=["on it", "within reach"])
+def test_line_drawn_to_a_ferry_no_street_reaches_joins_it(tmp_path, monkeypatch, end):
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_pier_ferry())
+    path = LineString([(X0 + 150, Y0), (X0 + end[0], Y0 + end[1])])
+    line = gpd.GeoDataFrame([{"highway": "footway"}], geometry=[path], crs=UTM)
+    result = build_and_export(BBOX, line, tmp_path)
+    write_osm(result.nodes, result.edges, tmp_path / "after.osm.pbf")
+    nodes, ways, _, _ = read_with_osmium(tmp_path / "after.osm.pbf")
+
+    pier, far_end = PIER_NODES
+    (custom,) = (refs for refs, tags in ways.values() if tags.get("nf:custom") == "yes")
+    assert custom[-1] == pier
+    assert ways[PIER_FERRY_ID][0] == list(PIER_NODES)
+    assert pier in result.nodes.index and far_end not in result.nodes.index
+    assert result.nodes.geometry[pier].distance(shapely.Point(X0 + 150, Y0 - 40)) < 0.01
+
+
+def test_ferry_ends_no_line_reaches_stay_out_of_the_network(tmp_path, monkeypatch):
+    monkeypatch.setattr(osm, "_download_elements", lambda polygon, kind: grid_with_pier_ferry())
+    result = build_and_export(BBOX, gpd.GeoDataFrame(
+        [ROAD_TAGS], geometry=[LineString(ROAD_ACROSS)], crs=UTM), tmp_path)
+    assert not set(PIER_NODES) & set(result.nodes.index)
 
 
 def test_tables_without_a_source_are_still_written(tmp_path):

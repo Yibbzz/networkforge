@@ -160,6 +160,26 @@ def grid_with_ferry() -> list[dict]:
     ]
 
 
+PIER_FERRY_ID, PIER_NODES = 710, (310, 311)
+
+
+def grid_with_pier_ferry() -> list[dict]:
+    """
+    grid_elements() plus a foot ferry from a pier 40 m south of Row 0
+    Street to another 60 m south of it: no street reaches either end, so
+    only a new line drawn to the pier connects the ferry.
+    """
+    to_wgs84 = Transformer.from_crs(UTM, "EPSG:4326", always_xy=True)
+    ends = [to_wgs84.transform(X0 + x, Y0 - y) for x, y in ((150, 40), (350, 60))]
+    return [
+        *grid_elements(),
+        *({"type": "node", "id": node, "lon": lon, "lat": lat, "tags": {}}
+          for node, (lon, lat) in zip(PIER_NODES, ends, strict=True)),
+        {"type": "way", "id": PIER_FERRY_ID, "nodes": list(PIER_NODES),
+         "tags": {"route": "ferry", "foot": "yes", "motor_vehicle": "no", "name": "Pier Ferry"}},
+    ]
+
+
 ISLAND_NODES = (401, 402, 403)
 ISLAND_WAY = 800
 

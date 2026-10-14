@@ -50,6 +50,17 @@ in Valhalla).
 - Control characters in a tag value made OSM XML that could not be read;
   an extent file without features and an infinite `--snap-tolerance` are
   input errors (exit 3), not crashes.
+- A new line drawn to the pier of an existing ferry that no street
+  reaches got a node of its own beside the ferry's, so the ferry stayed
+  out of reach in Valhalla. Its end now joins the ferry.
+- `maxspeed=0` gave endless travel times (GeoPackage minutes, OSMnx
+  routing): a speed of 0 is ignored, as routers do, and on a custom
+  feature it is an error.
+- `bridge=0` / `bridge=false` (and the same for `tunnel`) counted as a
+  bridge, so the line didn't join the streets it crossed. They mean no.
+- A change to an existing street drawn ACROSS a block (through the
+  middle of it) was applied to that block. A feature must now run along
+  the stretch, within 45 degrees.
 
 ### Tests
 - Cycling infrastructure is now tested in Valhalla

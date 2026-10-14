@@ -7,6 +7,7 @@ way).
 
 import pytest
 
+from tests.integration.grid import PIER_FERRY_ID, PIER_NODES, grid_with_pier_ferry
 from tests.valhalla.conftest import at, xy
 
 # Corner to corner across the grid: 566 m by ferry, 800 m by street. It
@@ -69,3 +70,19 @@ def test_a_ferry_ending_next_to_a_street_joins_it(scenario):
     route = built.after.route(at(0, 0), at(4, 4), "pedestrian", shortest=True)
     assert route.way_ids[0] == ferry
     assert route.length_m == pytest.approx(531.5 + 50, abs=2)
+
+
+def test_a_path_to_an_existing_ferrys_pier_lets_walkers_sail_it(scenario):
+    """
+    No street reaches the Pier Ferry: before, its far pier can't be
+    reached at all; a footway drawn from Row 0 Street to the near pier
+    joins the ferry there.
+    """
+    path = [xy(1.5, 0), xy(1.5, -0.4)]
+    built = scenario([(path, {"highway": "footway"})], elements=grid_with_pier_ferry())
+    far_pier = built.after.node(PIER_NODES[1])
+
+    assert built.before.route(at(1, 0), far_pier, "pedestrian", shortest=True) is None
+    route = built.after.route(at(1, 0), far_pier, "pedestrian", shortest=True)
+    assert route.way_ids[-1] == PIER_FERRY_ID
+    assert route.length_m == pytest.approx(50 + 40 + 201, abs=2)

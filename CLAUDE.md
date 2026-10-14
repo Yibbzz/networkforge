@@ -49,7 +49,9 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `osmid`, `EDIT_ID_COLUMNS`) are split off in step 1 (`split_edits`) and applied to a COPY of the
   OSM edge table right after download (`apply_edits`); the before network is never touched. Only
   tags differing from the source way's tags are changes; a feature claims the edges of that way
-  whose midpoint is within snap_tolerance (nearest feature wins; equal claims must agree). `oneway`
+  whose midpoint is within snap_tolerance and which it runs along (`MAX_ANGLE`, 45 degrees: a
+  line drawn across a block passes its midpoint too); nearest feature wins, equal claims must
+  agree. `oneway`
   is relative to the feature's drawn direction and stored in way terms; one-way changes rebuild
   the stretch's edges OSMnx-style (`_in_direction`). Edges get `modified="yes"` + `nf_edit` (edit
   number); tag changes travel in `edges.attrs[EDITS_ATTR]`. Export writes each edited run as its
@@ -229,6 +231,8 @@ Keep it in sync with presets.py/validation.py when tags or messages change.
   platforms or `area=yes` squares (tested), so OSMnx's "all" filter loses nothing but ferries.
   Ferries (`osm.is_ferry`, `OSMSource.ferries` / `ferry_nodes`, cropped to the bbox) bypass the
   edge table and are written verbatim by export; new node ids must start above ferry node ids.
+  Their ends no street reaches (`ferry_terminals`, `network._lone_ferry_terminals`) are added to
+  the nodes for steps 3-7 only, so a custom line END snaps onto them; unreached ones are dropped.
   NEW ferries (custom `route=ferry`, no highway; `modes.is_ferry`) DO go in the edge table: open to
   all modes unless access closes them, grade-separated (join only at their ends), 10 km/h or
   `duration` over the whole line (`export._ferry_speeds`), as Valhalla reads them.
