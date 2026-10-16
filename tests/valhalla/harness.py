@@ -204,6 +204,13 @@ class Router:
     def node(self, node_id: int) -> LonLat:
         return self._nodes_by_id()[node_id]
 
+    def node_tags(self, node_id: int) -> dict[str, str]:
+        """The tags node `node_id` has in the PBF."""
+        for node in osmium.FileProcessor(str(self.pbf), osmium.osm.NODE):
+            if node.id == node_id:
+                return dict(node.tags)
+        raise KeyError(node_id)
+
     def _nodes_by_id(self) -> dict[int, LonLat]:
         if self._nodes is None:
             self._nodes = {

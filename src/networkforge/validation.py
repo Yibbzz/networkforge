@@ -44,9 +44,12 @@ from .modes import (
 from .tags import (
     BASE_WAY_TAGS,
     EDIT_COLUMN,
+    EDIT_ID_COLUMNS,
     GPKG_ANALYSIS_COLUMNS,
     MODIFIED_COLUMN,
     PART_COLUMN,
+    REMOVE_COLUMN,
+    REMOVE_TAGS_COLUMN,
     ROUTING_WAY_TAGS,
 )
 
@@ -305,6 +308,8 @@ KNOWN_VALUES = {
     "segregated": {"yes", "no"},
     "lit": {"yes", "no", "automatic", "24/7", "sunset-sunrise", "limited", "interval", "disused"},
     "toll": {"yes", "no"},
+    **{key: {"yes", "no", "separate", "automatic", "manual"}
+       for key in ("ramp", "ramp:wheelchair", "ramp:stroller", "ramp:bicycle")},
     "junction": {"roundabout", "circular", "jughandle", "filter", "spui"},
     "bridge": {
         "yes", "no", "viaduct", "aqueduct", "boardwalk", "cantilever", "covered", "movable",
@@ -566,6 +571,64 @@ def check_custom_tags(
             raise error
         features = [i["feature"] for i in error.issues if i["feature"] is not None]
         log.warning("strict=False, continuing anyway: %s", error, extra={"features": features})
+
+
+# A field named like an OpenStreetMap key with a namespace
+# ("ramp:wheelchair", "cycleway:surface"): GIS fields rarely have colons.
+_NAMESPACED_KEY = re.compile(r"^[a-z][a-z0-9_]*(:[a-z0-9_]+)+$")
+
+# Common OSM way keys, without a colon, that NetworkForge doesn't write.
+UNWRITTEN_OSM_KEYS = {
+    "tactile_paving", "handrail", "step_count", "est_width", "covered", "indoor", "level",
+    "noexit", "cutting", "embankment", "priority_road", "overtaking", "hazard",
+    "traffic_calming", "kerb",
+}
+
+# Features named in one warning, at most.
+MAX_FEATURES = 10
+
+# Namespaces that never change a route: names, sources, notes, addresses
+# (OSM layers, e.g. from QuickOSM, are full of them).
+_NOT_FOR_ROUTING = (
+    "name", "alt_name", "old_name", "official_name", "loc_name", "short_name", "int_name",
+    "source", "note", "fixme", "description", "addr", "wikidata", "wikipedia", "wikimedia",
+    "check_date", "survey", "created_by", "image", "website", "url", "operator", "ref",
+)
+
+
+def warn_about_unwritten_tags(lines_gdf: gpd.GeoDataFrame) -> list[str]:
+    """
+    Warn about fields of the line features (new lines and changes to
+    existing streets) that look like OpenStreetMap tags but that
+    NetworkForge doesn't write: they reach the GeoPackage, not routers.
+    Only fields with a value on some feature count. Returns the fields.
+    """
+    written = (KNOWN_TAG_KEYS | RESERVED_COLUMNS | set(EDIT_ID_COLUMNS)
+               | {REMOVE_COLUMN, REMOVE_TAGS_COLUMN})
+    found = {}
+    for column in lines_gdf.columns:
+        if column == lines_gdf.geometry.name or column in written:
+            continue
+        namespaced = _NAMESPACED_KEY.match(column) is not None
+        if not (namespaced or column in UNWRITTEN_OSM_KEYS):
+            continue
+        if column.split(":")[0] in _NOT_FOR_ROUTING or _suggest_tag_key(column):
+            continue  # not a routing tag, or already warned about as misspelt
+        has_value = lines_gdf[column].map(_tag_value).notna()
+        if has_value.any():
+            found[column] = list(lines_gdf.index[has_value.to_numpy()])
+    if found:
+        log.warning(
+            "Field(s) %s look like OpenStreetMap tags, but NetworkForge doesn't write them "
+            "to the OSM file, so routers won't see them (they stay in the GeoPackage). "
+            "Ask for a tag to be added if a router needs it.",
+            ", ".join(f"{column!r} (features {', '.join(map(str, features[:MAX_FEATURES]))}"
+                      f"{' ...' if len(features) > MAX_FEATURES else ''})"
+                      for column, features in found.items()),
+            extra={"fields": list(found),
+                   "features": list(dict.fromkeys(f for fs in found.values() for f in fs))},
+        )
+    return list(found)
 
 
 def _suggest_tag_key(column: str) -> str | None:

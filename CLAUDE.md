@@ -94,6 +94,10 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   `edges.attrs[SOURCE_ATTR]`; build_network re-attaches it to its results and export writes the
   existing network from it. Ways cut at an extract's edge keep their known runs.
   `network_type` = OSMnx download filter; keep `"all"` so one build serves every mode.
+- `validation.warn_about_unwritten_tags` (step 1, and `networkforge check`): fields with a value
+  that look like OSM tags (`key:sub` names, or `UNWRITTEN_OSM_KEYS`) but aren't in tags.py warn
+  once; `_NOT_FOR_ROUTING` namespaces (name, source, addr, note ...) and misspellings are skipped.
+  Adding a tag to ROUTING_WAY_TAGS writes it for lines and edits (edits.edit_tags uses KNOWN_TAG_KEYS).
 - `coverage.py` - `warn_about_gaps`: after reading a local file, warns (once, naming each part;
   `extra={"gaps": bounds}` -> `gaps` in the CLI's JSON warning event) when part of the area has no
   street at all: cells (~40 across) no way crosses, joined side to side, reaching the area's

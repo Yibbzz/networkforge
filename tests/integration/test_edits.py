@@ -197,6 +197,16 @@ def test_deleting_a_tag(build, export):
     assert set(layer.speed_kph) == {30.0}  # residential default, not 48.3 (30 mph)
 
 
+def test_wheelchair_tags_on_an_existing_street(build, export):
+    """Wheelchair access, surface and a ramp are changes like any other."""
+    tags = {"wheelchair": "no", "surface": "gravel", "ramp:wheelchair": "yes"}
+    result = build([(ONE_BLOCK, {"osm_id": ROW_1, **tags})])
+    _, after = export(result)
+
+    (changed,) = [t for _, t in after.values() if t.get("nf:modified") == "yes"]
+    assert changed.items() >= tags.items()
+
+
 def test_deleting_several_tags_with_a_new_value_for_another(build, export):
     result = build([(ONE_BLOCK, {"osm_id": ROW_1, "remove_tags": "maxspeed; name",
                                  "surface": "gravel"})])

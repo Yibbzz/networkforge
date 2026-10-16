@@ -188,6 +188,7 @@ the build, and the log names each feature and what is wrong with it
 | `foot` | same values as `access` | Access for pedestrians. `foot=yes` on a cycleway lets people walk on it. |
 | `bus`, `psv`, `hgv`, `goods`, `taxi`, `motorcycle`, `moped`, `emergency`, `horse`, `hov` | same values as `access` | Access for other vehicles, for routers that have such a profile (Valhalla: bus, truck, taxi, motorcycle). `access=no` + `bus=yes` is a bus-only road. |
 | `wheelchair` | `yes`, `no`, `limited`, ... | `no` keeps wheelchair routing off it (Valhalla's wheelchair profile also avoids steps and rough surfaces). |
+| `ramp`, `ramp:wheelchair`, `ramp:stroller`, `ramp:bicycle` | `yes`, `no`, `separate` | A ramp beside `highway=steps`. Written for routers that read it; Valhalla 3.9 doesn't, and keeps wheelchairs off all steps. |
 | `motorroad` | `yes`, `no` | `yes`: motorway rules on any road - no walking or cycling. |
 | `maxheight`, `maxwidth`, `maxlength` | metres: `3.5`, `3.5 m`; or `12 ft`, `11'6"` | Size limit. Routers keep taller / wider / longer vehicles off it (set the vehicle's size in the router). |
 | `maxweight`, `maxaxleload` | tonnes: `7.5`, `7.5 t`; or `5 st`, `12000 lbs` | Weight limit, used the same way. |
@@ -580,6 +581,7 @@ fix. The log names the features (or fields) each one is about.
 | `change nothing` | A change to an existing street, or a point, matches OpenStreetMap already. |
 | `is drawn as a ... but tagged ...` | A turn restriction's value doesn't match the turn drawn. |
 | `has access tags but no barrier` | Routers ignore access tags on a point without `barrier`. |
+| `look like OpenStreetMap tags, but NetworkForge doesn't write them` | A field such as `tactile_paving` or `cycleway:surface` is a real tag, but not one NetworkForge writes for your lines, so routers won't see it (it stays in the GeoPackage). Ask for it to be added if a router needs it. |
 | `has no streets in about N% of the area` | The downloaded OSM file stops part way across the area (a region's file ends at its boundary), so those streets are missing. See [osm-data.md](osm-data.md#things-to-check). |
 | `reference nodes the file doesn't contain` | The downloaded file cuts ways at its edge; crop a bigger one. |
 

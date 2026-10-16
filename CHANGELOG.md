@@ -9,6 +9,15 @@ a breaking change means a new major version.
 ## [Unreleased]
 
 ### Added
+- `ramp`, `ramp:wheelchair`, `ramp:stroller` and `ramp:bicycle` are
+  written for your own lines and for changes to existing streets (they
+  were dropped), and their values are checked. Valhalla tests record
+  what 3.9 does with them and with kerbs: nothing yet. Steps with a
+  ramp still stop a wheelchair, and no kerb does.
+- A warning names fields that look like OpenStreetMap tags
+  (`tactile_paving`, `cycleway:surface` ...) but that NetworkForge
+  doesn't write, so routers won't see them. Names, sources, notes and
+  addresses (`name:en`, `source:maxspeed` ...) aren't warned about.
 - A warning when a local OSM file (`osm_source=` / `--osm-source`)
   doesn't cover the whole area. A region's extract stops at its
   boundary, so a box reaching across it quietly lost streets: built from

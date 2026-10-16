@@ -39,8 +39,9 @@ ROUTING_WAY_TAGS = (
     "turn:lanes", "turn:lanes:forward", "turn:lanes:backward",
     # Names and signs used in turn-by-turn directions
     "alt_name", "official_name", "int_ref", "destination", "destination:ref", "junction:ref",
-    # Walking
+    # Walking, and ramps for wheelchairs, prams and bikes (on steps)
     "sidewalk", "footway", "crossing",
+    "ramp", "ramp:wheelchair", "ramp:stroller", "ramp:bicycle",
     # Cycle infrastructure
     "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
     "segregated", "bicycle_road", "cyclestreet", "shoulder",

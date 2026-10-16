@@ -66,6 +66,7 @@ from .validation import (
     disconnected_custom_edges,
     network_pieces,
     resolve_custom_tags,
+    warn_about_unwritten_tags,
 )
 
 log = logging.getLogger(__name__)
@@ -349,6 +350,8 @@ def build_network(
     check_point_tags(points_gdf, strict=strict)
     custom_data_gdf, turns_gdf = split_turns(custom_data_gdf)
     check_turn_tags(turns_gdf, strict=strict)
+
+    warn_about_unwritten_tags(custom_data_gdf)
 
     # In a standalone network every feature is a line of the network.
     if standalone:

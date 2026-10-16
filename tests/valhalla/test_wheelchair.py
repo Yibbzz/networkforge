@@ -73,3 +73,38 @@ def test_an_existing_path_turned_into_steps_stops_wheelchairs_only(scenario):
     assert metres("before") == metres("before", **WHEELCHAIR) == 200
     assert metres("after") == 200
     assert metres("after", **WHEELCHAIR) == 400     # round the block
+
+
+# What Valhalla 3.9 does not read for wheelchairs. NetworkForge writes
+# these tags (checked below), so another router - or a later Valhalla -
+# can use them; if one of these tests fails, Valhalla has started to.
+
+@pytest.mark.parametrize("ramp", [
+    {"ramp:wheelchair": "yes"},
+    {"ramp": "yes"},
+    {"wheelchair": "yes"},
+])
+def test_steps_with_a_ramp_are_still_steps_to_valhalla(scenario, ramp):
+    built = scenario([(SHORTCUT, {"highway": "steps", **ramp})])
+    (way,) = built.custom_ways
+    assert built.after.ways[way][1].items() >= ramp.items()   # in the PBF
+
+    in_a_wheelchair, _ = trip(scenario, {"highway": "steps", **ramp}, **WHEELCHAIR)
+    assert not in_a_wheelchair
+
+
+@pytest.mark.parametrize("kerb", [
+    {"barrier": "kerb"},
+    {"barrier": "kerb", "kerb": "raised"},
+    {"barrier": "kerb", "wheelchair": "no"},
+    {"kerb": "raised"},
+])
+def test_valhalla_does_not_stop_a_wheelchair_at_a_kerb(scenario, kerb):
+    """A kerb (a point) in the middle of the new path."""
+    built = scenario([(SHORTCUT, {"highway": "footway"}), ((xy(1.5, 1.5),), kerb)])
+    (way,) = built.custom_ways
+    refs = built.after.ways[way][0]
+    assert any(built.after.node_tags(ref) == kerb for ref in refs)   # in the PBF
+
+    route = built.after.route(FROM, TO, "pedestrian", shortest=True, **WHEELCHAIR)
+    assert route.uses(way)

@@ -90,6 +90,7 @@ from .validation import (
     ONEWAY_VALUES,
     check_custom_tags,
     resolve_custom_tags,
+    warn_about_unwritten_tags,
 )
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_INPUT, EXIT_DOWNLOAD, EXIT_INTEGRITY = range(6)
@@ -201,6 +202,7 @@ def cmd_check(args, emit) -> int:
     check_point_tags(points, strict=True)
     custom, turns = split_turns(custom)
     check_turn_tags(turns, strict=True)
+    warn_about_unwritten_tags(custom)
     custom, edits = split_edits(custom)
     check_edit_tags(edits, strict=True)
 

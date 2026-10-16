@@ -159,9 +159,12 @@ and `surface=gravel`; an existing path changed to steps (by its
 `osm_id`) sends wheelchairs round and nobody else. `incline` is written
 but not acted on: Valhalla would need elevation data.
 
-`ramp:wheelchair` is not among the tags written for your own lines (it
-is kept on existing OpenStreetMap ways). Valhalla doesn't read it; R5
-does.
+`ramp`, `ramp:wheelchair`, `ramp:stroller` and `ramp:bicycle` are
+written for your own lines and changes, and kerbs (`barrier=kerb`,
+`kerb=raised|lowered|flush`) for points, so a router that reads them
+can use them. Valhalla 3.9 doesn't (tested): steps with
+`ramp:wheelchair=yes`, `ramp=yes` or even `wheelchair=yes` still turn a
+wheelchair back, and no kerb stops one.
 
 ## Less common tags
 

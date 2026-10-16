@@ -253,3 +253,44 @@ def test_one_warning_per_value_naming_every_feature(caplog):
         check(gdf, {})
     (record,) = [r for r in caplog.records if "is not a value routers know" in r.getMessage()]
     assert record.features == [0, 1]
+
+
+# ---------------------------------------------------------------------
+# Fields that look like OSM tags NetworkForge doesn't write
+# ---------------------------------------------------------------------
+
+def unwritten(**columns):
+    from networkforge.validation import warn_about_unwritten_tags
+    return warn_about_unwritten_tags(custom(highway="footway", **columns))
+
+
+@pytest.mark.parametrize("field", ["cycleway:surface", "parking:lane:both", "tactile_paving",
+                                   "handrail", "step_count"])
+def test_fields_like_osm_tags_that_are_not_written_are_warned_about(field, caplog):
+    with caplog.at_level("WARNING"):
+        assert unwritten(**{field: "yes"}) == [field]
+    assert f"'{field}' (features 0)" in caplog.text
+    assert "routers won't see them" in caplog.text
+
+
+@pytest.mark.parametrize("field", [
+    "ramp:wheelchair", "ramp", "oneway:bicycle", "maxspeed:hgv",  # written
+    "name:en", "source:maxspeed", "addr:street", "note",          # not for routing
+    "notes", "cost", "id", "Tactile:paving",                      # GIS fields, not tags
+    "osm_id", "remove", "remove_tags",                            # NetworkForge's own
+])
+def test_fields_that_are_written_or_not_tags_are_not_warned_about(field):
+    assert unwritten(**{field: "yes"}) == []
+
+
+def test_empty_fields_are_not_warned_about():
+    assert unwritten(**{"cycleway:surface": None}) == []
+
+
+def test_misspelt_tags_get_only_the_did_you_mean_warning():
+    assert unwritten(**{"ramp:whelchair": "yes"}) == []
+
+
+def test_ramp_values_are_checked(caplog):
+    check(custom(highway="steps", **{"ramp:wheelchair": "yse"}), {})
+    assert "ramp:wheelchair='yse' is not a value routers know" in caplog.text
