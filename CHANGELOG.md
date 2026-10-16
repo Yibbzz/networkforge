@@ -8,6 +8,8 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-16
+
 ### Added
 - `ramp`, `ramp:wheelchair`, `ramp:stroller` and `ramp:bicycle` are
   written for your own lines and for changes to existing streets (they
