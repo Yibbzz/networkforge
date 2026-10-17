@@ -110,6 +110,20 @@ def test_bridge_crosses_without_joining():
     assert len(edges) == 3  # nothing was cut at the crossing
 
 
+@pytest.mark.parametrize("bridge, road", [
+    # a vertex of the bridge on the road, or within snap_tolerance of it
+    ([at(1, 0), at(1, 1), at(1, 2)], [at(0, 1), at(2, 1)]),
+    ([at(1, 0), (X0 + 100, Y0 + 100.6), at(1, 2)], [at(0, 1), at(2, 1)]),
+    # a vertex of the road under the bridge
+    ([at(1, 0), at(1, 2)], [at(0, 1), at(1, 1), at(2, 1)]),
+], ids=["bridge-vertex-on-road", "bridge-vertex-near-road", "road-vertex-under-bridge"])
+def test_bridge_with_a_vertex_at_the_crossing_does_not_join(bridge, road):
+    """Engines up to v1.0.1 joined these: only a crossing without a vertex stayed apart."""
+    nodes, edges = build((road, ROAD), (bridge, {**ROAD, "bridge": "yes", "layer": "1"}))
+    road_rows, bridge_rows = edges[edges.nf_part == 0], edges[edges.nf_part == 1]
+    assert not {*road_rows.u, *road_rows.v} & {*bridge_rows.u, *bridge_rows.v}
+
+
 def test_preset_and_attributes_work_as_with_osm(tmp_path):
     nodes, edges = build(([at(0, 0), at(1, 0)], {"name": "A", "maxspeed": 30}),
                          ([at(1, 0), at(1, 1)], {"name": "B", "highway": "footway"}),
