@@ -6,8 +6,8 @@
 Build and edit routable street networks from GIS layers. Add your own
 roads, cycleways and paths to OpenStreetMap, change or remove existing
 streets by editing attributes, or build a network from your own lines
-alone - and get the result as OSM PBF for routers (tested in Valhalla)
-and as a GeoPackage for QGIS.
+alone - and get the result as OSM PBF for routers (tested in Valhalla
+and R5) and as a GeoPackage for QGIS.
 
 ## What it does
 
@@ -32,7 +32,10 @@ and as a GeoPackage for QGIS.
 The OSM PBF output is tested by routing on it with
 [Valhalla](https://valhalla.github.io/valhalla/): the "before" file routes
 like OpenStreetMap itself, and each rule above is checked for cars,
-buses, lorries, bikes and walking. [docs/network-analyst.md](docs/network-analyst.md)
+buses, lorries, bikes and walking. It is also tested in
+[R5](https://github.com/conveyal/r5), the router behind transport
+accessibility tools, for walking, cycling, driving and public transport.
+[docs/network-analyst.md](docs/network-analyst.md)
 compares the result with ArcGIS Network Analyst's network dataset,
 feature by feature.
 
@@ -120,7 +123,7 @@ networkforge build --help         # every option
 
 | Output | For | What's in it |
 |---|---|---|
-| `.osm.pbf` / `.osm` (`--out`, `write_osm`) | Routing engines: **Valhalla**, **GraphHopper**, OpenTripPlanner | Standard OSM data with every routing tag; the engine applies its own profiles |
+| `.osm.pbf` / `.osm` (`--out`, `write_osm`) | Routing engines: **Valhalla**, **R5**, **GraphHopper**, OpenTripPlanner | Standard OSM data with every routing tag; the engine applies its own profiles |
 | GeoPackage (`--gpkg`, `write_gpkg`) | **QGIS**: viewing, styling, and its network analysis tools | `nodes` and `edges` layers; edges have ready-made analysis columns |
 
 GeoPackage `edges` columns, besides the OSM tags (`highway`, `maxspeed`, ...):
@@ -189,6 +192,19 @@ one-way streets, footpaths, low bridges, unpaved roads, bus-only roads,
 bridges over roads and more are each routed on and checked. See
 [docs/network-analyst.md](docs/network-analyst.md), which compares the
 result with ArcGIS Network Analyst's network dataset feature by feature.
+
+It is also tested in [R5](https://github.com/conveyal/r5) (through
+[r5py](https://r5py.readthedocs.io/), `tests/r5`): new streets and
+paths, removed streets, one-way streets, and a bus trip whose walks to
+and from the stops follow the new streets. R5 reads less than Valhalla
+does, which matters if R5 is your router:
+- it ignores barriers: a bollard or gate you add is in the PBF, but R5
+  routes through it;
+- it judges how stressful a street is to cycle on from `cycleway=lane`,
+  not `cycleway=track`: draw a cycle track as a line of its own
+  (`highway=cycleway`) to open a busy road's route to cyclists;
+- it drops connected pieces of fewer than about 40 streets, so a very
+  small network of your own lines may come back empty.
 
 A feature's own attributes win over a preset unless you pass
 `overwrite_tags=True`. Who may use each way follows OSM rules: the

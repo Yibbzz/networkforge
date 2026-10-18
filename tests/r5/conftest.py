@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
@@ -59,14 +60,21 @@ def row_way(row: int) -> int:
     return 2000 + row
 
 
-def grid_elements() -> list[dict]:
-    """The grid as OSM data, shaped like an Overpass JSON response."""
+# A busy main road, for cycling: R5 rates its traffic stress too high
+# for cyclists (LTS 4) unless it has a cycle track.
+BUSY = {"highway": "primary", "maxspeed": "60", "lanes": "4"}
+
+
+def grid_elements(busy_row: int | None = None) -> list[dict]:
+    """The grid as OSM data, shaped like an Overpass JSON response; row
+    `busy_row` is a busy main road (BUSY) instead of a residential street."""
     nodes = [{"type": "node", "id": node_id(r, c), "lon": at(c, r)[0], "lat": at(c, r)[1],
               "tags": {}} for r in range(N) for c in range(N)]
     lines = [(row_way(r), [node_id(r, c) for c in range(N)]) for r in range(N)]
     lines += [(3000 + c, [node_id(r, c) for r in range(N)]) for c in range(N)]
+    residential = {"highway": "residential", "maxspeed": SPEED}
     ways = [{"type": "way", "id": way_id, "nodes": way_nodes,
-             "tags": {"highway": "residential", "maxspeed": SPEED}}
+             "tags": BUSY if way_id == row_way(busy_row or -1) else residential}
             for way_id, way_nodes in lines]
     return [*nodes, *ways]
 
@@ -79,6 +87,33 @@ def custom_layer(features) -> gpd.GeoDataFrame:
     geometries = [Point(coords[0]) if len(coords) == 1 else LineString(coords)
                   for coords, _ in features]
     return gpd.GeoDataFrame([tags for _, tags in features], geometry=geometries, crs=UTM)
+
+
+def gtfs_feed(path: Path) -> Path:
+    """A bus up column 1, row 0 to row 7 in 2 minutes, every 5 minutes, 6-10 am."""
+    south, north = at(1, 0), at(1, N - 1)
+    starts = range(6 * 60, 10 * 60, 5)
+
+    def hhmm(minutes: int) -> str:
+        return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
+
+    files = {
+        "agency.txt": "agency_id,agency_name,agency_url,agency_timezone\n"
+                      "T,Test buses,https://example.org,UTC\n",
+        "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\n"
+                     f"S,South,{south[1]:.7f},{south[0]:.7f}\n"
+                     f"N,North,{north[1]:.7f},{north[0]:.7f}\n",
+        "routes.txt": "route_id,agency_id,route_short_name,route_type\n1,T,1,3\n",
+        "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+                        "start_date,end_date\nALL,1,1,1,1,1,1,1,20260101,20271231\n",
+        "trips.txt": "route_id,service_id,trip_id\n" + "".join(f"1,ALL,{t}\n" for t in starts),
+        "stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n" + "".join(
+            f"{t},{hhmm(t)},{hhmm(t)},S,1\n{t},{hhmm(t + 2)},{hhmm(t + 2)},N,2\n" for t in starts),
+    }
+    with zipfile.ZipFile(path, "w") as feed:
+        for name, text in files.items():
+            feed.writestr(name, text)
+    return path
 
 
 WORKER = Path(__file__).with_name("worker.py")
@@ -102,19 +137,22 @@ def _r5_missing() -> str | None:
 class Network:
     """R5's network of one PBF file; each trip list runs in a new process (see worker.py)."""
 
-    def __init__(self, pbf: Path, cache: Path):
-        self.pbf = pbf
+    def __init__(self, pbf: Path, cache: Path, gtfs: Path | None = None):
+        self.pbf, self.gtfs = pbf, [] if gtfs is None else [gtfs]
         # r5py keeps the networks it builds in a cache shared by every
         # program on the computer; the tests use a new one of their own,
         # so a network cached by anything else is never read.
         self.env = {**os.environ, "XDG_CACHE_HOME": str(cache), "LOCALAPPDATA": str(cache)}
 
-    def minutes(self, start: LonLat, end: LonLat, mode: str) -> int | None:
-        """Trip time in whole minutes (mode: walk, bicycle, car); None if no way."""
+    def minutes(self, start: LonLat, end: LonLat, mode: str, **options) -> int | None:
+        """
+        Trip time in whole minutes (mode: walk, bicycle, car or transit);
+        None if no way. `options` are r5py's (speed_cycling=6, ...).
+        """
         trips = self.pbf.with_suffix(".trips.json")
-        trips.write_text(json.dumps([[start, end, mode]]), encoding="utf-8")
-        result = subprocess.run([sys.executable, str(WORKER), str(self.pbf), str(trips)],
-                                capture_output=True, text=True, env=self.env)
+        trips.write_text(json.dumps([[start, end, mode, options]]), encoding="utf-8")
+        command = [sys.executable, str(WORKER), str(self.pbf), str(trips), *map(str, self.gtfs)]
+        result = subprocess.run(command, capture_output=True, text=True, env=self.env)
         assert result.returncode == 0, result.stderr[-3000:]
         return json.loads(result.stdout.strip().splitlines()[-1])[0]
 
@@ -128,13 +166,18 @@ class Scenario:
     before: Network
     after: Network
 
-    def minutes(self, start: LonLat, end: LonLat, mode: str) -> tuple[int | None, int | None]:
+    def minutes(self, start: LonLat, end: LonLat, mode: str,
+                **options) -> tuple[int | None, int | None]:
         """The trip's (before, after) time in whole minutes."""
-        return self.before.minutes(start, end, mode), self.after.minutes(start, end, mode)
+        return (self.before.minutes(start, end, mode, **options),
+                self.after.minutes(start, end, mode, **options))
 
 
-def build_scenario(features, folder: Path, cache: Path, **build_kwargs) -> Scenario:
-    with mock.patch.object(osm, "_download_elements", lambda polygon, kind: grid_elements()):
+def build_scenario(features, folder: Path, cache: Path, busy_row: int | None = None,
+                   transit: bool = False, **build_kwargs) -> Scenario:
+    """Build on the grid; `busy_row`: see grid_elements; `transit`: add the bus (gtfs_feed)."""
+    elements = grid_elements(busy_row)
+    with mock.patch.object(osm, "_download_elements", lambda polygon, kind: elements):
         nodes, edges, osm_nodes, osm_edges = build_network(
             BBOX, custom_layer(features), return_source_osm=True, **build_kwargs)
     # File names unique to the build: r5py 1.1.7 links each input into its
@@ -146,14 +189,16 @@ def build_scenario(features, folder: Path, cache: Path, **build_kwargs) -> Scena
     after = folder / f"{folder.name}-after.osm.pbf"
     write_osm(osm_nodes, osm_edges, before)
     write_osm(nodes, edges, after)
-    return Scenario(nodes, edges, before=Network(before, cache), after=Network(after, cache))
+    gtfs = gtfs_feed(folder / "bus.zip") if transit else None
+    return Scenario(nodes, edges, before=Network(before, cache, gtfs),
+                    after=Network(after, cache, gtfs))
 
 
 @pytest.fixture(scope="session")
 def scenario(tmp_path_factory):
     """
-    scenario(features, **build_kwargs) -> Scenario. Identical calls share
-    one build for the whole test session.
+    scenario(features, busy_row=None, transit=False, **build_kwargs) ->
+    Scenario. Identical calls share one build for the whole test session.
     """
     built, cache = {}, Path(tmp_path_factory.mktemp("r5py-cache"))
 
