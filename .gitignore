@@ -9,3 +9,6 @@ htmlcov/
 cache/
 .ruff_cache/
 .cache/
+
+# Java crash logs (R5, tests/r5)
+hs_err_pid*.log

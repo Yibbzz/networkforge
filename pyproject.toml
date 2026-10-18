@@ -76,15 +76,20 @@ dev = [
     # tests, update tests/valhalla/harness.py VALHALLA_VERSION).
     "pyvalhalla==3.9.0",
 ]
+# R5 (Conveyal's router, behind Easy-R5); tests/r5 route on the exported
+# PBF with it. Kept out of dev: it needs Java 21 and brings large
+# packages. Pinned like pyvalhalla: r5py 1.1.7 runs R5 7.5.1.
+r5 = ["r5py==1.1.7"]
 
 [tool.pytest.ini_options]
 markers = [
     "network: downloads live OSM data (run with: uv run pytest -m network)",
     "valhalla: routes on the exported PBF with Valhalla (tests/valhalla; needs pyvalhalla)",
+    "r5: routes on the exported PBF with R5 (tests/r5; needs r5py and Java 21)",
 ]
 # Fast and offline by default; a `-m` on the command line overrides this:
-# `-m valhalla` (routing tests, a few minutes), `-m network` (live OSM).
-addopts = "-m 'not network and not valhalla'"
+# `-m valhalla` (routing tests, a few minutes), `-m r5`, `-m network` (live OSM).
+addopts = "-m 'not network and not valhalla and not r5'"
 
 [tool.ruff]
 line-length = 100

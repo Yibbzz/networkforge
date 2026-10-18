@@ -90,6 +90,31 @@ jobs:
       - name: Route on the exported PBF with Valhalla
         run: uv run pytest -m valhalla -v
 
+  r5:
+    name: PBF in R5
+    # Builds before / after networks and works out trip times on each PBF
+    # with Conveyal R5 (r5py, pinned in pyproject.toml's r5 group), the
+    # engine behind transport-accessibility tools such as Easy-R5.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --group r5
+
+      - name: Route on the exported PBF with R5
+        run: uv run pytest -m r5 -v
+
   qgis:
     name: GeoPackage in QGIS ${{ matrix.qgis }}
     # Routes on the GeoPackage with QGIS's own network analysis tools
