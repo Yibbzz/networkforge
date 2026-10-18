@@ -140,7 +140,8 @@ def build_scenario(features, folder: Path, cache: Path, **build_kwargs) -> Scena
     # File names unique to the build: r5py 1.1.7 links each input into its
     # cache by file name alone, and reuses a link of that name even when
     # it points at another file - the second "after.osm.pbf" of a session
-    # was routed as the first (WorkingCopy, r5py/util/working_copy.py).
+    # was routed as the first. r5py issue #548, fixed for 1.1.8 (not yet
+    # released on 2026-10-18): this can go when the pin moves past 1.1.7.
     before = folder / f"{folder.name}-before.osm.pbf"
     after = folder / f"{folder.name}-after.osm.pbf"
     write_osm(osm_nodes, osm_edges, before)
