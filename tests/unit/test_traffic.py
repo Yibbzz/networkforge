@@ -11,6 +11,7 @@ from networkforge.traffic import (
     BUCKETS_PER_WEEK,
     parse_bands,
     read_traffic_settings,
+    street_bands,
     week_factors,
 )
 
@@ -125,3 +126,76 @@ def test_unreadable_settings(tmp_path):
         read_traffic_settings(tmp_path / "t.toml")
     with pytest.raises(InputError, match="doesn't exist"):
         read_traffic_settings(tmp_path / "missing.toml")
+
+
+# ---------------------------------------------------------------- single streets
+
+def streets_layer(rows, crs="EPSG:4326"):
+    import geopandas as gpd
+    from shapely.geometry import LineString, MultiLineString, Point
+
+    def geometry(coords):
+        if coords is None:
+            return None
+        if isinstance(coords, str):
+            return Point(0, 0)
+        if isinstance(coords[0][0], tuple):
+            return MultiLineString(coords)
+        return LineString(coords)
+    return gpd.GeoDataFrame([fields for _, fields in rows],
+                            geometry=[geometry(c) for c, _ in rows], crs=crs,
+                            index=range(10, 10 + len(rows)))
+
+
+LINE = [(0.0, 51.0), (0.001, 51.0)]
+
+
+def test_street_rows_by_line_and_by_way_id():
+    streets = street_bands(streets_layer([
+        (LINE, {"days": "Mo-Fr", "time": "07:00-09:30", "factor": 0.5, "osm_id": None}),
+        (None, {"days": None, "time": "16:00-18:00", "factor": "0.7", "osm_id": 123.0,
+                "direction": "Forward"}),
+    ]))
+    line, way = streets
+    assert (line.feature, line.way, line.direction) == (10, None, "both")
+    assert line.line == tuple(LINE)
+    assert (way.feature, way.way, way.line, way.direction) == (11, 123, None, "forward")
+    assert way.band.days == (0, 1, 2, 3, 4, 5, 6)       # no days: every day
+    assert way.band.factor == pytest.approx(0.7)
+
+
+def test_a_multi_line_is_one_row_per_part():
+    streets = street_bands(streets_layer([
+        ([tuple(LINE), ((0.0, 51.001), (0.001, 51.001))], {"time": "07:00-09:00",
+                                                          "factor": 0.5}),
+    ]))
+    assert [s.feature for s in streets] == [10, 10]
+
+
+def test_street_lines_are_read_in_wgs84():
+    streets = street_bands(streets_layer([([(500000, 6200000), (500100, 6200000)],
+                                           {"time": "07:00-09:00", "factor": 0.5})],
+                                         crs="EPSG:32630"))
+    lon, lat = streets[0].line[0]
+    assert -4 < lon < -2 and 55 < lat < 57
+
+
+def test_every_street_problem_names_its_feature():
+    with pytest.raises(InputError) as raised:
+        street_bands(streets_layer([
+            (LINE, {"time": "7-9", "factor": 0.5}),
+            (LINE, {"time": "07:00-09:00", "factor": None, "direction": "up"}),
+            (None, {"time": "07:00-09:00", "factor": 0.5}),
+            ("point", {"time": "07:00-09:00", "factor": 0.5}),
+        ]))
+    issues = {(i["feature"], i["message"].split(" ")[0]) for i in raised.value.issues}
+    assert issues == {(10, "time"), (11, "factor"), (11, "direction"), (12, "has"),
+                      (13, "is")}
+    assert raised.value.guide == "traffic.md#single-streets"
+
+
+def test_a_layer_without_a_crs():
+    layer = streets_layer([(LINE, {"time": "07:00-09:00", "factor": 0.5})]).set_crs(
+        None, allow_override=True)
+    with pytest.raises(InputError, match="coordinate reference system"):
+        street_bands(layer)

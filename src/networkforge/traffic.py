@@ -1,8 +1,9 @@
 """
-Traffic for Valhalla: time bands by road class.
+Traffic for Valhalla: time bands by road class, and for single streets.
 
     bands = read_traffic_settings("traffic.toml")
-    add_traffic("after.osm.pbf", bands, "after-traffic.tar")
+    streets = street_bands(geopandas.read_file("streets.gpkg"))     # optional
+    add_traffic("after.osm.pbf", bands, "after-traffic.tar", streets=streets)
 
 A band says how much slower some streets are at some times, as a share
 of each street's normal speed (the speed Valhalla gives it from its tags):
@@ -23,6 +24,14 @@ five-minute values, Sunday 00:00 first), loads them with Valhalla's own
 `valhalla_add_predicted_traffic`, checks they took, and packs the graph
 into a tar file that Valhalla (and the QGIS Network Analyst plugin's
 "From Tar") routes on directly.
+
+Single streets: a line layer, one row per street and time band
+(`days`, `time`, `factor`, optional `direction` both/forward and `name`).
+A row's line is matched onto the road segments it is drawn along
+(Valhalla's own map matcher), so it can be a stretch of a long way or a
+new street; with an OSM way id (`osm_id` / `osmid`) as well, only that
+way's stretches count, and a way id without a line is the whole way. A
+segment with rows of its own ignores the road-class bands.
 
 Routes only see the bands when they are asked for a departure or
 arrival time. Without a time, every street keeps its normal speed: each
@@ -51,8 +60,9 @@ from pathlib import Path
 import numpy as np
 import osmium
 
-from .errors import InputError, NetworkIntegrityError
+from .errors import InputError, NetworkIntegrityError, feature_id
 from .paths import readable
+from .tags import EDIT_ID_COLUMNS
 from .validation import KNOWN_HIGHWAYS
 
 log = logging.getLogger(__name__)
@@ -105,6 +115,28 @@ class TrafficBand:
         return (starts[:, None] + steps[None, :]).ravel() % BUCKETS_PER_WEEK
 
 
+DIRECTIONS = ("both", "forward")
+STREET_FIELDS = ("days", "time", "factor", "direction", "name")
+
+# A drawn line claims a road segment if it runs along at least this share
+# of it (a line copied from the network layer covers its own stretch
+# fully; one drawn by hand may overshoot a little into the next).
+MIN_COVERED = 0.5
+MATCH_RADIUS_M = 15
+DENSIFY_DEGREES = 0.0001        # about 10 m
+
+
+@dataclass(frozen=True)
+class StreetBand:
+    """One street (or stretch) at `factor` of its normal speed on `days` during `time`."""
+
+    feature: object                       # the row's id, for messages
+    way: int | None                       # OSM way id: that way (or its stretch along `line`)
+    line: tuple[tuple[float, float], ...] | None   # (lon, lat), drawn direction
+    direction: str                        # "both" or "forward" (drawn / way direction)
+    band: TrafficBand
+
+
 @dataclass
 class TrafficResult:
     """What add_traffic did."""
@@ -115,6 +147,9 @@ class TrafficResult:
     by_road: dict[str, int] = field(default_factory=dict)   # road class -> streets
     bands: list[str] = field(default_factory=list)
     streets_not_found: list[int] = field(default_factory=list)  # OSM way ids
+    single_streets: int = 0              # street rows used
+    single_segments: int = 0             # segments those rows set
+    unmatched: list = field(default_factory=list)  # street rows that matched nothing
 
 
 # ---------------------------------------------------------------- settings
@@ -236,34 +271,120 @@ def _road_class(highway: str) -> str:
     return highway.removesuffix("_link")
 
 
+def street_bands(layer) -> list[StreetBand]:
+    """
+    Single-street bands from a line layer (a GeoDataFrame indexed by the
+    feature ids messages should use). Fields: days (default every day),
+    time, factor, direction (both / forward; default both), name; and
+    optionally osm_id or osmid. Every problem is listed at once.
+    """
+    if layer.crs is None:
+        raise InputError("The single-streets layer has no coordinate reference system.",
+                         guide=f"{GUIDE}#single-streets")
+    layer = layer.to_crs("EPSG:4326")
+    id_column = next((c for c in EDIT_ID_COLUMNS if c in layer.columns), None)
+    unknown = [c for c in layer.columns
+               if c not in (*STREET_FIELDS, *EDIT_ID_COLUMNS, layer.geometry.name)]
+    if unknown:
+        log.info("Single streets: fields not used for traffic: %s", ", ".join(map(str, unknown)))
+    problems, streets = [], []
+    for feature, row in layer.iterrows():
+        def value(key, default=None, row=row):
+            v = row.get(key)
+            return default if v is None or (isinstance(v, float) and np.isnan(v)) or v == "" \
+                else v
+        values, failed = {}, False
+        for key, check, default in (("days", _days, "Mo-Su"), ("time", _time_range, None),
+                                    ("factor", _number, None)):
+            try:
+                values[key] = check(value(key, default))
+            except ValueError as exc:
+                problems.append((feature, str(exc)))
+                failed = True
+        direction = str(value("direction", "both")).strip().lower()
+        if direction not in DIRECTIONS:
+            problems.append((feature, f"direction {direction!r} must be both or forward"))
+            failed = True
+        way = value(id_column) if id_column else None
+        if way is not None:
+            try:
+                way = int(float(way))
+            except (TypeError, ValueError):
+                problems.append((feature, f"{id_column} {way!r} isn't an OSM way id"))
+                failed = True
+        geometry = row.geometry
+        lines = []
+        if geometry is not None and not geometry.is_empty:
+            parts = getattr(geometry, "geoms", [geometry])
+            lines = [tuple(p.coords) for p in parts if p.geom_type == "LineString"]
+            if len(lines) != len(parts):
+                problems.append((feature, f"is a {geometry.geom_type}; single streets are lines"))
+                failed = True
+        elif way is None:
+            problems.append((feature, "has neither a line nor an OSM way id"))
+            failed = True
+        if failed:
+            continue
+        start, end = values["time"]
+        band = TrafficBand(str(value("name", f"Street {feature_id(feature)}")), values["days"],
+                           start, end, frozenset(), values["factor"])
+        if lines:
+            streets.extend(StreetBand(feature, way, line, direction, band) for line in lines)
+        else:
+            streets.append(StreetBand(feature, way, None, direction, band))
+    if problems:
+        raise InputError(
+            f"{len(problems)} single-street problem(s):\n  - " + "\n  - ".join(
+                f"feature {feature_id(f)}: {m}" for f, m in problems),
+            guide=f"{GUIDE}#single-streets",
+            issues=[{"feature": f, "message": m} for f, m in problems])
+    return streets
+
+
+def _number(value) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("factor must be a number, e.g. 0.6 for 60% of the normal speed") from None
+    return _factor(value)
+
+
 def week_factors(bands: Iterable[TrafficBand], highway: str) -> np.ndarray | None:
     """
     The week of speed factors for a street of this highway class (2,016
     values, Sunday 00:00 first), or None if no band covers it. Where
     bands overlap, the slowest wins.
     """
-    factors = None
+    return _combine([band for band in bands if band.covers(highway)])
+
+
+def _combine(bands: list[TrafficBand]) -> np.ndarray | None:
+    """The bands' week of factors (slowest wins where they overlap), or None if none."""
+    if not bands:
+        return None
+    factors = np.full(BUCKETS_PER_WEEK, np.inf, dtype=np.float32)
     for band in bands:
-        if band.covers(highway):
-            if factors is None:
-                factors = np.full(BUCKETS_PER_WEEK, np.inf, dtype=np.float32)
-            idx = band.buckets()
-            factors[idx] = np.minimum(factors[idx], band.factor)
-    if factors is not None:
-        factors[np.isinf(factors)] = 1.0  # no band at that time: normal speed
+        idx = band.buckets()
+        factors[idx] = np.minimum(factors[idx], band.factor)
+    factors[np.isinf(factors)] = 1.0  # no band at that time: normal speed
     return factors
 
 
 # ---------------------------------------------------------------- the build
 
 def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
+                streets: list[StreetBand] | None = None,
                 progress: Progress | None = None) -> TrafficResult:
     """
-    Build Valhalla's graph from `pbf`, put the bands on it and write it as
-    the tar file `out`. Returns what was done.
+    Build Valhalla's graph from `pbf`, put the road-class `bands` and the
+    single `streets` on it and write it as the tar file `out`.
     """
-    valhalla, bin_dir, get_config, GraphId, compress, encode = _import_valhalla()
+    valhalla, bin_dir, get_config, GraphId, compress, encode, GraphUtils = _import_valhalla()
     pbf, out = Path(pbf), Path(out)
+    streets = streets or []
+    if not bands and not streets:
+        raise InputError("No traffic to add: give road-class bands, single streets or both.",
+                         guide=GUIDE)
     if not pbf.is_file():
         raise InputError(f"The OSM file doesn't exist: {pbf}", guide=GUIDE)
     if out.suffix.lower() != ".tar":
@@ -276,10 +397,16 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
     result = TrafficResult(output=out, bands=[b.name for b in bands])
 
     step("Reading streets")
-    streets = _streets(pbf, bands)
-    if not streets:
-        log.warning("No street in %s is in a traffic band's road classes: the tar has no "
-                    "traffic.", pbf.name)
+    by_id = {s.way for s in streets if s.way is not None}
+    ways = _ways(pbf, bands, by_id)
+    missing = sorted(by_id - set(ways))
+    if missing:
+        rows = [s.feature for s in streets if s.way in missing]
+        log.warning("%d single street(s) name an OSM way that isn't in %s (%s); they get no "
+                    "traffic.", len(rows), pbf.name, ", ".join(map(str, missing[:10])),
+                    extra={"features": rows})
+        result.unmatched.extend(rows)
+        streets = [s for s in streets if s.way not in missing]
 
     with tempfile.TemporaryDirectory(prefix="networkforge-traffic-") as work:
         work = Path(work)
@@ -288,15 +415,18 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
         actor = valhalla.Actor(str(config_path))
 
         step("Finding the streets' road segments")
-        segments, not_found = _segments(actor, streets)
-        result.streets_not_found = sorted(not_found)
-        if not_found:
+        segments, not_found = _segments(actor, ways)
+        banded = {w for w, way in ways.items() if any(b.covers(way.highway) for b in bands)}
+        result.streets_not_found = sorted(not_found & banded)
+        if result.streets_not_found:
             log.warning("Valhalla has no road segment for %d street(s) in a traffic band "
-                        "(it doesn't route on them); they get no traffic.", len(not_found))
+                        "(it doesn't route on them); they get no traffic.",
+                        len(result.streets_not_found))
+        claims = _claim(actor, GraphUtils(str(config_path)), GraphId, streets, segments, result)
 
         step("Writing the speeds")
         traffic_dir = work / "traffic"
-        rows = _write_speed_files(segments, streets, bands, traffic_dir,
+        rows = _write_speed_files(segments, ways, bands, claims, traffic_dir,
                                   GraphId, compress, encode)
 
         step("Loading the speeds into the graph")
@@ -304,35 +434,38 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
             _run([str(bin_dir / "valhalla_add_predicted_traffic"), "-c", str(config_path),
                   str(traffic_dir)], "load the traffic")
             _verify(valhalla.Actor(str(config_path)), segments, rows)
+        else:
+            log.warning("No road segment got traffic: the tar is the network without traffic.")
 
         step("Packing the graph")
         _pack(config_path, out)
 
     result.segments = len(rows)
-    ways = {segments[e].way for e in rows}
-    result.ways = len(ways)
+    by_class = {segments[e].way for e in rows if e not in claims and segments[e].way in banded}
+    result.ways = len({segments[e].way for e in rows})
     counts: dict[str, int] = defaultdict(int)
-    for way in ways:
-        counts[_road_class(streets[way].highway)] += 1
+    for way in by_class:
+        counts[_road_class(ways[way].highway)] += 1
     result.by_road = dict(sorted(counts.items()))
+    result.single_segments = len(claims)
     return result
 
 
 @dataclass
-class _Street:
+class _Way:
     highway: str
     points: list[tuple[float, float]]   # (lon, lat) midpoints of each node-to-node step
 
 
-def _streets(pbf: Path, bands: list[TrafficBand]) -> dict[int, _Street]:
-    """Ways a band covers: way id -> highway and where to look for its segments."""
-    streets = {}
+def _ways(pbf: Path, bands: list[TrafficBand], wanted: set[int]) -> dict[int, _Way]:
+    """Ways a band covers, plus the `wanted` way ids: id -> highway and where to look."""
+    ways = {}
     with readable(pbf) as name:
         for way in osmium.FileProcessor(name, osmium.osm.NODE | osmium.osm.WAY).with_locations():
             if not isinstance(way, osmium.osm.Way):
                 continue
-            highway = way.tags.get("highway")
-            if not highway or not any(b.covers(highway) for b in bands):
+            highway = way.tags.get("highway", "")
+            if way.id not in wanted and not (highway and any(b.covers(highway) for b in bands)):
                 continue
             try:
                 coords = [(n.location.lon, n.location.lat) for n in way.nodes]
@@ -342,8 +475,8 @@ def _streets(pbf: Path, bands: list[TrafficBand]) -> dict[int, _Street]:
                 continue
             xy = np.array(coords)
             mids = (xy[:-1] + xy[1:]) / 2
-            streets[way.id] = _Street(highway, [tuple(p) for p in mids])
-    return streets
+            ways[way.id] = _Way(highway, [tuple(p) for p in mids])
+    return ways
 
 
 def _build_graph(pbf: Path, work: Path, bin_dir: Path, get_config) -> Path:
@@ -368,15 +501,16 @@ class _Segment:
     way: int
     speed: int                      # Valhalla's normal speed, km/h
     probe: tuple[float, float]      # a (lon, lat) where /locate finds it
+    forward: bool                   # runs in the way's own direction
 
 
-def _segments(actor, streets: dict[int, _Street]) -> tuple[dict[int, _Segment], set[int]]:
+def _segments(actor, ways: dict[int, _Way]) -> tuple[dict[int, _Segment], set[int]]:
     """
-    Valhalla's directed edges for each street, by edge id. Found with
-    /locate at the middle of every step between two of the way's nodes,
-    so every segment of the way is hit (both directions).
+    Valhalla's directed edges for each way, by edge id. Found with /locate
+    at the middle of every step between two of the way's nodes, so every
+    segment of the way is hit (both directions).
     """
-    points = [(way, p) for way, street in streets.items() for p in street.points]
+    points = [(way, p) for way, street in ways.items() for p in street.points]
     segments: dict[int, _Segment] = {}
     for batch, located in _locate(actor, [p for _, p in points], points):
         for (way, point), found in zip(batch, located, strict=True):
@@ -384,9 +518,10 @@ def _segments(actor, streets: dict[int, _Street]) -> tuple[dict[int, _Segment], 
                 edge_id = edge["edge_id"]["value"]
                 speed = edge["edge"]["speeds"]["default"]
                 if edge["edge_info"]["way_id"] == way and speed > 0 and edge_id not in segments:
-                    segments[edge_id] = _Segment(way, int(speed), point)
+                    segments[edge_id] = _Segment(way, int(speed), point,
+                                                 bool(edge["edge"]["forward"]))
     found_ways = {s.way for s in segments.values()}
-    return segments, set(streets) - found_ways
+    return segments, set(ways) - found_ways
 
 
 def _locate(actor, points: list[tuple[float, float]], items: list):
@@ -401,21 +536,95 @@ def _locate(actor, points: list[tuple[float, float]], items: list):
         yield items[i : i + LOCATE_BATCH], located
 
 
-def _write_speed_files(segments: dict[int, _Segment], streets: dict[int, _Street], bands,
-                       folder: Path, GraphId, compress, encode) -> dict[int, int]:
+def _claim(actor, graph, GraphId, streets: list[StreetBand], segments: dict[int, _Segment],
+           result: TrafficResult) -> dict[int, list[TrafficBand]]:
+    """
+    The road segments each single street sets: edge id -> its bands.
+    Segments a drawn line finds that no band covers are added to `segments`.
+    """
+    claims: dict[int, list[TrafficBand]] = defaultdict(list)
+    used = set()
+    unmatched = []
+    for street in streets:
+        if street.line is not None:
+            # Along the line; with a way id too, only that way's stretches
+            # (as when changing an existing street).
+            edges = [e for e in _match(actor, graph, GraphId, street, segments)
+                     if street.way is None or segments[e].way == street.way]
+        else:
+            edges = [e for e, s in segments.items() if s.way == street.way
+                     and (street.direction == "both" or s.forward)]
+        if not edges:
+            unmatched.append(street.feature)
+            continue
+        used.add(street.feature)
+        for edge in edges:
+            claims[edge].append(street.band)
+    unmatched = [f for f in dict.fromkeys(unmatched) if f not in used]
+    if unmatched:
+        log.warning("%d single street(s) run along no road segment Valhalla drives on (draw "
+                    "them along the street, over at least half of each stretch); they get "
+                    "no traffic.", len(unmatched), extra={"features": unmatched})
+        result.unmatched.extend(unmatched)
+    result.single_streets = len(used)
+    return claims
+
+
+def _match(actor, graph, GraphId, street: StreetBand, segments: dict[int, _Segment]) -> list[int]:
+    """Edges a drawn line runs along (each over at least MIN_COVERED of it)."""
+    from shapely import LineString, segmentize
+
+    line = street.line
+    shapes = [line] if street.direction == "forward" else [line, tuple(reversed(line))]
+    edges = []
+    for shape in shapes:
+        dense = segmentize(LineString(shape), DENSIFY_DEGREES).coords
+        try:
+            matched = actor.trace_attributes({
+                "shape": [{"lon": x, "lat": y} for x, y in dense],
+                "shape_match": "map_snap",
+                "costing": "auto",
+                "trace_options": {"search_radius": MATCH_RADIUS_M},
+                "filters": {"attributes": ["edge.id", "edge.way_id", "edge.speed",
+                                           "edge.forward"], "action": "include"},
+            })
+        except RuntimeError:
+            continue  # no drivable street along it in this direction
+        for edge in matched.get("edges") or []:
+            covered = edge.get("target_percent_along", 1) - edge.get("source_percent_along", 0)
+            if covered < MIN_COVERED or not edge.get("speed"):
+                continue
+            edge_id = edge["id"]
+            if edge_id not in segments:
+                shape_ll = LineString(graph.get_edge_shape(GraphId(edge_id)))
+                middle = shape_ll.interpolate(0.5, normalized=True)
+                segments[edge_id] = _Segment(edge["way_id"], int(edge["speed"]),
+                                             (middle.x, middle.y), bool(edge["forward"]))
+            edges.append(edge_id)
+    return list(dict.fromkeys(edges))
+
+
+def _write_speed_files(segments: dict[int, _Segment], ways: dict[int, _Way], bands,
+                       claims: dict[int, list[TrafficBand]], folder: Path,
+                       GraphId, compress, encode) -> dict[int, int]:
     """
     One CSV per graph tile (in a tree mirroring the tiles), one row per
     segment: id, free-flow speed, daytime speed (0 = none), the encoded
-    week. Returns edge id -> free-flow speed for every row written.
+    week. A segment a single street claims takes that street's bands
+    only. Returns edge id -> free-flow speed for every row written.
     """
     by_class: dict[str, np.ndarray | None] = {}
     rows: dict[int, int] = {}
     files: dict[Path, list] = defaultdict(list)
     for edge_id, segment in sorted(segments.items()):
-        highway = streets[segment.way].highway
-        if highway not in by_class:
-            by_class[highway] = week_factors(bands, highway)
-        factors = by_class[highway]
+        if edge_id in claims:
+            factors = _combine(claims[edge_id])
+        else:
+            way = ways.get(segment.way)
+            highway = way.highway if way else ""
+            if highway not in by_class:
+                by_class[highway] = week_factors(bands, highway) if highway else None
+            factors = by_class[highway]
         if factors is None:
             continue
         week = np.maximum(segment.speed * factors, 1.0).astype(np.float32)
@@ -493,7 +702,11 @@ def _import_valhalla():
     try:
         from valhalla._scripts import PYVALHALLA_BIN_DIR
         from valhalla.baldr import GraphId
-        from valhalla.baldr.utils import compress_speed_buckets, encode_compressed_speeds
+        from valhalla.baldr.utils import (
+            GraphUtils,
+            compress_speed_buckets,
+            encode_compressed_speeds,
+        )
         from valhalla.config import get_config
 
         import valhalla
@@ -501,4 +714,4 @@ def _import_valhalla():
         raise InputError('Traffic needs pyvalhalla: pip install "networkforge[traffic]"',
                          guide=GUIDE) from exc
     return (valhalla, Path(PYVALHALLA_BIN_DIR), get_config, GraphId,
-            compress_speed_buckets, encode_compressed_speeds)
+            compress_speed_buckets, encode_compressed_speeds, GraphUtils)

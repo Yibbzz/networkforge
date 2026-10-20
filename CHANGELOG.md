@@ -8,6 +8,8 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-20
+
 ### Added
 - `networkforge traffic` (Python: `add_traffic`, `read_traffic_settings`):
   time-of-day speeds for Valhalla. A settings file of time bands by road
@@ -19,6 +21,13 @@ a breaking change means a new major version.
   (`pip install "networkforge[traffic]"`, pyvalhalla 3.9.0). See
   docs/traffic.md. `networkforge info` lists the settings' days, road
   classes and factor range under `traffic`.
+- Single streets for traffic (`--streets FILE`, Python: `street_bands`):
+  a line layer, one row per street and time band (`days`, `time`,
+  `factor`, optional `direction` both/forward and `osm_id` / `osmid`).
+  A line without a way id is matched onto the stretches it runs along,
+  so it can be part of a long street or a new one. A street with rows of
+  its own ignores the road-class bands. Lines that match nothing are
+  named in a warning (`--id-field`) and in the done event's `unmatched`.
 
 ## [1.1.0] - 2026-10-16
 

@@ -129,7 +129,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   way's directed edges with batched /locate at every node-to-node midpoint, writes one CSV per
   tile (`edge_id,freeflow,0,encoded week`: daytime 0 = unset, so requests WITHOUT a time keep
   normal speeds - decided 2026-10-20), loads with `valhalla_add_predicted_traffic`, re-locates a
-  sample to verify (the loader is silent), packs a tar. **Deliberate exception to "the PBF is
+  sample to verify (the loader is silent), packs a tar. Single streets (`street_bands`, CLI
+  `--streets`, `--id-field`): rows with `osm_id`/`osmid` claim that way's edges (forward = the
+  way's direction, from /locate's `edge.forward`); rows without are map-matched
+  (`trace_attributes` map_snap, auto costing, 15 m) both ways unless `direction=forward`, and
+  claim edges covered >= half (`target_percent_along - source_percent_along`). Claimed edges
+  use only their street rows (`_combine`, slowest wins), never the class bands. **Deliberate exception to "the PBF is
   the product":** OSM has no tag for a week of speeds and Valhalla ignores `maxspeed:conditional`
   for routing (tested), so traffic lives in Valhalla's graph; the PBF stays untouched. Plan and
   findings: the "Historical traffic for Valhalla (engine spec)" item on the GitHub project.

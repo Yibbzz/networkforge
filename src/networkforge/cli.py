@@ -18,7 +18,8 @@ JSON events (a stable interface: other tools depend on these shapes):
      "custom_edges": 12, "modified_edges": 3, "removed_edges": 2}
     {"event": "done", "outputs": {"tar": "network.tar"}, "streets": 840,
      "segments": 1702, "by_road": {"primary": 310, ...}, "bands": ["Morning peak"],
-     "streets_not_found": []}                                          # traffic
+     "streets_not_found": [], "single_streets": 3, "single_segments": 8,
+     "unmatched": []}                                                   # traffic
     (edge counts are streets, one per GeoPackage row: a two-way street is
     one edge, not one each way)
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
@@ -79,7 +80,14 @@ from .tags import (
     REMOVED_ATTR,
     TURNS_ATTR,
 )
-from .traffic import ALL_ROADS, BUCKET_MINUTES, MAX_FACTOR, MIN_FACTOR
+from .traffic import (
+    ALL_ROADS,
+    BUCKET_MINUTES,
+    DIRECTIONS,
+    MAX_FACTOR,
+    MIN_FACTOR,
+    STREET_FIELDS,
+)
 from .turns import RESTRICTION_KEYS, TURN_VALUES, check_turn_tags, split_turns
 from .validation import (
     ACCESS_KEYS,
@@ -237,20 +245,29 @@ def cmd_check(args, emit) -> int:
 
 
 def cmd_traffic(args, emit) -> int:
-    from .traffic import add_traffic, read_traffic_settings
+    from .traffic import add_traffic, read_traffic_settings, street_bands
 
-    bands = read_traffic_settings(args.settings)
+    if not (args.settings or args.streets):
+        raise InputError("No traffic to add: give --settings (road-class bands), --streets "
+                         "(single streets) or both.", guide="traffic.md")
+    bands = read_traffic_settings(args.settings) if args.settings else []
+    streets = (street_bands(_read_with_ids(args.streets, args.streets_layer, args.id_field,
+                                           "single streets"))
+               if args.streets else [])
 
     def progress(step: int, total: int, message: str) -> None:
         emit({"event": "progress", "step": step, "total": total, "message": message})
 
-    result = add_traffic(args.pbf, bands, args.out, progress=progress)
+    result = add_traffic(args.pbf, bands, args.out, streets=streets, progress=progress)
     roads = ", ".join(f"{count:,} {road}" for road, count in result.by_road.items()) or "none"
     emit({"event": "done", "outputs": {"tar": str(result.output)}, "streets": result.ways,
           "segments": result.segments, "by_road": result.by_road, "bands": result.bands,
-          "streets_not_found": result.streets_not_found},
-         text=f"Done: traffic on {result.ways:,} streets ({roads}; {result.segments:,} "
-              f"road segments), {len(result.bands)} band(s). Wrote {result.output}")
+          "streets_not_found": result.streets_not_found,
+          "single_streets": result.single_streets, "single_segments": result.single_segments,
+          "unmatched": [feature_id(f) for f in result.unmatched]},
+         text=f"Done: traffic on {result.ways:,} streets ({result.segments:,} road segments). "
+              f"Road classes: {roads}; single streets: {result.single_streets:,} "
+              f"({result.single_segments:,} segments). Wrote {result.output}")
     return EXIT_OK
 
 
@@ -275,7 +292,9 @@ def cmd_info(args, emit) -> int:
         "traffic": {"days": ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
                     "minutes_step": BUCKET_MINUTES, "factor_range": [MIN_FACTOR, MAX_FACTOR],
                     "roads": sorted({r.removesuffix("_link") for r in KNOWN_HIGHWAYS}),
-                    "all_roads": ALL_ROADS, "output": ".tar"},
+                    "all_roads": ALL_ROADS, "output": ".tar",
+                    "street_fields": list(STREET_FIELDS), "directions": list(DIRECTIONS),
+                    "street_id_fields": list(EDIT_ID_COLUMNS)},
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "restriction": sorted(TURN_VALUES),
@@ -377,8 +396,15 @@ def _parser() -> argparse.ArgumentParser:
         epilog="Settings: docs/traffic.md.")
     traffic.add_argument("--pbf", type=Path, required=True, metavar="FILE",
                          help="the network: an OSM file NetworkForge wrote (.osm.pbf)")
-    traffic.add_argument("--settings", type=Path, required=True, metavar="FILE",
-                         help="traffic bands (.toml or .json; see docs/traffic.md)")
+    traffic.add_argument("--settings", type=Path, metavar="FILE",
+                         help="road-class bands (.toml or .json; see docs/traffic.md)")
+    traffic.add_argument("--streets", type=Path, metavar="FILE",
+                         help="single streets: a line layer with days, time, factor (and "
+                              "direction, osm_id / osmid); they override the road classes")
+    traffic.add_argument("--streets-layer", metavar="NAME", help="layer in the streets file")
+    traffic.add_argument("--id-field", metavar="NAME",
+                         help="attribute that identifies street features in warnings and "
+                              "errors (e.g. fid); default: row number")
     traffic.add_argument("--out", type=Path, required=True, metavar="FILE",
                          help="Valhalla graph with the traffic (.tar)")
     traffic.set_defaults(command=cmd_traffic)
@@ -494,18 +520,23 @@ def _read_layer(path: Path, layer: str | None, label: str, **kwargs) -> gpd.GeoD
 
 def _read_custom(args) -> gpd.GeoDataFrame:
     """The custom layer, indexed by --id-field so messages name those ids."""
-    custom = _read_layer(args.custom, args.custom_layer, "custom data")
-    field = args.id_field
+    return _read_with_ids(args.custom, args.custom_layer, args.id_field, "custom data")
+
+
+def _read_with_ids(path: Path, layer: str | None, field: str | None,
+                   label: str) -> gpd.GeoDataFrame:
+    """A layer indexed by the attribute `field` (--id-field) so messages name those ids."""
+    data = _read_layer(path, layer, label)
     if not field:
-        return custom
-    if field in custom.columns:
-        return custom.set_index(field)
+        return data
+    if field in data.columns:
+        return data.set_index(field)
     # A GeoPackage's fid isn't a column unless asked for.
-    with_fid = _read_layer(args.custom, args.custom_layer, "custom data", fid_as_index=True)
+    with_fid = _read_layer(path, layer, label, fid_as_index=True)
     if field.lower() == "fid":
         return with_fid.rename_axis(field)
-    attributes = ", ".join(map(str, custom.columns.drop(custom.geometry.name)))
-    raise InputError(f"--id-field {field!r} isn't an attribute of the custom data. "
+    attributes = ", ".join(map(str, data.columns.drop(data.geometry.name)))
+    raise InputError(f"--id-field {field!r} isn't an attribute of the {label}. "
                      f"Attributes: {attributes}")
 
 

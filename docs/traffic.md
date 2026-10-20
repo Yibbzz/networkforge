@@ -6,12 +6,14 @@ from 07:00 to 09:30". A route asked for at Monday 08:00 then takes the
 slower roads into account and may choose another way; the same route at
 03:00 or on a Sunday doesn't.
 
-This first version takes your **assumptions**, written as time bands by
-road class. It needs no traffic data. Measured speeds (sensor sites, data
+This first version takes your **assumptions**: time bands by road class,
+and bands for single streets that you pick or draw. It needs no traffic
+data. Measured speeds (sensor sites, data
 bought from traffic companies) are planned for later.
 
 - [What you get](#what-you-get)
 - [Settings](#settings)
+- [Single streets](#single-streets)
 - [Using it in QGIS](#using-it-in-qgis)
 - [What it can't do](#what-it-cant-do)
 - [How it works](#how-it-works)
@@ -74,6 +76,40 @@ Your own new streets get the band of their road class, like existing
 ones: a new `primary` road is as slow at peak time as the primary roads
 around it.
 
+## Single streets
+
+For a particular street, or a stretch of one, give a **line layer**. Each
+row is one street and one time band, with these fields:
+
+| Field | What it means |
+|---|---|
+| `days` | As in the settings: `Mo-Fr`, `Sa,Su` ... Every day if empty. |
+| `time` | `07:00-09:30`, as in the settings. |
+| `factor` | The speed as a share of the street's normal speed, as in the settings. |
+| `direction` | `both` (the default) or `forward`: only the direction the line is drawn in (with an OSM way id and no line, the way's own direction). For congestion that is one way only, such as traffic into town in the morning. |
+| `name` | For messages. Optional. |
+| `osm_id` or `osmid` | Optional. An OpenStreetMap way id. With a line: only that way's stretches along the line (the line can't spill onto a side street). Without a line: the whole way. |
+
+The line is **matched onto the streets it is drawn along**, with
+Valhalla's own map matcher. A stretch between two junctions
+is slowed if the line runs along at least half of it, so a line can be a
+few blocks of a long street, or one of your own new streets. The easiest
+way to get the line exactly right is to copy the street from the Before
+or After network layer (select it, **Edit > Copy Features**, then **Edit
+> Paste Features** into your layer). A row in the network layer is the
+stretch between two junctions.
+
+For several bands on one street (morning and evening), add a row for
+each, with the same line.
+
+A street with rows of its own **ignores the road-class bands**: only its
+own rows apply (where they overlap, the slower one wins). So a single
+street can also be said to flow freely (`factor` 1) when its road class
+is slowed.
+
+A line that runs along no street Valhalla drives on, or names a way that
+isn't in the network, gets no traffic and is named in a warning.
+
 ## Using it in QGIS
 
 With the Network Analyst plugin:
@@ -95,6 +131,9 @@ Valhalla directly, for timed trips.
 
 - **Assumptions only (for now).** The bands are what you assume, not
   measurements. State them in your results.
+- **Single streets are matched as cars drive.** A line along a street
+  cars can't use (a footway, a bus lane) matches nothing, which is
+  harmless: traffic only slows vehicles.
 - **No congestion modelling.** Speeds are fixed by the bands. A new road
   doesn't attract traffic and slow down, and people don't change when
   they travel. That needs a traffic model (AequilibraE, SUMO, ...).

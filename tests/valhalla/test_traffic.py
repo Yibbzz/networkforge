@@ -9,13 +9,17 @@ primary road to a fifth at peak time sends a timed peak trip round, and
 nothing else changes.
 """
 
+import contextlib
+import io
 import json
 
+import geopandas as gpd
 import pytest
+from shapely.geometry import LineString
 
 from networkforge.cli import EXIT_OK, main
-from tests.integration.grid import ROAD_ACROSS, ROAD_TAGS
-from tests.valhalla.conftest import at
+from tests.integration.grid import ROAD_ACROSS, ROAD_TAGS, UTM
+from tests.valhalla.conftest import at, xy
 from tests.valhalla.harness import Router
 
 MONDAY_PEAK = "2026-10-19T08:00"
@@ -128,3 +132,110 @@ def test_done_event_counts_the_streets(scenario, tmp_path, capsys):
     assert done["segments"] >= 2                        # both directions, cut at each junction
     assert done["bands"] == ["Morning peak"]
     assert done["streets_not_found"] == []
+
+
+# ---------------------------------------------------------------- single streets
+
+ALONG_ROW_3 = (at(0.5, 3), at(3.5, 3))
+ROW_3_BACK = (at(3.5, 3), at(0.5, 3))
+ROW_3_MIDDLE = [xy(1, 3), xy(3, 3)]       # drawn west to east, junction to junction
+PEAK = {"days": "Mo-Fr", "time": "07:00-09:30"}
+
+
+def streets_tar(pbf, folder, rows, settings=None) -> tuple[Router, list[dict]]:
+    """
+    A Router on a tar made with single-street rows [(coords or None,
+    fields)], and the command's JSON events.
+    """
+    geometries = [LineString(coords) if coords else None for coords, _ in rows]
+    gpd.GeoDataFrame([{"fid_": i, **fields} for i, (_, fields) in enumerate(rows, start=1)],
+                     geometry=geometries, crs=UTM).to_file(folder / "streets.gpkg")
+    arguments = ["traffic", "--pbf", str(pbf), "--streets", str(folder / "streets.gpkg"),
+                 "--id-field", "fid_", "--out", str(folder / "streets.tar"), "--json"]
+    if settings:
+        (folder / "traffic.toml").write_text(settings)
+        arguments += ["--settings", str(folder / "traffic.toml")]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert main(arguments) == EXIT_OK
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    return Router.from_tar(folder / "streets.tar", pbf, folder / "tar"), events
+
+
+def goes_round_row_3(route) -> bool:
+    return bool({"Row 2 Street", "Row 4 Street"} & set(route.names))
+
+
+def test_a_street_by_its_osm_way_id(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, events = streets_tar(built.after.pbf, tmp_path,
+                                  [(None, {"osm_id": built.custom_ways[0], **PEAK,
+                                           "factor": 0.2})])
+    peak = traffic.route(*ALONG_THE_NEW_ROAD, "auto", depart_at=MONDAY_PEAK)
+    assert {"Row 1 Street", "Row 2 Street"} & set(peak.names)
+    assert events[-1]["single_streets"] == 1
+
+
+def test_a_line_drawn_along_part_of_a_street(scenario, tmp_path):
+    """Row 3 Street is one long way; only the stretch drawn is slowed."""
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, events = streets_tar(built.after.pbf, tmp_path, [(ROW_3_MIDDLE, {**PEAK,
+                                                                              "factor": 0.2})])
+    normal = built.after.route(*ALONG_ROW_3, "auto")
+    peak = traffic.route(*ALONG_ROW_3, "auto", depart_at=MONDAY_PEAK)
+    assert not goes_round_row_3(normal)
+    assert goes_round_row_3(peak)
+    # The two blocks drawn, both directions: four segments.
+    assert events[-1]["single_segments"] == 4
+    # A trip on the rest of Row 3 Street (west of column 1) is not slowed.
+    west = (at(0, 3.5), at(0.5, 3))
+    assert (traffic.route(*west, "auto", depart_at=MONDAY_PEAK).time_s
+            == pytest.approx(built.after.route(*west, "auto").time_s, rel=PACKING))
+
+
+def test_a_single_street_overrides_its_road_class(scenario, tmp_path):
+    """Primary roads are slowed at peak, but this one is said to flow freely."""
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, _ = streets_tar(built.after.pbf, tmp_path,
+                             [(None, {"osmid": built.custom_ways[0], **PEAK, "factor": 1.0})],
+                             settings=PEAK_ON_PRIMARY)
+    normal = built.after.route(*ALONG_THE_NEW_ROAD, "auto")
+    peak = traffic.route(*ALONG_THE_NEW_ROAD, "auto", depart_at=MONDAY_PEAK)
+    assert peak.names == normal.names
+    assert peak.time_s == pytest.approx(normal.time_s, rel=PACKING)
+
+
+def test_one_direction_only(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, _ = streets_tar(built.after.pbf, tmp_path,
+                             [(ROW_3_MIDDLE, {**PEAK, "factor": 0.2, "direction": "forward"})])
+    assert goes_round_row_3(traffic.route(*ALONG_ROW_3, "auto", depart_at=MONDAY_PEAK))
+    back = traffic.route(*ROW_3_BACK, "auto", depart_at=MONDAY_PEAK)
+    assert not goes_round_row_3(back)
+
+
+def test_a_line_on_no_street_is_named(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    far_away = [xy(1.5, 7), xy(3.5, 7)]          # two blocks north of the grid
+    _, events = streets_tar(built.after.pbf, tmp_path,
+                            [(ROW_3_MIDDLE, {**PEAK, "factor": 0.5}),
+                             (far_away, {**PEAK, "factor": 0.5})])
+    warnings = [e for e in events if e["event"] == "warning"]
+    assert any(w.get("features") == [2] for w in warnings)
+    assert events[-1]["unmatched"] == [2]
+    assert events[-1]["single_streets"] == 1
+
+
+def test_a_line_with_a_way_id_only_sets_that_way(scenario, tmp_path):
+    """
+    As a row copied from the network layer: its line and its `osmid`.
+    Row 3 Street is two ways either side of node 18 (the turn
+    restriction's via node), and the line runs along both; only the
+    named way's block is slowed.
+    """
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    west_of_18 = next(way for way, (refs, tags) in built.after.ways.items()
+                      if tags.get("name") == "Row 3 Street" and refs[-1] == 18)
+    _, events = streets_tar(built.after.pbf, tmp_path,
+                            [(ROW_3_MIDDLE, {"osmid": west_of_18, **PEAK, "factor": 0.2})])
+    assert events[-1]["single_segments"] == 2          # one block, both directions
