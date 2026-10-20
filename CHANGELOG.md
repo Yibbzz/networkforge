@@ -8,6 +8,15 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-20
+
+### Fixed
+- `networkforge traffic` failed on Windows ("Valhalla could not build a
+  graph from the OSM file", with no detail): pyvalhalla's programs only
+  find their libraries there when `pyvalhalla.libs` is on PATH, which
+  the engine now sets for them. Its error messages now give Valhalla's
+  exit code. The Windows CI job runs the traffic tests in Valhalla.
+
 ## [1.2.0] - 2026-10-20
 
 ### Added

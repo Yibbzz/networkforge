@@ -23,6 +23,7 @@ from valhalla._scripts import PYVALHALLA_BIN_DIR
 from valhalla.config import get_config
 
 import valhalla
+from networkforge.traffic import _valhalla_env
 
 # The version the expectations in tests/valhalla were written against
 # (pinned in pyproject.toml). Valhalla's rules change between versions.
@@ -65,9 +66,10 @@ class Router:
         config_path = work_dir / "valhalla.json"
         config_path.write_text(json.dumps(config))
 
+        program = PYVALHALLA_BIN_DIR / "valhalla_build_tiles"
         build = subprocess.run(
-            [str(PYVALHALLA_BIN_DIR / "valhalla_build_tiles"), "-c", str(config_path), str(pbf)],
-            capture_output=True, text=True, check=False,
+            [str(program), "-c", str(config_path), str(pbf)],
+            capture_output=True, text=True, check=False, env=_valhalla_env(Path(program)),
         )
         if build.returncode != 0 or not any(tile_dir.rglob("*.gph")):
             raise RuntimeError(

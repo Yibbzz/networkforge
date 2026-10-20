@@ -678,11 +678,28 @@ def _pack(config_path: Path, out: Path) -> None:
         raise NetworkIntegrityError(f"Valhalla didn't write the tar file {out}.")
 
 
-def _run(command: list[str], what: str, cwd: Path | None = None) -> None:
-    done = subprocess.run(command, capture_output=True, text=True, check=False, cwd=cwd)
+def _run(command: list[str], what: str) -> None:
+    done = subprocess.run(command, capture_output=True, text=True, check=False,
+                          env=_valhalla_env(Path(command[0])))
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout)[-2000:]
-        raise NetworkIntegrityError(f"Valhalla could not {what}:\n{detail}")
+        detail = (done.stderr or done.stdout)[-2000:].strip()
+        raise NetworkIntegrityError(
+            f"Valhalla could not {what} (exit code {done.returncode})"
+            + (f":\n{detail}" if detail else "."))
+
+
+def _valhalla_env(program: Path) -> dict[str, str]:
+    """
+    The environment for one of pyvalhalla's programs. On Windows their
+    libraries are in `pyvalhalla.libs` beside the package, which they only
+    find through PATH (exit code 3221225781, "DLL not found", without it).
+    """
+    env = dict(os.environ)
+    if os.name == "nt":
+        libraries = program.parent.parent.parent / "pyvalhalla.libs"
+        if program.parent.name == "bin" and libraries.is_dir():
+            env["PATH"] = os.pathsep.join([str(libraries), env.get("PATH", "")])
+    return env
 
 
 def _steps(progress: Progress | None, total: int):

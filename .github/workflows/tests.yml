@@ -67,6 +67,11 @@ jobs:
       - name: Offline tests
         run: uv run pytest
 
+      # Traffic runs pyvalhalla's programs, which on Windows only find
+      # their libraries if PATH is set for them (v1.2.0 missed it).
+      - name: Traffic in Valhalla
+        run: uv run pytest -m valhalla tests/valhalla/test_traffic.py -v
+
   valhalla:
     name: PBF in Valhalla
     # Builds before / after networks, builds Valhalla's routing graph from
