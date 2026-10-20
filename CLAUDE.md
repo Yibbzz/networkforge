@@ -28,7 +28,7 @@ Dockerfile), NOT `/workspace/.venv`: that folder is shared with the host, whose 
 Python and rebuilt it under the container (and vice versa). The host keeps its own `.venv`.
 
 ## Source (`src/networkforge/`)
-- `cli.py` - `networkforge build|check|presets|info` (console script; also `python -m networkforge`).
+- `cli.py` - `networkforge build|check|traffic|presets|info` (console script; also `python -m networkforge`).
   `--json` = JSON lines on stdout (progress/warning/done/error events; errors carry `issues`) for
   programs such as the QGIS plugin; human logs always on stderr. `--id-field` sets the custom data's
   index, which names features everywhere (`NetworkForgeError.issues`, `extra={"features": ...}` on
@@ -123,6 +123,22 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   chosen network_type; raises when strict). Post-build structural invariants: valid u/v nodes, no
   self-loops, custom lines unbroken. Custom lines not connected to the network only WARN in the
   build (naming features; kept in the output) - tests assert `assert_all_custom_edges_are_connected`.
+- `traffic.py` - `networkforge traffic` / `add_traffic(pbf, bands, out.tar)`: time bands by road
+  class (`TrafficBand`, TOML/JSON settings, `parse_bands` collects every problem) become Valhalla
+  predicted traffic. Builds tiles (pyvalhalla, lazy import, extra `traffic`), finds each banded
+  way's directed edges with batched /locate at every node-to-node midpoint, writes one CSV per
+  tile (`edge_id,freeflow,0,encoded week`: daytime 0 = unset, so requests WITHOUT a time keep
+  normal speeds - decided 2026-10-20), loads with `valhalla_add_predicted_traffic`, re-locates a
+  sample to verify (the loader is silent), packs a tar. **Deliberate exception to "the PBF is
+  the product":** OSM has no tag for a week of speeds and Valhalla ignores `maxspeed:conditional`
+  for routing (tested), so traffic lives in Valhalla's graph; the PBF stays untouched. Plan and
+  findings: the "Historical traffic for Valhalla (engine spec)" item on the GitHub project.
+  Facts (pyvalhalla 3.9.0, checked in its source): bucket 0 = Sunday 00:00 local; with a time,
+  predicted > (no week: day 07-19 / night) > tag speed; no time = daytime speed if set, else
+  free-flow; time-dependent routes skip shortcuts; matrices ignore time unless
+  `max_timedep_distance_matrix` > 0; packing blurs band edges ~40 min and wobbles speeds a few %;
+  CSV must use "\n" (CRLF silently drops every row); `valhalla.utils` is deprecated (use
+  `valhalla.baldr.utils`).
 - **Priority (decided 2026-10-13): the OSM PBF is the product, the GeoPackage a nice-to-have.**
   Proper routers read the PBF and know cycle lanes, surfaces, turn restrictions, barriers and
   vehicle sizes; the GeoPackage is a simplified view for QGIS's own tools (allowed or not, one

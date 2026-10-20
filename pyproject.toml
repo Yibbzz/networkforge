@@ -32,6 +32,11 @@ dependencies = [
     "osmium>=4.0",
 ]
 
+# `networkforge traffic` builds Valhalla's graph: pinned like the dev
+# group's copy (one Valhalla version for tests and users).
+[project.optional-dependencies]
+traffic = ["pyvalhalla==3.9.0"]
+
 [project.scripts]
 networkforge = "networkforge.cli:main"
 

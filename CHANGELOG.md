@@ -8,6 +8,18 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Added
+- `networkforge traffic` (Python: `add_traffic`, `read_traffic_settings`):
+  time-of-day speeds for Valhalla. A settings file of time bands by road
+  class ("primary roads at 60% on weekdays from 07:00 to 09:30") is put on
+  a network as Valhalla's predicted traffic, and Valhalla's graph is
+  written as a `.tar` file (the Network Analyst plugin's "From Tar").
+  Only routes with a departure or arrival time use it; without a time
+  every street keeps its normal speed. Needs the new `traffic` extra
+  (`pip install "networkforge[traffic]"`, pyvalhalla 3.9.0). See
+  docs/traffic.md. `networkforge info` lists the settings' days, road
+  classes and factor range under `traffic`.
+
 ## [1.1.0] - 2026-10-16
 
 ### Added

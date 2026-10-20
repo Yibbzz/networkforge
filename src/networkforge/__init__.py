@@ -14,18 +14,22 @@ from .errors import (
 from .export import write_gpkg, write_osm, write_osm_xml
 from .network import build_network
 from .presets import PRESETS
+from .traffic import TrafficBand, add_traffic, read_traffic_settings
 
 __version__ = version("networkforge")  # single source: pyproject.toml
 
 __all__ = [
     "PRESETS",
+    "TrafficBand",
     "InputError",
     "InvalidTagsError",
     "NetworkForgeError",
     "NetworkIntegrityError",
     "NoIntersectionError",
     "OSMDownloadError",
+    "add_traffic",
     "build_network",
+    "read_traffic_settings",
     "write_gpkg",
     "write_osm",
     "write_osm_xml",

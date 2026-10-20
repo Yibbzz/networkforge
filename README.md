@@ -55,6 +55,9 @@ is not a full transport model:
   one, remove it and draw the new line.
 - **No traffic simulation.** No congestion, demand or signal timing:
   travel times come from speed limits (or default speeds per road type).
+  You can add **time-of-day speeds** you assume ("main roads at 60% on
+  weekday mornings") for Valhalla with `networkforge traffic`
+  ([docs/traffic.md](docs/traffic.md)), but nothing reacts to them.
 - **Turn restrictions are for routers.** Existing ones and the ones you
   draw are written to the OSM file and Valhalla obeys them; the
   GeoPackage (QGIS's own network tools) can't show them.
@@ -73,6 +76,13 @@ pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.1.0"
 ```
 
 (Use the newest tag on the Releases page.)
+
+For traffic (`networkforge traffic`), install the `traffic` extra, which
+adds Valhalla's Python package (pyvalhalla):
+
+```bash
+pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.1.0"
+```
 
 For development, clone the repo and run `uv sync`.
 
@@ -96,6 +106,11 @@ networkforge build --no-osm --custom streets.gpkg --out network.osm.pbf \
 # Area given as W,S,E,N, OSM data from a local extract
 networkforge build --bbox -4.60,54.10,-4.40,54.25 --custom proposed.gpkg \
     --osm-source isle-of-man.osm.pbf --out network.osm.pbf
+
+# Time-of-day traffic for Valhalla: the same bands on before and after,
+# each written as a Valhalla graph (.tar; Network Analyst: Graphs > From Tar)
+networkforge traffic --pbf after.osm.pbf --settings traffic.toml --out after.tar
+networkforge traffic --pbf before.osm.pbf --settings traffic.toml --out before.tar
 
 networkforge presets              # list presets and who can use them
 networkforge info                 # version, presets, valid tag values, limits

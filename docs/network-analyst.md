@@ -196,7 +196,8 @@ which slows **both** directions, not one.
 | **Turn penalties you set yourself** (7 s for a left turn between local roads) | Valhalla's turn delays are built in. Its options change them as a whole, not per turn type. |
 | **Landmarks in directions** | Valhalla has a separate landmark database; NetworkForge doesn't write to it. |
 | **Street names in several languages** | Kept on existing streets. On your own lines only `name`, `alt_name`, `official_name`, `ref` and `int_ref` are written. |
-| **Live or historical traffic** | Not modelled. |
+| **Historical traffic** (profiles by time of day) | Time bands you assume, by road class (`networkforge traffic`, [traffic.md](traffic.md)): written into a Valhalla graph (.tar) that the plugin loads with "From Tar"; routes with a departure time use them (`tests/valhalla/test_traffic.py`). Measured speeds from traffic companies (Esri's profile tables) aren't read yet. ArcGIS Pro has no traffic tutorial; its historical traffic expects data already joined to the vendor's streets. |
+| **Live traffic** | Not modelled. |
 | **Public transport** (connectivity groups, multimodal networks, GTFS) | Not modelled. |
 | **End Point connectivity** and **elevation fields** (`F_ZLEV`, `T_ZLEV`) or **z coordinates** | A network of your own lines joins at crossings or at shared vertices, and keeps levels apart with `bridge`, `tunnel` and `layer`. Data prepared for ArcGIS with elevation fields needs those turned into `layer` (or bridges split out) first. |
 | **Cost and restriction attributes from your own fields** (`FT_Minutes`, `AR_AUTO = 'N'`, `ONEWAY = 'FT'`) | Routers read OSM tags, so fields have to be expressed as tags (`maxspeed`, `motor_vehicle=no`, `oneway=yes`), e.g. with QGIS's field calculator. Other attributes are kept, with their type, in the GeoPackage, where QGIS's network tools can use them as costs. |

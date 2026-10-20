@@ -1,9 +1,10 @@
 """
-Command-line interface: `networkforge build | check | presets | info`.
+Command-line interface: `networkforge build | check | traffic | presets | info`.
 
     networkforge build --extent area.gpkg --custom plan.gpkg --preset primary_road \\
         --tag maxspeed="40 mph" --out network.osm.pbf --gpkg after.gpkg \\
         --baseline-gpkg before.gpkg
+    networkforge traffic --pbf network.osm.pbf --settings traffic.toml --out network.tar
 
 Output streams: stdout carries the result - readable text by default,
 or with --json one JSON object per line, for programs driving the CLI.
@@ -15,6 +16,9 @@ JSON events (a stable interface: other tools depend on these shapes):
     {"event": "warning", "message": "...", "features": [3, 7]}        # features/fields optional
     {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...,
      "custom_edges": 12, "modified_edges": 3, "removed_edges": 2}
+    {"event": "done", "outputs": {"tar": "network.tar"}, "streets": 840,
+     "segments": 1702, "by_road": {"primary": 310, ...}, "bands": ["Morning peak"],
+     "streets_not_found": []}                                          # traffic
     (edge counts are streets, one per GeoPackage row: a two-way street is
     one edge, not one each way)
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
@@ -75,6 +79,7 @@ from .tags import (
     REMOVED_ATTR,
     TURNS_ATTR,
 )
+from .traffic import ALL_ROADS, BUCKET_MINUTES, MAX_FACTOR, MIN_FACTOR
 from .turns import RESTRICTION_KEYS, TURN_VALUES, check_turn_tags, split_turns
 from .validation import (
     ACCESS_KEYS,
@@ -231,6 +236,24 @@ def cmd_check(args, emit) -> int:
     return EXIT_OK
 
 
+def cmd_traffic(args, emit) -> int:
+    from .traffic import add_traffic, read_traffic_settings
+
+    bands = read_traffic_settings(args.settings)
+
+    def progress(step: int, total: int, message: str) -> None:
+        emit({"event": "progress", "step": step, "total": total, "message": message})
+
+    result = add_traffic(args.pbf, bands, args.out, progress=progress)
+    roads = ", ".join(f"{count:,} {road}" for road, count in result.by_road.items()) or "none"
+    emit({"event": "done", "outputs": {"tar": str(result.output)}, "streets": result.ways,
+          "segments": result.segments, "by_road": result.by_road, "bands": result.bands,
+          "streets_not_found": result.streets_not_found},
+         text=f"Done: traffic on {result.ways:,} streets ({roads}; {result.segments:,} "
+              f"road segments), {len(result.bands)} band(s). Wrote {result.output}")
+    return EXIT_OK
+
+
 def cmd_info(args, emit) -> int:
     """Everything a front end needs to build its UI from the engine."""
     info = {
@@ -249,6 +272,10 @@ def cmd_info(args, emit) -> int:
         "turn_restriction_fields": list(RESTRICTION_KEYS),
         "standalone": True,
         "join_at": list(JOIN_AT),
+        "traffic": {"days": ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+                    "minutes_step": BUCKET_MINUTES, "factor_range": [MIN_FACTOR, MAX_FACTOR],
+                    "roads": sorted({r.removesuffix("_link") for r in KNOWN_HIGHWAYS}),
+                    "all_roads": ALL_ROADS, "output": ".tar"},
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "restriction": sorted(TURN_VALUES),
@@ -338,6 +365,23 @@ def _parser() -> argparse.ArgumentParser:
     _add_extent(check, required=False)
     _add_custom(check)
     check.set_defaults(command=cmd_check)
+
+    traffic = commands.add_parser(
+        "traffic", parents=[common],
+        help="add time-of-day traffic to a network for Valhalla (writes a .tar)",
+        description="Put time bands of slower speeds (by road class) on a network built by "
+                    "NetworkForge, as Valhalla's predicted traffic, and write Valhalla's graph "
+                    "as a .tar file (the Network Analyst plugin's 'From Tar'). Routes see the "
+                    "traffic only when given a departure or arrival time. Needs pyvalhalla: "
+                    'pip install "networkforge[traffic]".',
+        epilog="Settings: docs/traffic.md.")
+    traffic.add_argument("--pbf", type=Path, required=True, metavar="FILE",
+                         help="the network: an OSM file NetworkForge wrote (.osm.pbf)")
+    traffic.add_argument("--settings", type=Path, required=True, metavar="FILE",
+                         help="traffic bands (.toml or .json; see docs/traffic.md)")
+    traffic.add_argument("--out", type=Path, required=True, metavar="FILE",
+                         help="Valhalla graph with the traffic (.tar)")
+    traffic.set_defaults(command=cmd_traffic)
 
     presets = commands.add_parser("presets", parents=[common], help="list the tag presets")
     presets.set_defaults(command=cmd_presets)

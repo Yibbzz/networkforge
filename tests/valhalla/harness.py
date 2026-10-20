@@ -76,6 +76,16 @@ class Router:
             )
         return cls(valhalla.Actor(str(config_path)), pbf)
 
+    @classmethod
+    def from_tar(cls, tar: Path, pbf: Path, work_dir: Path) -> "Router":
+        """Route on a packed graph (.tar) alone, as the Network Analyst plugin's "From Tar"."""
+        work_dir = Path(work_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        config = get_config(tile_extract=str(Path(tar).resolve()), tile_dir="")
+        config_path = work_dir / "valhalla-tar.json"
+        config_path.write_text(json.dumps(config))
+        return cls(valhalla.Actor(str(config_path)), pbf)
+
     # ------------------------------------------------------------ the file
 
     @property
@@ -94,14 +104,21 @@ class Router:
 
     # ------------------------------------------------------------ routing
 
-    def route(self, start: LonLat, end: LonLat, costing: str, **options) -> Route | None:
-        """The route Valhalla chooses, or None if it finds none."""
+    def route(self, start: LonLat, end: LonLat, costing: str, depart_at: str | None = None,
+              **options) -> Route | None:
+        """
+        The route Valhalla chooses, or None if it finds none. `depart_at`
+        ("2026-10-19T08:00", local time) makes it a timed trip, which is
+        what uses predicted traffic.
+        """
         request = {
             "locations": [_location(start), _location(end)],
             "costing": costing,
             "costing_options": {costing: options},
             "units": "kilometers",
         }
+        if depart_at:
+            request["date_time"] = {"type": 1, "value": depart_at}
         try:
             trip = self.actor.route(request)["trip"]
         except RuntimeError as exc:
