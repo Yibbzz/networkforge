@@ -5,8 +5,9 @@ Traffic for Valhalla: time bands by road class, and for single streets.
     streets = street_bands(geopandas.read_file("streets.gpkg"))     # optional
     add_traffic("after.osm.pbf", bands, "after-traffic.tar", streets=streets)
 
-A band says how much slower some streets are at some times, as a share
-of each street's normal speed (the speed Valhalla gives it from its tags):
+A band says how fast some streets are at some times: a `factor`, a share
+of each street's normal speed (the speed Valhalla gives it from its
+tags), or a measured speed, `speed_kph`:
 
     [[band]]
     name = "Morning peak"
@@ -26,12 +27,17 @@ into a tar file that Valhalla (and the QGIS Network Analyst plugin's
 "From Tar") routes on directly.
 
 Single streets: a line layer, one row per street and time band
-(`days`, `time`, `factor`, optional `direction` both/forward and `name`).
+(`days`, `time`, `factor` or `speed_kph`, optional `direction`
+both/forward/backward and `name`).
 A row's line is matched onto the road segments it is drawn along
 (Valhalla's own map matcher), so it can be a stretch of a long way or a
 new street; with an OSM way id (`osm_id` / `osmid`) as well, only that
 way's stretches count, and a way id without a line is the whole way. A
 segment with rows of its own ignores the road-class bands.
+
+A speed table (`speed_table`): the same rows without lines, each naming
+an OSM way (`osm_id` / `osmid`): the form measured speeds by way come
+in, and what a traffic model's results can be exported as.
 
 Routes only see the bands when they are asked for a departure or
 arrival time. Without a time, every street keeps its normal speed: each
@@ -79,12 +85,25 @@ DAYS = {"su": 0, "mo": 1, "tu": 2, "we": 3, "th": 4, "fr": 5, "sa": 6}
 # effectively closed (close it with access tags instead); above 200%
 # is almost certainly a typo.
 MIN_FACTOR, MAX_FACTOR = 0.05, 2.0
+# A measured speed, km/h: Valhalla's own limits for traffic speeds.
+MIN_SPEED_KPH, MAX_SPEED_KPH = 1, 200
 
 # Locations per /locate request.
 LOCATE_BATCH = 1000
 
 # How many loaded segments to check after loading (all, up to this).
 VERIFY_SAMPLE = 500
+
+# Valhalla packs a week of speeds into 200 numbers, which can't hold a short
+# deep dip: unpacked, a 90-minute band from 64 down to 12 km/h dips to 3 km/h
+# and one from 100 to 8 below zero (Valhalla then crawls at 1 km/h). So
+# speeds that unpack below LIFT_BELOW of the speed asked for are raised
+# before packing again (a few rounds), and a week whose trip times through
+# its bands still differ from those asked by more than APPROX_LIMIT is
+# reported.
+LIFT_BELOW = 0.5
+LIFT_ROUNDS = 40
+APPROX_LIMIT = 1.25
 
 ALL_ROADS = "all"
 
@@ -93,14 +112,22 @@ Progress = Callable[[int, int, str], None]
 
 @dataclass(frozen=True)
 class TrafficBand:
-    """Streets of `roads` run at `factor` of their normal speed on `days` during `time`."""
+    """
+    Streets of `roads` run at `factor` of their normal speed, or at
+    `speed` km/h, on `days` during `time` (exactly one of the two is set).
+    """
 
     name: str
     days: tuple[int, ...]          # 0 = Sunday ... 6 = Saturday
     start: int                     # minutes after midnight
     end: int                       # minutes after midnight; <= start runs past midnight
     roads: frozenset[str]          # highway values (links included), or {"all"}
-    factor: float
+    factor: float | None = None
+    speed: float | None = None     # km/h
+
+    def speed_on(self, normal: float) -> float:
+        """This band's speed on a street whose normal speed is `normal` km/h."""
+        return self.speed if self.speed is not None else normal * self.factor
 
     def covers(self, highway: str) -> bool:
         return ALL_ROADS in self.roads or _road_class(highway) in self.roads
@@ -115,8 +142,8 @@ class TrafficBand:
         return (starts[:, None] + steps[None, :]).ravel() % BUCKETS_PER_WEEK
 
 
-DIRECTIONS = ("both", "forward")
-STREET_FIELDS = ("days", "time", "factor", "direction", "name")
+DIRECTIONS = ("both", "forward", "backward")
+STREET_FIELDS = ("days", "time", "factor", "speed_kph", "direction", "name")
 
 # A drawn line claims a road segment if it runs along at least this share
 # of it (a line copied from the network layer covers its own stretch
@@ -133,8 +160,9 @@ class StreetBand:
     feature: object                       # the row's id, for messages
     way: int | None                       # OSM way id: that way (or its stretch along `line`)
     line: tuple[tuple[float, float], ...] | None   # (lon, lat), drawn direction
-    direction: str                        # "both" or "forward" (drawn / way direction)
+    direction: str                        # both, forward or backward (of the line / way)
     band: TrafficBand
+    from_table: bool = False              # a speed-table row (named "row N", not on a map)
 
 
 @dataclass
@@ -148,8 +176,10 @@ class TrafficResult:
     bands: list[str] = field(default_factory=list)
     streets_not_found: list[int] = field(default_factory=list)  # OSM way ids
     single_streets: int = 0              # street rows used
-    single_segments: int = 0             # segments those rows set
-    unmatched: list = field(default_factory=list)  # street rows that matched nothing
+    single_segments: int = 0             # segments street and table rows set
+    unmatched: list = field(default_factory=list)  # street features that matched nothing
+    table_rows: int = 0                  # speed-table rows used
+    unmatched_rows: list = field(default_factory=list)  # speed-table rows that matched nothing
 
 
 # ---------------------------------------------------------------- settings
@@ -171,7 +201,7 @@ def read_traffic_settings(path: str | Path) -> list[TrafficBand]:
 
 
 def parse_bands(rows) -> list[TrafficBand]:
-    """Check and convert band tables ({name, days, time, roads, factor})."""
+    """Check and convert band tables ({name, days, time, roads, factor or speed_kph})."""
     if not isinstance(rows, list) or not rows:
         raise InputError("The traffic settings need at least one [[band]].",
                          guide=f"{GUIDE}#settings")
@@ -182,12 +212,13 @@ def parse_bands(rows) -> list[TrafficBand]:
             problems.append(f"{label} isn't a table of settings")
             continue
         label = f"band {number} ({row['name']})" if row.get("name") else label
-        unknown = set(row) - {"name", "days", "time", "roads", "factor"}
+        unknown = set(row) - {"name", "days", "time", "roads", "factor", "speed_kph"}
         if unknown:
             problems.append(f"{label}: unknown setting(s) {', '.join(sorted(unknown))}")
         values, failed = {}, False
         for key, check, default in (("days", _days, "Mo-Su"), ("time", _time_range, None),
-                                    ("roads", _roads, None), ("factor", _factor, None)):
+                                    ("roads", _roads, None),
+                                    ("rate", _rate, (row.get("factor"), row.get("speed_kph")))):
             try:
                 values[key] = check(row.get(key, default))
             except ValueError as exc:
@@ -195,8 +226,9 @@ def parse_bands(rows) -> list[TrafficBand]:
                 failed = True
         if not failed:
             start, end = values["time"]
+            factor, speed = values["rate"]
             bands.append(TrafficBand(str(row.get("name") or f"Band {number}"), values["days"],
-                                     start, end, values["roads"], values["factor"]))
+                                     start, end, values["roads"], factor, speed))
     if problems:
         raise InputError("Traffic settings problem(s):\n  - " + "\n  - ".join(problems),
                          guide=f"{GUIDE}#settings",
@@ -266,6 +298,39 @@ def _factor(value) -> float:
     return float(value)
 
 
+def _speed(value) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("speed_kph must be a number of km/h, e.g. 25")
+    if not MIN_SPEED_KPH <= value <= MAX_SPEED_KPH:
+        raise ValueError(f"speed_kph {value} must be between {MIN_SPEED_KPH} and "
+                         f"{MAX_SPEED_KPH} km/h")
+    return float(value)
+
+
+def _rate(pair) -> tuple[float | None, float | None]:
+    """(factor, speed_kph) as given -> checked, exactly one of them set."""
+    factor, speed = (None if _empty(v) else v for v in pair)
+    if (factor is None) == (speed is None):
+        raise ValueError("give either factor (a share of the normal speed, e.g. 0.6) or "
+                         "speed_kph (a speed, e.g. 25), not both or neither")
+    if factor is not None:
+        return _factor(_as_number(factor, "factor")), None
+    return None, _speed(_as_number(speed, "speed_kph"))
+
+
+def _as_number(value, name):
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "."))
+        except ValueError:
+            raise ValueError(f"{name} {value!r} isn't a number") from None
+    return value
+
+
+def _empty(value) -> bool:
+    return value is None or value == "" or (isinstance(value, float) and np.isnan(value))
+
+
 def _road_class(highway: str) -> str:
     """'primary_link' counts as 'primary'."""
     return highway.removesuffix("_link")
@@ -275,27 +340,46 @@ def street_bands(layer) -> list[StreetBand]:
     """
     Single-street bands from a line layer (a GeoDataFrame indexed by the
     feature ids messages should use). Fields: days (default every day),
-    time, factor, direction (both / forward; default both), name; and
-    optionally osm_id or osmid. Every problem is listed at once.
+    time, factor or speed_kph, direction (both / forward / backward;
+    default both), name; and optionally osm_id or osmid. Every problem is
+    listed at once.
     """
     if layer.crs is None:
         raise InputError("The single-streets layer has no coordinate reference system.",
                          guide=f"{GUIDE}#single-streets")
-    layer = layer.to_crs("EPSG:4326")
-    id_column = next((c for c in EDIT_ID_COLUMNS if c in layer.columns), None)
-    unknown = [c for c in layer.columns
-               if c not in (*STREET_FIELDS, *EDIT_ID_COLUMNS, layer.geometry.name)]
+    return _street_rows(layer.to_crs("EPSG:4326"), table=False)
+
+
+def speed_table(table) -> list[StreetBand]:
+    """
+    Bands by OSM way id from a table (a DataFrame, no lines needed; indexed
+    by the row ids messages should use). Fields: osm_id or osmid, days,
+    time, factor or speed_kph, direction (both / forward / backward,
+    relative to the way's own direction), name.
+    """
+    if not any(c in table.columns for c in EDIT_ID_COLUMNS):
+        raise InputError("The speed table needs an OSM way id column "
+                         f"({' or '.join(EDIT_ID_COLUMNS)}).", guide=f"{GUIDE}#speed-table")
+    return _street_rows(table, table=True)
+
+
+def _street_rows(frame, table: bool) -> list[StreetBand]:
+    what, noun = ("speed table", "row") if table else ("single-street", "feature")
+    id_column = next((c for c in EDIT_ID_COLUMNS if c in frame.columns), None)
+    geometry_name = frame.geometry.name if hasattr(frame, "geometry") and not table else None
+    unknown = [c for c in frame.columns
+               if c not in (*STREET_FIELDS, *EDIT_ID_COLUMNS, geometry_name, "geometry")]
     if unknown:
-        log.info("Single streets: fields not used for traffic: %s", ", ".join(map(str, unknown)))
+        log.info("%s: fields not used for traffic: %s", what.capitalize(),
+                 ", ".join(map(str, unknown)))
     problems, streets = [], []
-    for feature, row in layer.iterrows():
+    for feature, row in frame.iterrows():
         def value(key, default=None, row=row):
             v = row.get(key)
-            return default if v is None or (isinstance(v, float) and np.isnan(v)) or v == "" \
-                else v
+            return default if _empty(v) else v
         values, failed = {}, False
         for key, check, default in (("days", _days, "Mo-Su"), ("time", _time_range, None),
-                                    ("factor", _number, None)):
+                                    ("rate", _rate, (value("factor"), value("speed_kph")))):
             try:
                 values[key] = check(value(key, default))
             except ValueError as exc:
@@ -303,7 +387,8 @@ def street_bands(layer) -> list[StreetBand]:
                 failed = True
         direction = str(value("direction", "both")).strip().lower()
         if direction not in DIRECTIONS:
-            problems.append((feature, f"direction {direction!r} must be both or forward"))
+            problems.append((feature, f"direction {direction!r} must be both, forward or "
+                                      "backward"))
             failed = True
         way = value(id_column) if id_column else None
         if way is not None:
@@ -312,62 +397,66 @@ def street_bands(layer) -> list[StreetBand]:
             except (TypeError, ValueError):
                 problems.append((feature, f"{id_column} {way!r} isn't an OSM way id"))
                 failed = True
-        geometry = row.geometry
         lines = []
-        if geometry is not None and not geometry.is_empty:
-            parts = getattr(geometry, "geoms", [geometry])
-            lines = [tuple(p.coords) for p in parts if p.geom_type == "LineString"]
-            if len(lines) != len(parts):
-                problems.append((feature, f"is a {geometry.geom_type}; single streets are lines"))
+        if table:
+            if way is None and id_column:
+                problems.append((feature, f"has no OSM way id ({id_column})"))
                 failed = True
-        elif way is None:
-            problems.append((feature, "has neither a line nor an OSM way id"))
-            failed = True
+        else:
+            geometry = row.geometry
+            if geometry is not None and not geometry.is_empty:
+                parts = getattr(geometry, "geoms", [geometry])
+                lines = [tuple(p.coords) for p in parts if p.geom_type == "LineString"]
+                if len(lines) != len(parts):
+                    problems.append((feature, f"is a {geometry.geom_type}; single streets "
+                                              "are lines"))
+                    failed = True
+            elif way is None:
+                problems.append((feature, "has neither a line nor an OSM way id"))
+                failed = True
         if failed:
             continue
         start, end = values["time"]
-        band = TrafficBand(str(value("name", f"Street {feature_id(feature)}")), values["days"],
-                           start, end, frozenset(), values["factor"])
+        factor, speed = values["rate"]
+        label = f"{'Row' if table else 'Street'} {feature_id(feature)}"
+        band = TrafficBand(str(value("name", label)), values["days"], start, end, frozenset(),
+                           factor, speed)
         if lines:
             streets.extend(StreetBand(feature, way, line, direction, band) for line in lines)
         else:
-            streets.append(StreetBand(feature, way, None, direction, band))
+            streets.append(StreetBand(feature, way, None, direction, band, from_table=table))
     if problems:
         raise InputError(
-            f"{len(problems)} single-street problem(s):\n  - " + "\n  - ".join(
-                f"feature {feature_id(f)}: {m}" for f, m in problems),
-            guide=f"{GUIDE}#single-streets",
-            issues=[{"feature": f, "message": m} for f, m in problems])
+            f"{len(problems)} {what} problem(s):\n  - " + "\n  - ".join(
+                f"{noun} {feature_id(f)}: {m}" for f, m in problems),
+            guide=f"{GUIDE}#{'speed-table' if table else 'single-streets'}",
+            issues=[{"feature": None if table else f,
+                     "message": f"{noun} {feature_id(f)}: {m}" if table else m}
+                    for f, m in problems])
     return streets
 
 
-def _number(value) -> float:
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        raise ValueError("factor must be a number, e.g. 0.6 for 60% of the normal speed") from None
-    return _factor(value)
-
-
-def week_factors(bands: Iterable[TrafficBand], highway: str) -> np.ndarray | None:
+def week_speeds(bands: Iterable[TrafficBand], normal: float) -> np.ndarray | None:
     """
-    The week of speed factors for a street of this highway class (2,016
-    values, Sunday 00:00 first), or None if no band covers it. Where
-    bands overlap, the slowest wins.
+    The week of speeds (km/h, 2,016 values, Sunday 00:00 first) of a
+    street whose normal speed is `normal`, under these bands, or None if
+    there are none. Where bands overlap, the slowest wins; where none
+    applies, the normal speed.
     """
-    return _combine([band for band in bands if band.covers(highway)])
-
-
-def _combine(bands: list[TrafficBand]) -> np.ndarray | None:
-    """The bands' week of factors (slowest wins where they overlap), or None if none."""
+    bands = list(bands)
     if not bands:
         return None
-    factors = np.full(BUCKETS_PER_WEEK, np.inf, dtype=np.float32)
+    speeds = np.full(BUCKETS_PER_WEEK, np.inf, dtype=np.float32)
     for band in bands:
         idx = band.buckets()
-        factors[idx] = np.minimum(factors[idx], band.factor)
-    factors[np.isinf(factors)] = 1.0  # no band at that time: normal speed
-    return factors
+        speeds[idx] = np.minimum(speeds[idx], band.speed_on(normal))
+    speeds[np.isinf(speeds)] = normal
+    return np.maximum(speeds, 1.0)
+
+
+def road_class_bands(bands: Iterable[TrafficBand], highway: str) -> list[TrafficBand]:
+    """The bands that cover a street of this highway class."""
+    return [band for band in bands if band.covers(highway)]
 
 
 # ---------------------------------------------------------------- the build
@@ -379,7 +468,8 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
     Build Valhalla's graph from `pbf`, put the road-class `bands` and the
     single `streets` on it and write it as the tar file `out`.
     """
-    valhalla, bin_dir, get_config, GraphId, compress, encode, GraphUtils = _import_valhalla()
+    (valhalla, bin_dir, get_config, GraphId, compress, encode, GraphUtils,
+     decompress) = _import_valhalla()
     pbf, out = Path(pbf), Path(out)
     streets = streets or []
     if not bands and not streets:
@@ -401,11 +491,10 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
     ways = _ways(pbf, bands, by_id)
     missing = sorted(by_id - set(ways))
     if missing:
-        rows = [s.feature for s in streets if s.way in missing]
-        log.warning("%d single street(s) name an OSM way that isn't in %s (%s); they get no "
-                    "traffic.", len(rows), pbf.name, ", ".join(map(str, missing[:10])),
-                    extra={"features": rows})
-        result.unmatched.extend(rows)
+        _report_unmatched(
+            [s for s in streets if s.way in missing], result,
+            f"name an OSM way that isn't in {pbf.name} ({', '.join(map(str, missing[:10]))}"
+            f"{' ...' if len(missing) > 10 else ''})")
         streets = [s for s in streets if s.way not in missing]
 
     with tempfile.TemporaryDirectory(prefix="networkforge-traffic-") as work:
@@ -427,7 +516,7 @@ def add_traffic(pbf: str | Path, bands: list[TrafficBand], out: str | Path,
         step("Writing the speeds")
         traffic_dir = work / "traffic"
         rows = _write_speed_files(segments, ways, bands, claims, traffic_dir,
-                                  GraphId, compress, encode)
+                                  GraphId, compress, encode, decompress)
 
         step("Loading the speeds into the graph")
         if rows:
@@ -543,8 +632,7 @@ def _claim(actor, graph, GraphId, streets: list[StreetBand], segments: dict[int,
     Segments a drawn line finds that no band covers are added to `segments`.
     """
     claims: dict[int, list[TrafficBand]] = defaultdict(list)
-    used = set()
-    unmatched = []
+    used, unmatched = set(), []
     for street in streets:
         if street.line is not None:
             # Along the line; with a way id too, only that way's stretches
@@ -552,30 +640,45 @@ def _claim(actor, graph, GraphId, streets: list[StreetBand], segments: dict[int,
             edges = [e for e in _match(actor, graph, GraphId, street, segments)
                      if street.way is None or segments[e].way == street.way]
         else:
+            wanted = {"both": (True, False), "forward": (True,), "backward": (False,)}
             edges = [e for e, s in segments.items() if s.way == street.way
-                     and (street.direction == "both" or s.forward)]
+                     and s.forward in wanted[street.direction]]
+        key = (street.from_table, street.feature)
         if not edges:
-            unmatched.append(street.feature)
+            unmatched.append(street)
             continue
-        used.add(street.feature)
+        used.add(key)
         for edge in edges:
             claims[edge].append(street.band)
-    unmatched = [f for f in dict.fromkeys(unmatched) if f not in used]
-    if unmatched:
-        log.warning("%d single street(s) run along no road segment Valhalla drives on (draw "
-                    "them along the street, over at least half of each stretch); they get "
-                    "no traffic.", len(unmatched), extra={"features": unmatched})
-        result.unmatched.extend(unmatched)
-    result.single_streets = len(used)
+    _report_unmatched([s for s in unmatched if (s.from_table, s.feature) not in used], result,
+                      "run along no road segment Valhalla drives on (draw lines along the "
+                      "street, over at least half of each stretch)")
+    result.single_streets = sum(1 for table, _ in used if not table)
+    result.table_rows = sum(1 for table, _ in used if table)
     return claims
+
+
+def _report_unmatched(streets: list[StreetBand], result: TrafficResult, why: str) -> None:
+    """Warn about street features and table rows that get no traffic, naming them."""
+    features = list(dict.fromkeys(s.feature for s in streets if not s.from_table))
+    rows = list(dict.fromkeys(s.feature for s in streets if s.from_table))
+    if features:
+        log.warning("%d single street(s) %s; they get no traffic.", len(features), why,
+                    extra={"features": features})
+        result.unmatched.extend(f for f in features if f not in result.unmatched)
+    if rows:
+        log.warning("%d speed table row(s) %s; they get no traffic: rows %s.", len(rows),
+                    why.split(" (draw")[0], ", ".join(str(feature_id(r)) for r in rows[:20]),
+                    extra={"rows": rows})
+        result.unmatched_rows.extend(r for r in rows if r not in result.unmatched_rows)
 
 
 def _match(actor, graph, GraphId, street: StreetBand, segments: dict[int, _Segment]) -> list[int]:
     """Edges a drawn line runs along (each over at least MIN_COVERED of it)."""
     from shapely import LineString, segmentize
 
-    line = street.line
-    shapes = [line] if street.direction == "forward" else [line, tuple(reversed(line))]
+    line, back = street.line, tuple(reversed(street.line))
+    shapes = {"forward": [line], "backward": [back], "both": [line, back]}[street.direction]
     edges = []
     for shape in shapes:
         dense = segmentize(LineString(shape), DENSIFY_DEGREES).coords
@@ -606,39 +709,84 @@ def _match(actor, graph, GraphId, street: StreetBand, segments: dict[int, _Segme
 
 def _write_speed_files(segments: dict[int, _Segment], ways: dict[int, _Way], bands,
                        claims: dict[int, list[TrafficBand]], folder: Path,
-                       GraphId, compress, encode) -> dict[int, int]:
+                       GraphId, compress, encode, decompress) -> dict[int, int]:
     """
     One CSV per graph tile (in a tree mirroring the tiles), one row per
     segment: id, free-flow speed, daytime speed (0 = none), the encoded
     week. A segment a single street claims takes that street's bands
     only. Returns edge id -> free-flow speed for every row written.
     """
-    by_class: dict[str, np.ndarray | None] = {}
+    by_class: dict[str, list[TrafficBand]] = {}
+    weeks: dict[tuple, tuple | None] = {}   # many segments share bands and speed
+    approximated: dict[tuple, tuple[float, int]] = {}   # key -> (worst time ratio, segments)
     rows: dict[int, int] = {}
     files: dict[Path, list] = defaultdict(list)
     for edge_id, segment in sorted(segments.items()):
         if edge_id in claims:
-            factors = _combine(claims[edge_id])
+            these = claims[edge_id]
         else:
             way = ways.get(segment.way)
             highway = way.highway if way else ""
             if highway not in by_class:
-                by_class[highway] = week_factors(bands, highway) if highway else None
-            factors = by_class[highway]
-        if factors is None:
+                by_class[highway] = road_class_bands(bands, highway) if highway else []
+            these = by_class[highway]
+        key = (tuple(these), segment.speed)
+        if key not in weeks:
+            target = week_speeds(these, segment.speed)
+            weeks[key] = None if target is None else _packable(target, segment.speed,
+                                                               compress, decompress)
+        if weeks[key] is None:
             continue
-        week = np.maximum(segment.speed * factors, 1.0).astype(np.float32)
+        week, off = weeks[key]
+        if off:
+            approximated[key] = (off, approximated.get(key, (0, 0))[1] + 1)
         gid = GraphId(edge_id)
         path = (folder / os.fspath(gid)).with_suffix(".csv")
         # Daytime speed 0 = not set: requests without a time use free-flow.
-        files[path].append([str(gid), segment.speed, 0, encode(compress(week))])
+        files[path].append([str(gid), segment.speed, 0, encode(week)])
         rows[edge_id] = segment.speed
+    if approximated:
+        worst = max(approximated.values(), key=lambda v: abs(np.log(v[0])))[0]
+        bands = sorted({b.name for these, _ in approximated for b in these})
+        log.warning(
+            "Valhalla can only approximate the speeds of %d road segment(s): a band short "
+            "and much slower than normal doesn't fit its week of speeds, so trips during it "
+            "come out up to %.1fx %s than given (bands: %s). Bands of 2 hours or more, or "
+            "smaller drops, are kept more closely.",
+            sum(n for _, n in approximated.values()), max(worst, 1 / worst),
+            "slower" if worst > 1 else "faster", ", ".join(bands[:5]))
     for path, lines in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         # "\n" only: with "\r\n" Valhalla silently drops every row.
         with path.open("w", newline="", encoding="ascii") as f:
             csv.writer(f, lineterminator="\n").writerows(lines)
     return rows
+
+
+def _packable(target: np.ndarray, normal: float, compress, decompress):
+    """
+    The packed week (Valhalla's 200 numbers) for these target speeds, and
+    how far off trip times through its bands come out (0 if close). Speeds
+    that unpack below LIFT_BELOW of their target are raised and the week
+    packed again.
+    """
+    week = target.astype(np.float32)
+    for _ in range(LIFT_ROUNDS):
+        packed = compress(week)
+        unpacked = np.array([decompress(packed, i) for i in range(BUCKETS_PER_WEEK)])
+        short = np.maximum(LIFT_BELOW * target - unpacked, 0)
+        if short.max() < 0.5:
+            break
+        week = (week + short).astype(np.float32)
+    banded = target != normal
+    off = 0.0
+    if banded.any():
+        # Time per km through the banded buckets: given vs as Valhalla will have it.
+        ratio = (np.mean(1 / np.maximum(unpacked[banded], 1.0))
+                 / np.mean(1 / target[banded]))
+        if not 1 / APPROX_LIMIT <= ratio <= APPROX_LIMIT:
+            off = float(ratio)
+    return packed, off
 
 
 def _verify(actor, segments: dict[int, _Segment], rows: dict[int, int]) -> None:
@@ -722,6 +870,7 @@ def _import_valhalla():
         from valhalla.baldr.utils import (
             GraphUtils,
             compress_speed_buckets,
+            decompress_speed_bucket,
             encode_compressed_speeds,
         )
         from valhalla.config import get_config
@@ -731,4 +880,5 @@ def _import_valhalla():
         raise InputError('Traffic needs pyvalhalla: pip install "networkforge[traffic]"',
                          guide=GUIDE) from exc
     return (valhalla, Path(PYVALHALLA_BIN_DIR), get_config, GraphId,
-            compress_speed_buckets, encode_compressed_speeds, GraphUtils)
+            compress_speed_buckets, encode_compressed_speeds, GraphUtils,
+            decompress_speed_bucket)

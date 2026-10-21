@@ -134,7 +134,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   way's direction, from /locate's `edge.forward`); rows without are map-matched
   (`trace_attributes` map_snap, auto costing, 15 m) both ways unless `direction=forward`, and
   claim edges covered >= half (`target_percent_along - source_percent_along`). Claimed edges
-  use only their street rows (`_combine`, slowest wins), never the class bands. **Deliberate exception to "the PBF is
+  use only their street rows (`week_speeds`, slowest wins), never the class bands.
+  Every band has `factor` (x normal speed) or `speed_kph` (measured), exactly one (`_rate`).
+  `direction` both/forward/backward (backward = reversed line, or `not edge.forward`).
+  Speed table (`speed_table`, CLI `--speed-table` CSV/GPKG, rows named by row number or
+  `--speed-table-id-field`): same rows by way id only, `StreetBand.from_table`; its warnings
+  carry `rows` (not `features`: a table isn't on a map). **Deliberate exception to "the PBF is
   the product":** OSM has no tag for a week of speeds and Valhalla ignores `maxspeed:conditional`
   for routing (tested), so traffic lives in Valhalla's graph; the PBF stays untouched. Plan and
   findings: the "Historical traffic for Valhalla (engine spec)" item on the GitHub project.

@@ -8,6 +8,34 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-21
+
+### Added
+- Measured speeds for traffic: `speed_kph` (km/h) wherever a `factor`
+  could be given, in road-class bands and on single streets; where a
+  factor and a speed overlap, the slower wins.
+- A speed table by OpenStreetMap way id (`--speed-table FILE`, a CSV or
+  a GeoPackage table; Python: `speed_table`): rows of `osm_id` / `osmid`,
+  `days`, `time`, `speed_kph` or `factor`, `direction`. The form measured
+  speeds usually come in. Rows that match nothing are named by row
+  (`--speed-table-id-field`, or the row number) in a warning (`rows`)
+  and in the done event's `unmatched_rows`; `table_rows` counts the rows
+  used.
+- `direction = backward` for single streets and the speed table: only
+  the direction opposite the drawn line, or the way's own direction.
+- A warning when Valhalla can only approximate a band (short and much
+  slower than normal: its compact week of speeds can't hold the dip).
+- docs/traffic.md: what uses traffic in the Network Analyst plugin
+  (routes and isochrones in its panel do; matrices and its Processing
+  tools don't).
+
+### Fixed
+- A short, deep band (e.g. 64 down to 12 km/h for 90 minutes) unpacked in
+  Valhalla with speeds near or below zero in its middle, so a trip took
+  many times longer than given (a 238 m slip road took 14 minutes). Speeds
+  that would unpack below half of those asked for are now raised before
+  packing.
+
 ## [1.2.1] - 2026-10-20
 
 ### Fixed

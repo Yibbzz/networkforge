@@ -11,9 +11,17 @@ from networkforge.traffic import (
     BUCKETS_PER_WEEK,
     parse_bands,
     read_traffic_settings,
+    speed_table,
     street_bands,
-    week_factors,
+    week_speeds,
 )
+
+
+def week_factors(bands, highway):
+    """The week as shares of the normal speed, or None if no band covers this road class."""
+    from networkforge.traffic import road_class_bands
+    speeds = week_speeds(road_class_bands(bands, highway), 100.0)
+    return None if speeds is None else speeds / 100.0
 
 PEAK = {"name": "Morning peak", "days": "Mo-Fr", "time": "07:00-09:30",
         "roads": ["primary", "secondary"], "factor": 0.6}
@@ -189,7 +197,7 @@ def test_every_street_problem_names_its_feature():
             ("point", {"time": "07:00-09:00", "factor": 0.5}),
         ]))
     issues = {(i["feature"], i["message"].split(" ")[0]) for i in raised.value.issues}
-    assert issues == {(10, "time"), (11, "factor"), (11, "direction"), (12, "has"),
+    assert issues == {(10, "time"), (11, "give"), (11, "direction"), (12, "has"),
                       (13, "is")}
     assert raised.value.guide == "traffic.md#single-streets"
 
@@ -199,3 +207,73 @@ def test_a_layer_without_a_crs():
         None, allow_override=True)
     with pytest.raises(InputError, match="coordinate reference system"):
         street_bands(layer)
+
+
+# ---------------------------------------------------------------- measured speeds
+
+def test_a_band_can_give_a_speed_instead_of_a_factor():
+    band = parse_bands([{**{k: v for k, v in PEAK.items() if k != "factor"},
+                         "speed_kph": 25}])[0]
+    assert (band.factor, band.speed) == (None, 25.0)
+    speeds = week_speeds([band], 50.0)
+    assert speeds[bucket(1, 8)] == pytest.approx(25)
+    assert speeds[bucket(1, 12)] == pytest.approx(50)        # outside the band: normal
+
+
+def test_factor_and_speed_together_the_slowest_wins():
+    bands = parse_bands([{**PEAK, "factor": 0.8},
+                         {**{k: v for k, v in PEAK.items() if k != "factor"},
+                          "time": "08:00-09:00", "speed_kph": 20}])
+    speeds = week_speeds(bands, 50.0)
+    assert speeds[bucket(1, 7, 30)] == pytest.approx(40)     # 0.8 x 50
+    assert speeds[bucket(1, 8, 30)] == pytest.approx(20)     # the measured 20 is slower
+
+
+@pytest.mark.parametrize("rate", [{}, {"factor": 0.5, "speed_kph": 20}, {"speed_kph": 0},
+                                  {"speed_kph": 500}, {"speed_kph": "fast"}])
+def test_exactly_one_sensible_rate(rate):
+    band = {k: v for k, v in PEAK.items() if k != "factor"}
+    with pytest.raises(InputError):
+        parse_bands([{**band, **rate}])
+
+
+def test_street_rows_with_speeds_and_backward():
+    streets = street_bands(streets_layer([
+        (LINE, {"time": "07:00-09:00", "speed_kph": "18", "direction": "backward"}),
+    ]))
+    assert streets[0].direction == "backward"
+    assert streets[0].band.speed == 18.0 and streets[0].band.factor is None
+
+
+def test_a_speed_table_names_ways_not_lines():
+    import pandas as pd
+
+    table = pd.DataFrame({"osm_id": ["123", "456"], "days": ["Mo-Fr", ""],
+                          "time": ["07:00-09:00", "16:00-18:00"],
+                          "speed_kph": ["12", ""], "factor": ["", "0.5"],
+                          "direction": ["forward", "backward"]}, index=[1, 2])
+    rows = speed_table(table)
+    assert [(r.feature, r.way, r.line, r.direction, r.from_table) for r in rows] == [
+        (1, 123, None, "forward", True), (2, 456, None, "backward", True)]
+    assert rows[0].band.speed == 12.0 and rows[1].band.factor == 0.5
+
+
+def test_speed_table_problems_name_rows():
+    import pandas as pd
+
+    table = pd.DataFrame({"osm_id": ["123", ""], "time": ["7-9", "07:00-09:00"],
+                          "factor": ["0.5", "0.5"]}, index=[1, 2])
+    with pytest.raises(InputError) as raised:
+        speed_table(table)
+    messages = [i["message"] for i in raised.value.issues]
+    assert any(m.startswith("row 1: time") for m in messages)
+    assert any(m.startswith("row 2: has no OSM way id") for m in messages)
+    assert all(i["feature"] is None for i in raised.value.issues)   # rows aren't map features
+    assert raised.value.guide == "traffic.md#speed-table"
+
+
+def test_a_speed_table_needs_a_way_id_column():
+    import pandas as pd
+
+    with pytest.raises(InputError, match="OSM way id column"):
+        speed_table(pd.DataFrame({"time": ["07:00-09:00"], "factor": ["0.5"]}))

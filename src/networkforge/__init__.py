@@ -14,7 +14,13 @@ from .errors import (
 from .export import write_gpkg, write_osm, write_osm_xml
 from .network import build_network
 from .presets import PRESETS
-from .traffic import TrafficBand, add_traffic, read_traffic_settings, street_bands
+from .traffic import (
+    TrafficBand,
+    add_traffic,
+    read_traffic_settings,
+    speed_table,
+    street_bands,
+)
 
 __version__ = version("networkforge")  # single source: pyproject.toml
 
@@ -30,6 +36,7 @@ __all__ = [
     "add_traffic",
     "build_network",
     "read_traffic_settings",
+    "speed_table",
     "street_bands",
     "write_gpkg",
     "write_osm",

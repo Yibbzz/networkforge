@@ -72,7 +72,7 @@ is not a full transport model:
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.2.0"
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.3.0"
 ```
 
 (Use the newest tag on the Releases page.)
@@ -81,7 +81,7 @@ For traffic (`networkforge traffic`), install the `traffic` extra, which
 adds Valhalla's Python package (pyvalhalla):
 
 ```bash
-pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.2.0"
+pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.3.0"
 ```
 
 For development, clone the repo and run `uv sync`.
@@ -111,9 +111,10 @@ networkforge build --bbox -4.60,54.10,-4.40,54.25 --custom proposed.gpkg \
 # each written as a Valhalla graph (.tar; Network Analyst: Graphs > From Tar)
 networkforge traffic --pbf after.osm.pbf --settings traffic.toml --out after.tar
 networkforge traffic --pbf before.osm.pbf --settings traffic.toml --out before.tar
-# ...and single streets of your own, which override the road classes
+# ...and single streets of your own, or measured speeds by OSM way id
+# (CSV: osm_id,days,time,speed_kph,direction), which override the road classes
 networkforge traffic --pbf after.osm.pbf --settings traffic.toml \
-    --streets busy-streets.gpkg --id-field fid --out after.tar
+    --streets busy-streets.gpkg --id-field fid --speed-table speeds.csv --out after.tar
 
 networkforge presets              # list presets and who can use them
 networkforge info                 # version, presets, valid tag values, limits

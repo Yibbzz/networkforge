@@ -13,13 +13,13 @@ stderr always carries human-readable progress, warnings and errors.
 JSON events (a stable interface: other tools depend on these shapes):
 
     {"event": "progress", "step": 2, "total": 13, "message": "Downloading OSM network"}
-    {"event": "warning", "message": "...", "features": [3, 7]}        # features/fields optional
+    {"event": "warning", "message": "...", "features": [3, 7]}  # or fields, rows, gaps
     {"event": "done", "outputs": {"osm": "network.osm.pbf"}, "nodes": 131459, ...,
      "custom_edges": 12, "modified_edges": 3, "removed_edges": 2}
     {"event": "done", "outputs": {"tar": "network.tar"}, "streets": 840,
      "segments": 1702, "by_road": {"primary": 310, ...}, "bands": ["Morning peak"],
      "streets_not_found": [], "single_streets": 3, "single_segments": 8,
-     "unmatched": []}                                                   # traffic
+     "unmatched": [], "table_rows": 40, "unmatched_rows": []}          # traffic
     (edge counts are streets, one per GeoPackage row: a two-way street is
     one edge, not one each way)
     {"event": "error", "type": "InvalidTagsError", "message": "...", "guide": "...",
@@ -85,7 +85,9 @@ from .traffic import (
     BUCKET_MINUTES,
     DIRECTIONS,
     MAX_FACTOR,
+    MAX_SPEED_KPH,
     MIN_FACTOR,
+    MIN_SPEED_KPH,
     STREET_FIELDS,
 )
 from .turns import RESTRICTION_KEYS, TURN_VALUES, check_turn_tags, split_turns
@@ -245,15 +247,19 @@ def cmd_check(args, emit) -> int:
 
 
 def cmd_traffic(args, emit) -> int:
-    from .traffic import add_traffic, read_traffic_settings, street_bands
+    from .traffic import add_traffic, read_traffic_settings, speed_table, street_bands
 
-    if not (args.settings or args.streets):
+    if not (args.settings or args.streets or args.speed_table):
         raise InputError("No traffic to add: give --settings (road-class bands), --streets "
-                         "(single streets) or both.", guide="traffic.md")
+                         "(single streets), --speed-table (speeds by OSM way id), or several.",
+                         guide="traffic.md")
     bands = read_traffic_settings(args.settings) if args.settings else []
     streets = (street_bands(_read_with_ids(args.streets, args.streets_layer, args.id_field,
                                            "single streets"))
                if args.streets else [])
+    if args.speed_table:
+        streets += speed_table(_read_table(args.speed_table, args.speed_table_layer,
+                                           args.speed_table_id_field))
 
     def progress(step: int, total: int, message: str) -> None:
         emit({"event": "progress", "step": step, "total": total, "message": message})
@@ -264,10 +270,13 @@ def cmd_traffic(args, emit) -> int:
           "segments": result.segments, "by_road": result.by_road, "bands": result.bands,
           "streets_not_found": result.streets_not_found,
           "single_streets": result.single_streets, "single_segments": result.single_segments,
-          "unmatched": [feature_id(f) for f in result.unmatched]},
+          "unmatched": [feature_id(f) for f in result.unmatched],
+          "table_rows": result.table_rows,
+          "unmatched_rows": [feature_id(r) for r in result.unmatched_rows]},
          text=f"Done: traffic on {result.ways:,} streets ({result.segments:,} road segments). "
-              f"Road classes: {roads}; single streets: {result.single_streets:,} "
-              f"({result.single_segments:,} segments). Wrote {result.output}")
+              f"Road classes: {roads}; single streets: {result.single_streets:,}; speed "
+              f"table rows: {result.table_rows:,} ({result.single_segments:,} segments for "
+              f"the two). Wrote {result.output}")
     return EXIT_OK
 
 
@@ -294,7 +303,9 @@ def cmd_info(args, emit) -> int:
                     "roads": sorted({r.removesuffix("_link") for r in KNOWN_HIGHWAYS}),
                     "all_roads": ALL_ROADS, "output": ".tar",
                     "street_fields": list(STREET_FIELDS), "directions": list(DIRECTIONS),
-                    "street_id_fields": list(EDIT_ID_COLUMNS)},
+                    "street_id_fields": list(EDIT_ID_COLUMNS),
+                    "speed_kph_range": [MIN_SPEED_KPH, MAX_SPEED_KPH],
+                    "speed_table": True},
         "tag_keys": sorted(KNOWN_TAG_KEYS),
         "tag_values": {
             "restriction": sorted(TURN_VALUES),
@@ -399,9 +410,19 @@ def _parser() -> argparse.ArgumentParser:
     traffic.add_argument("--settings", type=Path, metavar="FILE",
                          help="road-class bands (.toml or .json; see docs/traffic.md)")
     traffic.add_argument("--streets", type=Path, metavar="FILE",
-                         help="single streets: a line layer with days, time, factor (and "
-                              "direction, osm_id / osmid); they override the road classes")
+                         help="single streets: a line layer with days, time, factor or "
+                              "speed_kph (and direction, osm_id / osmid); they override the "
+                              "road classes")
     traffic.add_argument("--streets-layer", metavar="NAME", help="layer in the streets file")
+    traffic.add_argument("--speed-table", type=Path, metavar="FILE",
+                         help="speeds by OSM way id: a table (CSV, or a GeoPackage/... layer) "
+                              "with osm_id or osmid, days, time, speed_kph or factor (and "
+                              "direction); they override the road classes")
+    traffic.add_argument("--speed-table-layer", metavar="NAME",
+                         help="layer in the speed table file")
+    traffic.add_argument("--speed-table-id-field", metavar="NAME",
+                         help="attribute that names speed table rows in warnings and errors; "
+                              "default: row number (1 = the first row after the header)")
     traffic.add_argument("--id-field", metavar="NAME",
                          help="attribute that identifies street features in warnings and "
                               "errors (e.g. fid); default: row number")
@@ -540,6 +561,27 @@ def _read_with_ids(path: Path, layer: str | None, field: str | None,
                      f"Attributes: {attributes}")
 
 
+def _read_table(path: Path, layer: str | None, field: str | None):
+    """A table (CSV, or any layer, with or without geometry), indexed by `field` or row number."""
+    if not path.is_file():
+        raise InputError(f"The speed table file doesn't exist: {path}")
+    try:
+        if path.suffix.lower() == ".csv":
+            import pandas as pd
+            table = pd.read_csv(path, dtype=str, keep_default_na=False)
+        else:
+            table = gpd.read_file(path, layer=layer)
+    except Exception as exc:  # noqa: BLE001 - pandas and GDAL raise many types
+        raise InputError(f"Can't read the speed table from {path}: {exc}") from exc
+    if field:
+        if field not in table.columns:
+            raise InputError(f"--speed-table-id-field {field!r} isn't a column of the speed "
+                             f"table. Columns: {', '.join(map(str, table.columns))}")
+        return table.set_index(field)
+    table.index = range(1, len(table) + 1)
+    return table
+
+
 def _read_extent(args) -> gpd.GeoDataFrame:
     if args.bbox:
         try:
@@ -583,6 +625,8 @@ class _WarningEvents(logging.Handler):
             event["fields"] = list(getattr(record, "fields", None) or [record.field])
         if getattr(record, "gaps", None):
             event["gaps"] = [list(bounds) for bounds in record.gaps]
+        if getattr(record, "rows", None):
+            event["rows"] = [feature_id(r) for r in record.rows]
         self.emit_event(event)
 
 

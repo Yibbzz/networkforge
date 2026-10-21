@@ -239,3 +239,77 @@ def test_a_line_with_a_way_id_only_sets_that_way(scenario, tmp_path):
     _, events = streets_tar(built.after.pbf, tmp_path,
                             [(ROW_3_MIDDLE, {"osmid": west_of_18, **PEAK, "factor": 0.2})])
     assert events[-1]["single_segments"] == 2          # one block, both directions
+
+
+# ---------------------------------------------------------------- measured speeds
+
+def table_tar(pbf, folder, rows, settings=None) -> tuple[Router, list[dict]]:
+    """A Router on a tar made from a speed table (a CSV of rows {osm_id, ...}), and the events."""
+    import csv
+
+    with (folder / "speeds.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=sorted({k for row in rows for k in row}))
+        writer.writeheader()
+        writer.writerows(rows)
+    arguments = ["traffic", "--pbf", str(pbf), "--speed-table", str(folder / "speeds.csv"),
+                 "--out", str(folder / "table.tar"), "--json"]
+    if settings:
+        (folder / "traffic.toml").write_text(settings)
+        arguments += ["--settings", str(folder / "traffic.toml")]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert main(arguments) == EXIT_OK
+    events = [json.loads(line) for line in output.getvalue().splitlines()]
+    return Router.from_tar(folder / "table.tar", pbf, folder / "tar"), events
+
+
+def test_a_measured_speed_on_a_drawn_street(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, _ = streets_tar(built.after.pbf, tmp_path,
+                             [(ROW_3_MIDDLE, {**PEAK, "speed_kph": 4})])
+    assert goes_round_row_3(traffic.route(*ALONG_ROW_3, "auto", depart_at=MONDAY_PEAK))
+    night = traffic.route(*ALONG_ROW_3, "auto", depart_at=MONDAY_NIGHT)
+    assert not goes_round_row_3(night)
+
+
+def test_a_speed_table_by_way_id(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, events = table_tar(built.after.pbf, tmp_path, [
+        {"osm_id": built.custom_ways[0], "days": "Mo-Fr", "time": "07:00-09:30",
+         "speed_kph": 5}])
+    normal = built.after.route(*ALONG_THE_NEW_ROAD, "auto")
+    peak = traffic.route(*ALONG_THE_NEW_ROAD, "auto", depart_at=MONDAY_PEAK)
+    assert {"Row 1 Street", "Row 2 Street"} & set(peak.names)
+    assert peak.time_s > normal.time_s
+    assert events[-1]["table_rows"] == 1 and events[-1]["unmatched_rows"] == []
+
+
+def test_backward_is_the_other_way_from_the_line(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, _ = streets_tar(built.after.pbf, tmp_path,
+                             [(ROW_3_MIDDLE, {**PEAK, "factor": 0.2, "direction": "backward"})])
+    # Drawn west to east: backward slows the trip west only.
+    assert not goes_round_row_3(traffic.route(*ALONG_ROW_3, "auto", depart_at=MONDAY_PEAK))
+    assert goes_round_row_3(traffic.route(*ROW_3_BACK, "auto", depart_at=MONDAY_PEAK))
+
+
+def test_a_table_row_naming_no_way_is_reported_by_row(scenario, tmp_path):
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    _, events = table_tar(built.after.pbf, tmp_path, [
+        {"osm_id": built.custom_ways[0], "time": "07:00-09:30", "factor": 0.5},
+        {"osm_id": 987654321, "time": "07:00-09:30", "factor": 0.5}])
+    warnings = [e for e in events if e["event"] == "warning"]
+    assert any(w.get("rows") == [2] and "features" not in w for w in warnings)
+    assert events[-1]["unmatched_rows"] == [2] and events[-1]["table_rows"] == 1
+
+
+def test_a_way_id_backward_is_against_the_ways_own_direction(scenario, tmp_path):
+    """The new road's way runs west to east, as ROAD_ACROSS is drawn."""
+    built = scenario([(ROAD_ACROSS, ROAD_TAGS)])
+    traffic, _ = table_tar(built.after.pbf, tmp_path, [
+        {"osm_id": built.custom_ways[0], "time": "07:00-09:30", "speed_kph": 5,
+         "direction": "backward"}])
+    east = traffic.route(*ALONG_THE_NEW_ROAD, "auto", depart_at=MONDAY_PEAK)
+    west = traffic.route(*reversed(ALONG_THE_NEW_ROAD), "auto", depart_at=MONDAY_PEAK)
+    assert not {"Row 1 Street", "Row 2 Street"} & set(east.names)
+    assert {"Row 1 Street", "Row 2 Street"} & set(west.names)
