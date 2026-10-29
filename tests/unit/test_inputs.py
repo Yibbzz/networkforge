@@ -211,3 +211,15 @@ def test_everything_outside_the_box_suggests_checking_the_crs():
     bbox = gpd.GeoDataFrame(geometry=[box(7.41, 43.72, 7.44, 43.75)], crs="EPSG:4326")
     with pytest.raises(InputError, match="aren't the wrong way round"):
         clean_custom_data(swapped, bbox)
+
+
+def test_coordinates_that_cant_be_longitude_latitude_are_refused():
+    # Metres in a layer whose CRS says degrees: a wrong CRS, not a place.
+    metres = gpd.GeoDataFrame({"highway": ["residential", "residential"]},
+                              geometry=[LineString([(-3.7, 40.4), (-3.69, 40.41)]),
+                                        LineString([(440000, 4473000), (440100, 4473000)])],
+                              crs="EPSG:4326")
+    with pytest.raises(InputError, match="can't be longitude / latitude") as info:
+        clean_custom_data(metres, None)
+    assert [issue["feature"] for issue in info.value.issues] == [1]
+    assert "CRS" in info.value.issues[0]["message"]

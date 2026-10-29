@@ -8,6 +8,32 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-28
+
+### Added
+- A `restrictions` layer in every GeoPackage (`write_gpkg`): one line
+  per turn restriction in the OSM file written from the same network,
+  OpenStreetMap's and the user's, drawn 20 m along the from street,
+  through the junction or along the via way(s), and 20 m along the to
+  street. Columns `relation_id`, `from_way`, `via_node`, `via_ways`,
+  `to_way`, `custom` (`yes` on the user's) and the relation's tags. Always
+  written, empty when there are none. `info` has `gpkg_layers` and
+  `gpkg_restriction_columns`.
+- The nodes a custom layer's points tag are marked in the GeoPackage's
+  `nodes` layer: `modified` = `yes` on an OpenStreetMap node, `custom` =
+  `yes` on a new node or one on a custom line.
+- More node columns: `bus`, `psv`, `hgv`, `wheelchair`, `toll`,
+  `maxheight`, `maxwidth`, `maxweight`, `entrance` (in the OSM file
+  already; now in the GeoPackage too).
+- Custom features and single streets (`traffic --streets`) whose
+  coordinates can't be longitude / latitude in their CRS (metres in a
+  layer that says degrees) are refused, naming the features. Single
+  streets in a wrong CRS used to match no street, with only a warning.
+
+### Changed
+- `write_osm` and `write_gpkg` take the result of `prepare_osm_data`
+  (`data=` / `osm_data=`); the CLI makes it once for each network.
+
 ## [1.3.0] - 2026-10-21
 
 ### Added

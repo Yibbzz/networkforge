@@ -56,6 +56,7 @@ import numpy as np
 import osmium
 import pandas as pd
 import shapely
+import shapely.ops
 
 from .errors import InputError
 from .modes import allows_mode, car_speed_kph, mode_tag_keys
@@ -120,18 +121,20 @@ def write_osm(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame,
     output_file_path: str | Path,
+    data: OSMData | None = None,
 ) -> None:
     """
     Write the network to `output_file_path`, in the format its name
     implies (.osm, .osm.pbf, .pbf, .osm.gz, .osm.bz2). An existing file
-    is replaced.
+    is replaced. `data`: prepare_osm_data() of these tables, if already
+    made.
     """
     name = str(output_file_path).lower()
 
     if name.endswith(XML_SUFFIXES):
-        _write_xml(prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
+        _write_xml(data or prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
     elif name.endswith(OSMIUM_SUFFIXES):
-        _write_with_osmium(prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
+        _write_with_osmium(data or prepare_osm_data(nodes_gdf, edges_gdf), output_file_path)
     else:
         raise InputError(
             f"Can't tell the output format from {Path(output_file_path).name!r}. "
@@ -143,18 +146,27 @@ def write_gpkg(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame,
     output_file_path: str | Path,
+    osm_data: OSMData | None = None,
 ) -> None:
     """
-    Write a GeoPackage for QGIS with a 'nodes' and an 'edges' layer.
-    Edges carry the analysis columns from analysis_edges(). An existing
-    file is replaced.
+    Write a GeoPackage for QGIS with a 'nodes', an 'edges' and a
+    'restrictions' layer. Edges carry the analysis columns from
+    analysis_edges(); restrictions are the turn restrictions of the OSM
+    file written from the same tables (restriction_lines(), always a
+    layer, empty when there are none). An existing file is replaced.
+    `osm_data`: prepare_osm_data() of these tables, if already made.
     """
     path = Path(output_file_path)
     path.unlink(missing_ok=True)
 
+    if osm_data is None and _may_have_restrictions(edges_gdf):
+        osm_data = prepare_osm_data(nodes_gdf, edges_gdf)
+    restrictions = (restriction_lines(osm_data, nodes_gdf.crs) if osm_data is not None
+                    else _no_restrictions(nodes_gdf.crs))
     layers = {
         "nodes": nodes_gdf.reset_index(),
         "edges": analysis_edges(nodes_gdf, edges_gdf),
+        "restrictions": restrictions,
     }
     for name, gdf in layers.items():
         gdf = gdf.rename(columns=_gpkg_names(gdf.columns.drop(gdf.geometry.name)))
@@ -162,7 +174,134 @@ def write_gpkg(
             if gdf[column].dtype == object:  # OSMnx can merge values into lists
                 gdf[column] = gdf[column].map(
                     lambda v: ";".join(map(str, v)) if isinstance(v, list) else v)
-        gdf.to_file(path, layer=name, driver="GPKG")
+        # The geometry type, for a layer with no rows too.
+        geometry_type = "LineString" if name != "nodes" else "Point"
+        gdf.to_file(path, layer=name, driver="GPKG",
+                    geometry_type=geometry_type if gdf.empty else None)
+
+
+# How far a restriction's line runs along each street from the junction.
+RESTRICTION_REACH_M = 20.0
+# The restrictions layer's own columns; the relation's tags follow.
+RESTRICTION_COLUMNS = ("relation_id", "from_way", "via_node", "via_ways", "to_way",
+                       CUSTOM_COLUMN)
+
+
+def _may_have_restrictions(edges_gdf: gpd.GeoDataFrame) -> bool:
+    """Whether the OSM file would hold a turn restriction (cheap test)."""
+    source = edges_gdf.attrs.get(SOURCE_ATTR)
+    return bool(edges_gdf.attrs.get(TURNS_ATTR)) or (
+        source is not None
+        and any(tags.get("type") == "restriction" for _, tags, _ in source.relations))
+
+
+def _no_restrictions(crs) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame({column: pd.Series(dtype=object) for column in RESTRICTION_COLUMNS},
+                            geometry=gpd.GeoSeries([], crs=crs))
+
+
+def restriction_lines(data: OSMData, crs) -> gpd.GeoDataFrame:
+    """
+    The turn restrictions in `data` as lines a map can show: along the
+    from street to the junction (RESTRICTION_REACH_M of it at most),
+    through the via node or along the via way(s), and out along the to
+    street. One row per restriction relation, with its id, its member
+    ways and node, `custom` = yes for the user's own (`nf:custom`), and
+    its tags as columns (restriction or restriction:hgv ..., except ...).
+    A relation whose members don't meet as OSM's rules say is left out.
+    """
+    ways = {way_id: refs for way_id, refs, _ in data.ways}
+    found = []  # (row, from side, via path, to side): node ids
+    for relation_id, members, tags in data.relations:
+        if tags.get("type") != "restriction":
+            continue
+        path = _restriction_path(members, ways)
+        if path is None:
+            log.debug("Turn restriction %d: members don't meet; not in the GeoPackage.",
+                      relation_id)
+            continue
+        from_way, via_node, via_ways, to_way, sides = path
+        row = {"relation_id": relation_id, "from_way": from_way, "via_node": via_node,
+               "via_ways": ";".join(map(str, via_ways)) or None, "to_way": to_way,
+               CUSTOM_COLUMN: "yes" if tags.get(CUSTOM_TAG) == "yes" else None}
+        row |= {key: value for key, value in tags.items() if key not in ("type", CUSTOM_TAG)}
+        found.append((row, *sides))
+    if not found:
+        return _no_restrictions(crs)
+
+    # Every node used, projected once.
+    used = sorted({node for _, *sides in found for side in sides for node in side})
+    where = {node_id: (lon, lat) for node_id, lon, lat, _ in data.nodes}
+    lon_lat = np.array([where[node] for node in used])
+    points = gpd.GeoSeries(gpd.points_from_xy(lon_lat[:, 0], lon_lat[:, 1]), crs="EPSG:4326")
+    xy = dict(zip(used, shapely.get_coordinates(points.to_crs(crs).values), strict=True))
+
+    rows, lines = [], []
+    for row, from_side, via, to_side in found:
+        arrive = shapely.LineString([xy[node] for node in from_side])
+        leave = shapely.LineString([xy[node] for node in to_side])
+        arrive = shapely.ops.substring(arrive, max(arrive.length - RESTRICTION_REACH_M, 0),
+                                       arrive.length)
+        leave = shapely.ops.substring(leave, 0, min(RESTRICTION_REACH_M, leave.length))
+        coords = [*arrive.coords, *(xy[node] for node in via[1:]), *leave.coords[1:]]
+        rows.append(row)
+        lines.append(shapely.LineString(coords))
+    table = pd.DataFrame(rows)
+    for column in ("relation_id", "from_way", "to_way"):
+        table[column] = table[column].astype("int64")
+    table["via_node"] = table["via_node"].astype("Int64")
+    return gpd.GeoDataFrame(table, geometry=gpd.GeoSeries(lines, crs=crs))
+
+
+def _restriction_path(members: list[tuple[str, int, str]], ways: dict[int, list[int]]):
+    """
+    (from way, via node or None, via ways, to way, (from side, via path,
+    to side)) for a restriction relation, or None if it can't be drawn.
+    The from side is node ids along the from way ending at the junction,
+    the via path runs from that junction to the one the to side starts at.
+    """
+    def first(role):
+        return next((ref for kind, ref, r in members if kind == "w" and r == role), None)
+
+    from_way, to_way = first("from"), first("to")
+    via_node = next((ref for kind, ref, role in members if kind == "n" and role == "via"), None)
+    via_ways = [ref for kind, ref, role in members if kind == "w" and role == "via"]
+    if from_way not in ways or to_way not in ways or any(w not in ways for w in via_ways):
+        return None
+    from_refs, to_refs = ways[from_way], ways[to_way]
+
+    if via_node is not None:
+        via = [via_node]
+    elif via_ways:
+        ends = {ways[via_ways[0]][0], ways[via_ways[0]][-1]} & set(from_refs)
+        if not ends:
+            return None
+        via = [ends.pop()]
+        for way in via_ways:
+            refs = ways[way]
+            if refs[0] == via[-1]:
+                via += refs[1:]
+            elif refs[-1] == via[-1]:
+                via += refs[::-1][1:]
+            else:
+                return None
+    else:
+        return None
+
+    def side(refs, junction, arriving):
+        """The longer stretch of the way from the junction (toward it if arriving)."""
+        if junction not in refs:
+            return None
+        i = refs.index(junction)
+        before, after = refs[:i + 1], refs[i:]
+        stretch = (before if arriving else before[::-1]) if len(before) >= len(after) else (
+            after[::-1] if arriving else after)
+        return stretch if len(stretch) >= 2 else None
+
+    from_side, to_side = side(from_refs, via[0], True), side(to_refs, via[-1], False)
+    if from_side is None or to_side is None:
+        return None
+    return from_way, via_node, via_ways, to_way, (from_side, via, to_side)
 
 
 def _gpkg_names(columns) -> dict:

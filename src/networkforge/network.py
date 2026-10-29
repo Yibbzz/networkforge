@@ -443,7 +443,8 @@ def build_network(
                 taken += list(source_data.ferry_nodes)
             nodes, edges, node_changes = place_points(
                 points_gdf, nodes, edges, snap_tolerance, max(taken) + 1,
-                source_data.node_tags if source_data is not None else {}, strict=strict)
+                source_data.node_tags if source_data is not None else {}, strict=strict,
+                osm_nodes=osm_nodes_gdf.index)
         if source_data is not None:
             edges.attrs[SOURCE_ATTR] = source_data
             osm_edges_gdf.attrs[SOURCE_ATTR] = source_data

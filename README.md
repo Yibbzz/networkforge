@@ -59,20 +59,22 @@ is not a full transport model:
   weekday mornings") for Valhalla with `networkforge traffic`
   ([docs/traffic.md](docs/traffic.md)), but nothing reacts to them.
 - **Turn restrictions are for routers.** Existing ones and the ones you
-  draw are written to the OSM file and Valhalla obeys them; the
-  GeoPackage (QGIS's own network tools) can't show them.
+  draw are written to the OSM file and Valhalla obeys them. The
+  GeoPackage's `restrictions` layer shows them on the map, but QGIS's own
+  network tools don't obey them.
 - **The GeoPackage is simpler than a router.** Its `car`, `bike` and
   `walk` columns say who may use each street and in which direction,
-  which is what QGIS's network tools need. It knows nothing of turn
-  restrictions, turn delays, bollards or ferries. For those, route on the
-  PBF with a router such as Valhalla.
+  which is what QGIS's network tools need. Its `nodes` and
+  `restrictions` layers show bollards, signals and banned turns, but the
+  edges' columns ignore them, and turn delays and ferries. For those,
+  route on the PBF with a router such as Valhalla.
 
 ## Install
 
 From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.3.0"
+pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.4.0"
 ```
 
 (Use the newest tag on the Releases page.)
@@ -81,7 +83,7 @@ For traffic (`networkforge traffic`), install the `traffic` extra, which
 adds Valhalla's Python package (pyvalhalla):
 
 ```bash
-pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.3.0"
+pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.4.0"
 ```
 
 For development, clone the repo and run `uv sync`.
@@ -143,7 +145,7 @@ networkforge build --help         # every option
 | Output | For | What's in it |
 |---|---|---|
 | `.osm.pbf` / `.osm` (`--out`, `write_osm`) | Routing engines: **Valhalla**, **R5**, **GraphHopper**, OpenTripPlanner | Standard OSM data with every routing tag; the engine applies its own profiles |
-| GeoPackage (`--gpkg`, `write_gpkg`) | **QGIS**: viewing, styling, and its network analysis tools | `nodes` and `edges` layers; edges have ready-made analysis columns |
+| GeoPackage (`--gpkg`, `write_gpkg`) | **QGIS**: viewing, styling, and its network analysis tools | `nodes`, `edges` and `restrictions` layers; edges have ready-made analysis columns |
 
 GeoPackage `edges` columns, besides the OSM tags (`highway`, `maxspeed`, ...):
 
@@ -167,6 +169,23 @@ connects the network correctly. For example, a 10-minute drive area in QGIS:
 
 Use `bike` / `bike_direction` (or `walk`, with no direction field) for other
 modes, and `*_minutes` as the cost field in plugins such as QNEAT3.
+
+The `nodes` layer has the node tags routers act on (`barrier`,
+`highway` = traffic_signals / crossing / stop ..., `crossing`,
+`railway`, access on a barrier including `hgv` and `bus`, `toll`,
+`maxheight`, `maxwidth`, `maxweight`, `entrance`), a column for each only
+when some node has it. A node your points tagged has `modified` = `yes`
+(an OpenStreetMap node) or `custom` = `yes` (a new node, or one on your
+own line).
+
+The `restrictions` layer has one line per turn restriction in the OSM
+file written with it (OpenStreetMap's and yours): 20 m along the street
+you arrive on, through the junction (or along the via way), 20 m along
+the street you leave on. Columns: `relation_id`, `from_way`, `via_node`
+or `via_ways`, `to_way`, `custom` (`yes` on yours), and the relation's
+tags (`restriction`, `restriction:hgv`, `except`, ...). The layer is
+always there, empty when there are none; drawn from the OSM data, it
+matches the PBF exactly.
 
 ## Python
 

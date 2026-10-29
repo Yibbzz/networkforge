@@ -416,8 +416,10 @@ Where to draw it:
   tagged `no_right_turn` builds, with a warning: OSM goes by the streets,
   so the rule would apply to the left turn you drew.
 
-Routers such as Valhalla obey turn restrictions; the GeoPackage (and so
-QGIS's own network tools) can't show them.
+Routers such as Valhalla obey turn restrictions. The GeoPackage's
+`restrictions` layer shows each one as a short line through its
+junction (yours with `custom` = `yes`), but QGIS's own network tools
+don't obey them.
 
 | Message | Meaning |
 |---|---|
@@ -442,8 +444,9 @@ A **point** in the custom layer puts node tags on the network:
 - `remove_tags=barrier` on a point at an existing node deletes the tag:
   an existing bollard taken out.
 - The "before" network is never changed. The GeoPackage `nodes` layer
-  shows the tags; its car / bike / walk columns don't apply barriers
-  (routers do).
+  shows the tags, and marks the nodes your points tagged: `modified` =
+  `yes` on an existing node, `custom` = `yes` on a new one. Its edges'
+  car / bike / walk columns don't apply barriers (routers do).
 
 As Valhalla 3.9 reads them: a bollard, `block` or `cycle_barrier` stops
 cars; a plain `gate` is open, and so is a gate with `access=private`;

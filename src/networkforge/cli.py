@@ -57,7 +57,14 @@ from .errors import (
     OSMDownloadError,
     feature_id,
 )
-from .export import GPKG_ANALYSIS_COLUMNS, reverse_copies, write_gpkg, write_osm
+from .export import (
+    GPKG_ANALYSIS_COLUMNS,
+    RESTRICTION_COLUMNS,
+    prepare_osm_data,
+    reverse_copies,
+    write_gpkg,
+    write_osm,
+)
 from .inputs import (
     MAX_OVERPASS_AREA_KM2,
     check_feature_ids,
@@ -169,17 +176,21 @@ def cmd_build(args, emit) -> int:
     nodes, edges = result[:2]
 
     outputs = {}
+    # Made once for each network: the GeoPackage's restrictions layer is
+    # drawn from what the OSM file holds.
+    after = prepare_osm_data(nodes, edges) if args.out else None
+    before = prepare_osm_data(result[2], result[3]) if args.baseline_out else None
     if args.out:
-        write_osm(nodes, edges, args.out)
+        write_osm(nodes, edges, args.out, data=after)
         outputs["osm"] = str(args.out)
     if args.baseline_out:
-        write_osm(result[2], result[3], args.baseline_out)
+        write_osm(result[2], result[3], args.baseline_out, data=before)
         outputs["baseline_osm"] = str(args.baseline_out)
     if args.gpkg:
-        write_gpkg(nodes, edges, args.gpkg)
+        write_gpkg(nodes, edges, args.gpkg, osm_data=after)
         outputs["gpkg"] = str(args.gpkg)
     if args.baseline_gpkg:
-        write_gpkg(result[2], result[3], args.baseline_gpkg)
+        write_gpkg(result[2], result[3], args.baseline_gpkg, osm_data=before)
         outputs["baseline_gpkg"] = str(args.baseline_gpkg)
 
     # One per street, as in the GeoPackage: OSMnx holds a two-way street
@@ -292,6 +303,8 @@ def cmd_info(args, emit) -> int:
         "max_overpass_area_km2": MAX_OVERPASS_AREA_KM2,
         "osm_formats": [".osm", ".osm.pbf", ".pbf", ".osm.gz", ".osm.bz2"],
         "gpkg_edge_columns": list(GPKG_ANALYSIS_COLUMNS),
+        "gpkg_layers": ["nodes", "edges", "restrictions"],
+        "gpkg_restriction_columns": list(RESTRICTION_COLUMNS),
         "edit_id_fields": list(EDIT_ID_COLUMNS),
         "remove_field": REMOVE_COLUMN,
         "remove_tags_field": REMOVE_TAGS_COLUMN,

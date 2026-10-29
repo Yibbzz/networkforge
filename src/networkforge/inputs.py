@@ -38,6 +38,27 @@ LARGE_LOCAL_AREA_KM2 = 10_000
 MAX_LISTED = 10
 
 
+OFF_THE_EARTH = ("has coordinates that can't be longitude / latitude in its CRS: check the "
+                 "layer's CRS is set right")
+
+
+def within_the_earth(geometry: gpd.GeoSeries) -> pd.Series:
+    """
+    For each geometry (finite coordinates, a CRS set): whether every
+    coordinate is a real longitude / latitude once reprojected.
+    """
+    try:
+        wgs84 = geometry.to_crs("EPSG:4326")
+    except Exception:  # noqa: BLE001 - a transform that fails is as bad
+        return pd.Series(False, index=geometry.index)
+    coords, owner = shapely.get_coordinates(wgs84.to_numpy(), return_index=True)
+    bad = ~np.isfinite(coords).all(axis=1) | (np.abs(coords[:, 0]) > 180) | (
+        np.abs(coords[:, 1]) > 90)
+    result = pd.Series(True, index=geometry.index)
+    result.iloc[np.unique(owner[bad])] = False
+    return result
+
+
 def check_bbox(bbox_gdf, local_source: bool = False) -> None:
     """
     The bounding box must be a GeoDataFrame with geometry and a CRS,
@@ -132,7 +153,14 @@ def clean_custom_data(
     bad_coordinates = pd.Series(False, index=custom.index)
     bad_coordinates.iloc[np.unique(owner[~np.isfinite(coords).all(axis=1)])] = True
 
-    usable = ~no_geometry & ~not_a_line & ~bad_coordinates
+    # Numbers that can't be a place on the earth: usually a layer whose
+    # CRS is wrong (metres labelled as longitude / latitude).
+    off_the_earth = pd.Series(False, index=custom.index)
+    checked = ~no_geometry & ~not_a_line & ~bad_coordinates
+    if checked.any():
+        off_the_earth[checked] = ~within_the_earth(geometry[checked])
+
+    usable = ~no_geometry & ~not_a_line & ~bad_coordinates & ~off_the_earth
     if bbox_gdf is None:
         outside = partly_outside = usable & False
     else:
@@ -152,6 +180,7 @@ def clean_custom_data(
         (not_a_line, f"{'/'.join(sorted(set(types)))}, not a line or point (only lines can "
                      "be routed; points tag the network's nodes)"),
         (bad_coordinates, "has coordinates that aren't numbers (NaN or infinite)"),
+        (off_the_earth, OFF_THE_EARTH),
         (outside, "completely outside the bounding box"),
     ):
         if mask.any():

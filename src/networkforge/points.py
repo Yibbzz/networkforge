@@ -27,7 +27,13 @@ import shapely
 import shapely.ops
 
 from .errors import InputError, InvalidTagsError
-from .tags import NODE_TAGS, REMOVE_TAGS_COLUMN, ROUTING_NODE_KEYS
+from .tags import (
+    CUSTOM_COLUMN,
+    MODIFIED_COLUMN,
+    NODE_TAGS,
+    REMOVE_TAGS_COLUMN,
+    ROUTING_NODE_KEYS,
+)
 from .validation import ACCESS_KEYS, ACCESS_VALUES, _tag_value, warn_about_unknown_values
 
 log = logging.getLogger(__name__)
@@ -140,6 +146,7 @@ def place_points(
     first_new_id: int,
     existing_tags: dict[int, dict[str, str]],
     strict: bool = True,
+    osm_nodes=(),
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, dict[int, dict[str, str | None]]]:
     """
     Put each point's tags on the network (see the module docstring).
@@ -147,7 +154,10 @@ def place_points(
     Returns (nodes, edges, changes): copies of the tables, with streets
     cut where a point needed a node of its own, and {node id: {key:
     value, or None to delete}}. existing_tags: the tags nodes already
-    have (OSM's), to tell deletions that change nothing.
+    have (OSM's), to tell deletions that change nothing. Each node a
+    point tags is marked in the nodes table, as edges are: `modified` =
+    yes on an OpenStreetMap node (one of `osm_nodes`), `custom` = yes on
+    a node of the user's own (a new one, or on a custom line).
     points_gdf in the network's CRS.
     """
     nodes, edges = nodes_gdf.copy(), edges_gdf.copy()
@@ -207,6 +217,14 @@ def place_points(
             raise error
         log.warning("strict=False, skipping them: %s", error,
                     extra={"features": [feature for feature, _ in issues]})
+
+    osm_nodes = set(osm_nodes)
+    for node in changes:
+        column = MODIFIED_COLUMN if node in osm_nodes else CUSTOM_COLUMN
+        if column not in nodes.columns:
+            nodes[column] = None
+        nodes[column] = nodes[column].astype(object)
+        nodes.at[node, column] = "yes"
 
     log.info("Points: %d node(s) tagged", len(changes))
     return nodes, edges, changes

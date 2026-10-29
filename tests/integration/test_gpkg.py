@@ -50,7 +50,7 @@ def test_writes_nodes_and_edges_layers(result, tmp_path):
     write_gpkg(result.nodes, result.edges, path)
     write_gpkg(result.nodes, result.edges, path)  # replaces, doesn't append
 
-    assert sorted(pyogrio.list_layers(path)[:, 0]) == ["edges", "nodes"]
+    assert sorted(pyogrio.list_layers(path)[:, 0]) == ["edges", "nodes", "restrictions"]
     layer = gpd.read_file(path, layer="edges")
     assert len(layer) == len(analysis_edges(result.nodes, result.edges))
     for column in ("car", "bike", "walk", "speed_kph", "length_m", "car_minutes",

@@ -65,8 +65,11 @@ from pathlib import Path
 
 import numpy as np
 import osmium
+import pandas as pd
+import shapely
 
 from .errors import InputError, NetworkIntegrityError, feature_id
+from .inputs import OFF_THE_EARTH, within_the_earth
 from .paths import readable
 from .tags import EDIT_ID_COLUMNS
 from .validation import KNOWN_HIGHWAYS
@@ -347,6 +350,24 @@ def street_bands(layer) -> list[StreetBand]:
     if layer.crs is None:
         raise InputError("The single-streets layer has no coordinate reference system.",
                          guide=f"{GUIDE}#single-streets")
+    # A wrong CRS (metres labelled as degrees) matched no street at all,
+    # silently: refuse coordinates that can't be a place on the earth.
+    lines = layer.geometry
+    drawn = lines.notna() & ~lines.is_empty
+    finite = pd.Series(False, index=layer.index)
+    if drawn.any():  # rows may give only an OSM way id
+        finite[drawn] = [bool(np.isfinite(shapely.get_coordinates(g)).all())
+                         for g in lines[drawn]]
+    off = pd.Series(False, index=layer.index)
+    if finite.any():
+        off[finite] = ~within_the_earth(lines[finite])
+    off |= drawn & ~finite
+    if off.any():
+        features = list(layer.index[off])
+        raise InputError(
+            f"Some single streets can't be placed - feature(s) {', '.join(map(str, features))}: "
+            f"{OFF_THE_EARTH}.", guide=f"{GUIDE}#single-streets",
+            issues=[{"feature": feature, "message": OFF_THE_EARTH} for feature in features])
     return _street_rows(layer.to_crs("EPSG:4326"), table=False)
 
 

@@ -52,10 +52,13 @@ ROUTING_WAY_TAGS = (
 )
 
 # Node tags routers use: barriers (bollards, gates), signals,
-# crossings, level crossings, and access on the barrier itself.
+# crossings, level crossings, access on the barrier itself (lorries and
+# buses too), tolls, height / width / weight limits and entrances.
 NODE_TAGS = (
     "highway", "barrier", "crossing", "railway", "junction", "ref",
     "access", "vehicle", "motor_vehicle", "motorcar", "bicycle", "foot",
+    "bus", "psv", "hgv", "wheelchair",
+    "toll", "maxheight", "maxwidth", "maxweight", "entrance",
 )
 
 # A node of a local extract is read (with all its tags) if it has one

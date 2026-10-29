@@ -277,3 +277,20 @@ def test_a_speed_table_needs_a_way_id_column():
 
     with pytest.raises(InputError, match="OSM way id column"):
         speed_table(pd.DataFrame({"time": ["07:00-09:00"], "factor": ["0.5"]}))
+
+
+def test_single_streets_that_cant_be_longitude_latitude_are_refused():
+    # Metres given as degrees matched nothing, silently: now refused.
+    layer = streets_layer([
+        (LINE, {"time": "07:00-09:00", "factor": 0.5}),
+        ([(440000, 4473000), (440100, 4473000)], {"time": "07:00-09:00", "factor": 0.5}),
+    ])
+    with pytest.raises(InputError, match="can't be longitude / latitude") as info:
+        street_bands(layer)
+    assert [issue["feature"] for issue in info.value.issues] == [layer.index[1]]
+
+
+def test_single_streets_by_way_id_alone_need_no_lines():
+    layer = streets_layer([(None, {"osm_id": 5, "time": "07:00-09:00", "factor": 0.5})])
+    (street,) = street_bands(layer)
+    assert street.way == 5

@@ -163,6 +163,12 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
   length_m, *_minutes, car/bike_direction (forward/backward/both). One row per street (drops OSMnx
   reverse copies where reversed & two-way); geometry rebuilt u->v so QGIS topology is exact.
   tests/integration/test_gpkg.py routes on the layer "as QGIS does" and must match the engine.
+  Since v1.4.0 (asked for by the user, 2026-10-27) also a `restrictions` layer
+  (`restriction_lines`: drawn from `prepare_osm_data()`'s relations, so it matches the PBF;
+  20 m of each street, `RESTRICTION_REACH_M`; always written, empty too) and the nodes a point
+  tagged marked `modified`/`custom` (`place_points(osm_nodes=)`). The CLI makes
+  `prepare_osm_data()` once per network and passes it to both writers. Tests:
+  tests/integration/test_gpkg_layers.py.
 - `export.py` - `write_osm(nodes, edges, path)`: format from extension (.osm via streamed XML;
   .osm.pbf, .pbf, .osm.gz, .osm.bz2 via pyosmium). Both from `prepare_osm_data()` so content is
   identical; sorted by id. Existing ways are written from the `OSMSource`: same id, node order and

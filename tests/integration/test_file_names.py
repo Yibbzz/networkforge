@@ -80,7 +80,7 @@ def test_build_reads_and_writes_where_names_have_accents(
     assert len(node_ids(out / "avant.osm.pbf")) == NODES
     assert len(node_ids(out / "après.osm.pbf")) > NODES
     for name in ("avant.gpkg", "après.gpkg"):
-        assert sorted(pyogrio.list_layers(out / name)[:, 0]) == ["edges", "nodes"]
+        assert sorted(pyogrio.list_layers(out / name)[:, 0]) == ["edges", "nodes", "restrictions"]
     assert not leftovers(home)
 
 

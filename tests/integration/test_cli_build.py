@@ -46,7 +46,7 @@ def test_build_writes_every_output_and_reports_json(fake_osm, files, capsys):
     assert set(done["outputs"]) == {"osm", "baseline_osm", "gpkg"}
     assert done["custom_edges"] > 0
 
-    assert sorted(pyogrio.list_layers(out / "net.gpkg")[:, 0]) == ["edges", "nodes"]
+    assert sorted(pyogrio.list_layers(out / "net.gpkg")[:, 0]) == ["edges", "nodes", "restrictions"]
     custom_ways = [dict(w.tags) for w in osmium.FileProcessor(str(out / "net.osm.pbf"),
                                                               osmium.osm.WAY)
                    if w.tags.get("nf:custom") == "yes"]
