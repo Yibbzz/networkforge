@@ -9,7 +9,10 @@ web app with hosted Valhalla - both use this engine via the CLI/API; no QGIS cod
 Python >= 3.12, managed with `uv`. Run things with `uv run python ...` / `uv run pytest`.
 
 Releases: bump `version` in pyproject.toml + CHANGELOG.md section, then push tag `vX.Y.Z`;
-`.github/workflows/release.yml` checks, tests, builds and publishes a GitHub Release.
+`.github/workflows/release.yml` checks, tests, builds and publishes a GitHub Release, then uploads
+to PyPI (`pypi` job, Trusted Publishing via the `pypi` environment; no token in the repo). A
+version can be uploaded to PyPI only once, so a bad release needs a new version number.
+README links must be absolute GitHub URLs: the README is also the PyPI page.
 No QGIS code in this repo - a plugin will live in a separate repo and call the CLI/API.
 
 Tests: `uv run pytest` runs the offline suite (~1 min). `uv run pytest -m valhalla` routes on the

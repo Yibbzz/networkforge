@@ -8,6 +8,15 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-13
+
+### Added
+- Published on PyPI: `pip install networkforge`. Each release tag now
+  uploads the built package to PyPI as well as to GitHub Releases.
+
+### Changed
+- README links point to GitHub, so they work on the PyPI page too.
+
 ## [1.4.0] - 2026-10-28
 
 ### Added

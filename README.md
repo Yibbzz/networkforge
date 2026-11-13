@@ -16,12 +16,12 @@ and R5) and as a GeoPackage for QGIS.
   bridge, a tunnel or on another layer.
 - **Change** existing streets: copy one into your layer and edit an
   attribute to make it one-way, close it, pedestrianise it or change its
-  speed limit ([how](docs/network-rules.md#changing-existing-streets)).
+  speed limit ([how](https://github.com/Yibbzz/networkforge/blob/main/docs/network-rules.md#changing-existing-streets)).
 - **Remove** existing streets (`remove=yes`).
 - **Ban or force turns** at junctions, drawn as short lines through the
-  junction ([how](docs/network-rules.md#turn-restrictions)).
+  junction ([how](https://github.com/Yibbzz/networkforge/blob/main/docs/network-rules.md#turn-restrictions)).
 - **Build a network from your own lines alone**, with no OpenStreetMap
-  ([how](docs/network-rules.md#a-network-of-your-own-lines)).
+  ([how](https://github.com/Yibbzz/networkforge/blob/main/docs/network-rules.md#a-network-of-your-own-lines)).
 - **Before and after**: the untouched network and the changed one, to
   compare routes, travel times and catchments.
 - **Describe streets with OpenStreetMap tags** as plain attributes
@@ -35,7 +35,7 @@ like OpenStreetMap itself, and each rule above is checked for cars,
 buses, lorries, bikes and walking. It is also tested in
 [R5](https://github.com/conveyal/r5), the router behind transport
 accessibility tools, for walking, cycling, driving and public transport.
-[docs/network-analyst.md](docs/network-analyst.md)
+[docs/network-analyst.md](https://github.com/Yibbzz/networkforge/blob/main/docs/network-analyst.md)
 compares the result with ArcGIS Network Analyst's network dataset,
 feature by feature.
 
@@ -57,7 +57,7 @@ is not a full transport model:
   travel times come from speed limits (or default speeds per road type).
   You can add **time-of-day speeds** you assume ("main roads at 60% on
   weekday mornings") for Valhalla with `networkforge traffic`
-  ([docs/traffic.md](docs/traffic.md)), but nothing reacts to them.
+  ([docs/traffic.md](https://github.com/Yibbzz/networkforge/blob/main/docs/traffic.md)), but nothing reacts to them.
 - **Turn restrictions are for routers.** Existing ones and the ones you
   draw are written to the OSM file and Valhalla obeys them. The
   GeoPackage's `restrictions` layer shows them on the map, but QGIS's own
@@ -71,20 +71,22 @@ is not a full transport model:
 
 ## Install
 
-From a release (see [Releases](https://github.com/Yibbzz/networkforge/releases)):
+From [PyPI](https://pypi.org/project/networkforge/):
 
 ```bash
-pip install "networkforge @ git+https://github.com/Yibbzz/networkforge@v1.4.0"
+pip install networkforge
 ```
-
-(Use the newest tag on the Releases page.)
 
 For traffic (`networkforge traffic`), install the `traffic` extra, which
 adds Valhalla's Python package (pyvalhalla):
 
 ```bash
-pip install "networkforge[traffic] @ git+https://github.com/Yibbzz/networkforge@v1.4.0"
+pip install "networkforge[traffic]"
 ```
+
+To run the command line without installing it into a project, use
+`uvx networkforge` or `pipx install networkforge`. Older versions are on
+the [Releases](https://github.com/Yibbzz/networkforge/releases) page.
 
 For development, clone the repo and run `uv sync`.
 
@@ -213,7 +215,7 @@ write_osm(nodes, edges, "network.osm.pbf")  # or .osm, .osm.gz, .osm.bz2
 API, limited to boxes of 1,000 km². For bigger areas (or faster,
 repeatable builds) download an extract, e.g. from
 [Geofabrik](https://download.geofabrik.de), and pass
-`osm_source="region.osm.pbf"`. See [docs/osm-data.md](docs/osm-data.md).
+`osm_source="region.osm.pbf"`. See [docs/osm-data.md](https://github.com/Yibbzz/networkforge/blob/main/docs/osm-data.md).
 
 `write_osm` picks the format from the file name. PBF is OpenStreetMap's
 compressed binary format (open, [documented on the OSM wiki](https://wiki.openstreetmap.org/wiki/PBF_Format)),
@@ -228,7 +230,7 @@ added to that street.
 The PBF is tested in [Valhalla](https://valhalla.github.io/valhalla/):
 one-way streets, footpaths, low bridges, unpaved roads, bus-only roads,
 bridges over roads and more are each routed on and checked. See
-[docs/network-analyst.md](docs/network-analyst.md), which compares the
+[docs/network-analyst.md](https://github.com/Yibbzz/networkforge/blob/main/docs/network-analyst.md), which compares the
 result with ArcGIS Network Analyst's network dataset feature by feature.
 
 It is also tested in [R5](https://github.com/conveyal/r5) (through
@@ -252,7 +254,7 @@ except motorways, bridges, tunnels and other layers, which they pass
 over or under. Tags are checked against OSM rules before anything is
 downloaded.
 
-**[Network rules](docs/network-rules.md)**: how lines join the network,
+**[Network rules](https://github.com/Yibbzz/networkforge/blob/main/docs/network-rules.md)**: how lines join the network,
 presets, every supported
 attribute, recipes (bypass, cycle route, bus gate, bridge, slip road),
 and what each error message means.
@@ -296,7 +298,7 @@ QT_QPA_PLATFORM=offscreen python3 tests/qgis/check_with_qgis.py qgis-fixture   #
 ## Releasing
 
 1. Update `version` in `pyproject.toml` and add a `## [x.y.z]` section to
-   [CHANGELOG.md](CHANGELOG.md).
+   [CHANGELOG.md](https://github.com/Yibbzz/networkforge/blob/main/CHANGELOG.md).
 2. Commit, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 The release workflow checks the tag matches the version, runs the tests,

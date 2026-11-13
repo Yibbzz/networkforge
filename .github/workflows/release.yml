@@ -1,20 +1,26 @@
 name: release
 
-# Push a version tag to publish a GitHub Release:
+# Push a version tag to publish a GitHub Release and upload to PyPI:
 #   git tag v0.2.0 && git push origin v0.2.0
 # The tag must match `version` in pyproject.toml, and CHANGELOG.md needs
 # a "## [0.2.0]" section (it becomes the release notes).
+#
+# PyPI upload uses Trusted Publishing (no token stored in GitHub): on
+# pypi.org the project's publisher is this repo, workflow `release.yml`,
+# environment `pypi`.
 
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write  # create the release
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the release
     steps:
       - uses: actions/checkout@v4
 
@@ -55,10 +61,36 @@ jobs:
       - name: Build
         run: uv build
 
+      - name: Check the package metadata (what PyPI shows)
+        run: uvx twine check --strict dist/*
+
       - name: Smoke-test the built package
         run: uv run --isolated --no-project --with dist/*.whl networkforge --version
+
+      - name: Keep the built files for the PyPI job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "NetworkForge $VERSION" --notes-file notes.md
+
+  pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/networkforge/
+    permissions:
+      id-token: write  # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
