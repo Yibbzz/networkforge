@@ -8,17 +8,37 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Fixed
+- An Overpass download is reused for 7 days, then fetched afresh
+  (`NETWORKFORGE_OSMNX_CACHE_DAYS` changes that; 0 never reuses one).
+  It used to be kept for ever: a build of the same area months later
+  silently got the streets as they were, and the folder only grew.
+- An input error raised while the downloaded streets were being read was
+  reported as "OpenStreetMap has no ways in this bounding box".
+- An area centred exactly on longitude 180 got a UTM zone that doesn't
+  exist.
+
 ### Changed
+- OSMnx is capped below 2.2 (it was below 3): the engine uses OSMnx's
+  private functions, which any release may change.
+- Points are placed through a spatial index, and the edge table is put
+  together once: about four times as fast per point on a network of two
+  million edges.
+- Changes to existing streets no longer scan and copy the edge table for
+  every feature.
+- `write_gpkg` no longer visits every cell of every text column.
 - Traffic: a speed table (and single streets given by OSM way id) is
   matched to road segments through an index of each way's segments. It
   scanned every segment for every row: 2,000 rows on a network of
   400,000 segments took 25 seconds, and now take a fraction of one.
-- Points: cutting a street at a point compares only the edges between
-  the same two nodes, not every edge's geometry (about twice as fast per
-  point on a network of two million edges).
 - The README is shorter. Its reference parts (every command, the JSON
   events, the output columns, the Python API) moved to
   `docs/reference.md`.
+
+### Removed
+- `projection.convert_to_wgs84_and_add_xy` and
+  `validation.validate_network`, which nothing used (neither was part of
+  the documented API).
 
 ## [1.4.1] - 2026-11-13
 

@@ -171,7 +171,10 @@ def write_gpkg(
     for name, gdf in layers.items():
         gdf = gdf.rename(columns=_gpkg_names(gdf.columns.drop(gdf.geometry.name)))
         for column in gdf.columns.drop(gdf.geometry.name):
-            if gdf[column].dtype == object:  # OSMnx can merge values into lists
+            # OSMnx can merge values into lists. A column of text alone has
+            # none: don't visit its every cell to find that out.
+            if gdf[column].dtype == object and pd.api.types.infer_dtype(
+                    gdf[column], skipna=True) not in ("string", "empty", "boolean"):
                 gdf[column] = gdf[column].map(
                     lambda v: ";".join(map(str, v)) if isinstance(v, list) else v)
         # The geometry type, for a layer with no rows too.

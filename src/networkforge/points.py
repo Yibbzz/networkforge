@@ -34,7 +34,13 @@ from .tags import (
     REMOVE_TAGS_COLUMN,
     ROUTING_NODE_KEYS,
 )
-from .validation import ACCESS_KEYS, ACCESS_VALUES, _tag_value, warn_about_unknown_values
+from .validation import (
+    ACCESS_KEYS,
+    ACCESS_VALUES,
+    _tag_value,
+    listed_keys,
+    warn_about_unknown_values,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,9 +103,7 @@ def point_tags(row: pd.Series) -> dict[str, str]:
 
 def tags_to_remove(row: pd.Series) -> list[str]:
     """The keys a point's `remove_tags` lists (separated by ; or ,)."""
-    text = _tag_value(row.get(REMOVE_TAGS_COLUMN)) or ""
-    return list(dict.fromkeys(key.strip() for key in text.replace(",", ";").split(";")
-                              if key.strip()))
+    return listed_keys(row.get(REMOVE_TAGS_COLUMN))
 
 
 def check_point_tags(points_gdf: gpd.GeoDataFrame, strict: bool = True) -> None:
@@ -160,7 +164,14 @@ def place_points(
     a node of the user's own (a new one, or on a custom line).
     points_gdf in the network's CRS.
     """
-    nodes, edges = nodes_gdf.copy(), edges_gdf.copy()
+    nodes = nodes_gdf.copy()
+    # The streets are never searched or copied whole for a point: a tree
+    # finds the few in reach, the cut is made on those, and the table is
+    # put together once at the end. `dead`: rows a cut replaced; `pieces`:
+    # what replaced them (a later point may cut a piece again).
+    tree = shapely.STRtree(edges_gdf.geometry.to_numpy())
+    dead = np.zeros(len(edges_gdf), dtype=bool)
+    pieces = edges_gdf.iloc[:0]
     changes: dict[int, dict[str, str | None]] = {}
     issues = []
     next_id = first_new_id
@@ -179,11 +190,16 @@ def place_points(
                                     "point on the node that has them"))
             continue
         else:
-            node, nodes, edges, problem = _cut_street(
-                point, row, nodes, edges, tolerance, next_id)
+            reach = tree.query(point, predicate="dwithin", distance=tolerance)
+            reach = np.sort(reach[~dead[reach]])
+            local = pd.concat([edges_gdf.iloc[reach], pieces], ignore_index=True)
+            node, nodes, replaced, new_pieces, problem = _cut_street(
+                point, row, nodes, local, tolerance, next_id)
             if problem:
                 issues.append((feature, problem))
                 continue
+            dead[reach[replaced[:len(reach)]]] = True
+            pieces = pd.concat([pieces[~replaced[len(reach):]], new_pieces], ignore_index=True)
             next_id += 1
 
         change = changes.setdefault(node, {})
@@ -226,6 +242,12 @@ def place_points(
         nodes[column] = nodes[column].astype(object)
         nodes.at[node, column] = "yes"
 
+    if dead.any():
+        edges = gpd.GeoDataFrame(
+            pd.concat([edges_gdf[~dead], pieces], ignore_index=True),
+            geometry="geometry", crs=nodes.crs)
+    else:
+        edges = edges_gdf.copy()
     log.info("Points: %d node(s) tagged", len(changes))
     return nodes, edges, changes
 
@@ -233,13 +255,15 @@ def place_points(
 def _cut_street(point, row, nodes, edges, tolerance, node_id):
     """
     Cut the street nearest `point` (within tolerance) there, with a new
-    node `node_id`. Returns (node id, nodes, edges, problem or None).
+    node `node_id`. `edges`: the streets in reach of the point. Returns
+    (node id, nodes, mask of the `edges` rows the cut replaces, the pieces
+    that replace them, problem or None).
     """
     geometries = edges.geometry.to_numpy()
     distances = shapely.distance(geometries, point)
     near = distances <= tolerance
     if not near.any():
-        return None, nodes, edges, f"not within {tolerance} m of a street"
+        return None, nodes, None, None, f"not within {tolerance} m of a street"
 
     # The street(s) right under the point; `layer` on the point picks one.
     under = near & (distances <= distances[near].min() + SAME_PLACE)
@@ -248,10 +272,10 @@ def _cut_street(point, row, nodes, edges, tolerance, node_id):
         on_layer = (edges["layer"].map(_tag_value).fillna("0") == layer).to_numpy()
         under &= on_layer
         if not under.any():
-            return None, nodes, edges, f"no street on layer {layer} within {tolerance} m"
+            return None, nodes, None, None, f"no street on layer {layer} within {tolerance} m"
     pairs = {frozenset((u, v)) for u, v in zip(edges["u"][under], edges["v"][under], strict=True)}
     if len(pairs) > 1:
-        return None, nodes, edges, (f"lies on {len(pairs)} streets (a bridge over a street?): "
+        return None, nodes, None, None, (f"lies on {len(pairs)} streets (a bridge over a street?): "
                                     "give the point the street's layer")
 
     # The street, and OSMnx's copy of it drawn the other way.
@@ -271,7 +295,7 @@ def _cut_street(point, row, nodes, edges, tolerance, node_id):
         line = edge.geometry
         at = line.project(on_street)
         if at <= 0 or at >= line.length:  # pragma: no cover - the ends are nodes, found first
-            return None, nodes, edges, "lies on a node's place"
+            return None, nodes, None, None, "lies on a node's place"
         first, second = edge.copy(), edge.copy()
         first.geometry = shapely.ops.substring(line, 0, at)
         second.geometry = shapely.ops.substring(line, at, line.length)
@@ -283,12 +307,9 @@ def _cut_street(point, row, nodes, edges, tolerance, node_id):
                 piece["split"] = "yes"
         pieces += [first, second]
 
-    edges = pd.concat([edges[~same], gpd.GeoDataFrame(pieces, crs=edges.crs)],
-                      ignore_index=True)
-    edges = gpd.GeoDataFrame(edges, geometry="geometry", crs=nodes.crs)
     new_node = gpd.GeoDataFrame(
         geometry=[on_street], index=pd.Index([node_id], name=nodes.index.name), crs=nodes.crs)
     if "street_count" in nodes:
         new_node["street_count"] = 2
     nodes = pd.concat([nodes, new_node])
-    return node_id, nodes, edges, None
+    return node_id, nodes, same, gpd.GeoDataFrame(pieces, crs=edges.crs), None

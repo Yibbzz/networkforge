@@ -2,9 +2,9 @@
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import Point, box
+from shapely.geometry import box
 
-from networkforge.projection import convert_to_wgs84_and_add_xy, get_analysis_crs
+from networkforge.projection import get_analysis_crs
 
 
 def bbox_around(lon, lat, crs="EPSG:4326"):
@@ -45,20 +45,9 @@ def test_bbox_without_crs_is_rejected():
         get_analysis_crs(gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)]))
 
 
-def test_convert_to_wgs84_adds_rounded_xy():
-    gdf = gpd.GeoDataFrame(geometry=[Point(-3.123456789, 55.987654321)], crs="EPSG:4326")
-    gdf = gdf.to_crs("EPSG:32630")
-
-    result = convert_to_wgs84_and_add_xy(gdf)
-
-    assert result.crs.to_epsg() == 4326
-    assert result.loc[0, "x"] == pytest.approx(-3.1234568, abs=1e-7)
-    assert result.loc[0, "y"] == pytest.approx(55.9876543, abs=1e-7)
-
-
-def test_convert_to_wgs84_assumes_wgs84_when_crs_missing():
-    result = convert_to_wgs84_and_add_xy(gpd.GeoDataFrame(geometry=[Point(1, 2)]))
-    assert result.crs.to_epsg() == 4326
+def test_a_box_on_the_date_line_gets_a_real_utm_zone():
+    bbox = gpd.GeoDataFrame(geometry=[box(179.9, -17, 180.1, -16.8)], crs="EPSG:4326")
+    assert get_analysis_crs(bbox).to_epsg() == 32760
 
 
 @pytest.mark.parametrize("epsg", [2263, 2227])  # US State Plane, in feet

@@ -35,7 +35,7 @@ from pyproj import CRS
 from shapely.geometry import box
 
 from .coverage import warn_about_gaps
-from .errors import InputError, OSMDownloadError
+from .errors import InputError, NetworkForgeError, OSMDownloadError
 from .modes import _passes_osmnx_filter, is_ferry, keep_mode_tags
 from .paths import readable
 from .tags import FERRY_ROUTES, RELATION_TYPES, ROUTE_RELATIONS, ROUTING_NODE_KEYS
@@ -67,8 +67,30 @@ def configure_osmnx_cache() -> None:
     )
 
     os.makedirs(cache_folder, exist_ok=True)
+    _forget_old_downloads(Path(cache_folder))
 
     ox.settings.cache_folder = cache_folder
+
+
+# Downloads are reused for this many days, then fetched afresh
+# (NETWORKFORGE_OSMNX_CACHE_DAYS; 0 = never reuse one). OSMnx's own cache
+# never expires: a build of the same area months later got the streets as
+# they were, and the folder only grew.
+CACHE_DAYS = 7.0
+
+
+def _forget_old_downloads(folder: Path) -> None:
+    try:
+        days = float(os.getenv("NETWORKFORGE_OSMNX_CACHE_DAYS", CACHE_DAYS))
+    except ValueError:
+        days = CACHE_DAYS
+    oldest = time.time() - days * 86400
+    for file in folder.glob("*.json"):
+        try:
+            if file.stat().st_mtime < oldest:
+                file.unlink()
+        except OSError:  # in use, or gone already
+            pass
 
 
 def _check_network_type(network_type: str) -> None:
@@ -220,6 +242,8 @@ def get_osm_data_from_bbox(
         elements = _download_with_retries(polygon_buffered, network_type)
         return _network_from_elements(
             elements, polygon, polygon_buffered, network_type, analysis_crs)
+    except NetworkForgeError:
+        raise  # an InputError is a ValueError too, but not "no ways here"
     except (InsufficientResponseError, ValueError) as exc:
         raise OSMDownloadError(
             f"OpenStreetMap has no {network_type!r} ways in this bounding box "

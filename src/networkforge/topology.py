@@ -105,12 +105,7 @@ def joinable_network(
     edges that aren't grade-separated, and the nodes on them. (A custom
     line may still END on a grade-separated way - e.g. a new slip road.)
     """
-    separated = edges_gdf["highway"].astype(str).isin(GRADE_SEPARATED_HIGHWAYS)
-    for key in ("bridge", "tunnel"):
-        if key in edges_gdf.columns:
-            separated |= edges_gdf[key].map(_tag_present).astype(bool)
-
-    edges = edges_gdf[~separated]
+    edges = edges_gdf[~_separated_mask(edges_gdf)]
     nodes = nodes_gdf[nodes_gdf.index.isin(set(edges["u"]) | set(edges["v"]))]
     return nodes, edges
 
@@ -880,28 +875,8 @@ def remove_duplicates_and_combine_nodes(
         predicate="intersects",
     )
 
-    # IMPORTANT: in current geopandas (>=1.0), gpd.sjoin does NOT add an
-    # 'index_left' column - the left frame's original index is kept as
-    # the result's own index, and only the right frame's index is added,
-    # as 'index_right'. Older geopandas versions did add 'index_left' in
-    # some cases. Checking only for 'index_left' (as this function used
-    # to) means the "duplicate found" branch below is dead code on any
-    # current geopandas install: NO duplicate is ever removed, exact
-    # match or not, and custom_points_gdf_cleaned silently falls back to
-    # the unmodified custom_points_gdf every time. That's a much bigger
-    # problem than a wrong buffer_distance - it means this function was
-    # never actually deduplicating anything. Handle both conventions.
-    if 'index_left' in duplicates.columns:
-        duplicate_positions = duplicates['index_left'].unique()
-    else:
-        duplicate_positions = duplicates.index.unique()
-
-    if len(duplicate_positions) > 0:
-        # Remove duplicates from custom_points
-        custom_points_gdf_cleaned = custom_points_gdf.drop(duplicate_positions)
-    else:
-        # No duplicates found - use custom_points_gdf as is
-        custom_points_gdf_cleaned = custom_points_gdf
+    # sjoin keeps the left frame's index as the result's own.
+    custom_points_gdf_cleaned = custom_points_gdf.drop(duplicates.index.unique())
 
     # New nodes are numbered above every existing OSM id. Numbering from
     # 0 collided with real low OSM ids, giving duplicate <node> ids on
@@ -1011,34 +986,11 @@ def check_line_node_consistency(
     strict: bool = True,
 ) -> gpd.GeoDataFrame:
     """
-    Clean up and validate 'u'/'v' node references.
-
-    Always drops rows with missing (NaN) or self-referencing
-    (u == v) node ids.
-
-    Then checks that every remaining 'u'/'v' value actually exists
-    in combined_points_gdf's index. This used to only be printed as
-    a warning and NOT enforced, which meant a dangling reference
-    (an edge pointing at a node id that was never written to the
-    node table) could silently reach `write_osm_xml`, producing
-    invalid OSM XML. Depending on how lenient the reader is, that
-    edge - which might be exactly the custom edge you care about -
-    can then simply vanish when the file is reloaded, with no error
-    at all.
-
-    Args:
-        split_lines_combined_gdf: GeoDataFrame with line geometries
-            ('u' and 'v' columns).
-        combined_points_gdf: GeoDataFrame with point geometries
-            (index checked against).
-        strict: if True (default), a dangling u/v reference raises
-            a ValueError immediately, so you find out at build time
-            rather than after a silent, confusing routing result.
-            If False, offending rows are dropped and a warning is
-            printed instead - useful while iterating on messy data.
-
-    Returns:
-        gpd.GeoDataFrame: Cleaned GeoDataFrame with line geometries.
+    Drop edges with a missing or self-referencing (u == v) node id, then
+    check every remaining u / v is a node in combined_points_gdf: an edge
+    pointing at a node that isn't written would vanish, without a word,
+    when a router reads the file. strict: raise NetworkIntegrityError for
+    such edges; otherwise drop them with a warning.
     """
 
     before = len(split_lines_combined_gdf)

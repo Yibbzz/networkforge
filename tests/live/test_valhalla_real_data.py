@@ -41,7 +41,7 @@ def extract(tmp_path_factory):
     try:
         urllib.request.urlretrieve(EXTRACT_URL, path)
     except urllib.error.URLError as exc:
-        pytest.fail(f"Couldn't download {EXTRACT_URL}: {exc}")
+        pytest.skip(f"Geofabrik unavailable: couldn't download {EXTRACT_URL}: {exc}")
     return path
 
 

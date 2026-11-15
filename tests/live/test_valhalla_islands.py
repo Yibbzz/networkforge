@@ -46,7 +46,7 @@ def routers(request, tmp_path_factory):
     try:
         urllib.request.urlretrieve(EXTRACTS[request.param], extract)
     except urllib.error.URLError as exc:
-        pytest.fail(f"Couldn't download {EXTRACTS[request.param]}: {exc}")
+        pytest.skip(f"Geofabrik unavailable: couldn't download {EXTRACTS[request.param]}: {exc}")
 
     header = osmium.io.Reader(str(extract), osmium.osm.osm_entity_bits.NOTHING).header().box()
     area = gpd.GeoDataFrame(geometry=[box(

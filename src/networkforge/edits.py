@@ -58,6 +58,7 @@ from .validation import (
     KNOWN_HIGHWAYS,
     KNOWN_TAG_KEYS,
     _tag_value,
+    listed_keys,
     tag_value_problems,
     unknown_values,
     warn_about_unknown_values,
@@ -160,9 +161,7 @@ def split_edits(custom_gdf: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, gpd.Geo
 
 def tags_to_remove(value) -> list[str]:
     """The tag keys a `remove_tags` attribute lists (separated by ; or ,)."""
-    text = _tag_value(value) or ""
-    return list(dict.fromkeys(key.strip() for key in text.replace(",", ";").split(";")
-                              if key.strip()))
+    return listed_keys(value)
 
 
 def edit_tags(row: pd.Series) -> dict[str, str]:
@@ -259,24 +258,32 @@ def apply_edits(
     features = list(edits_gdf.index)
 
     # 1. What each feature would change, and which edges it lies along.
+    # Each way's rows, found once (not by scanning the table per feature).
+    try:
+        rows_of_way = edges.groupby("osmid").indices
+    except TypeError:  # way ids that are lists (a simplified OSMnx graph)
+        rows_of_way = None
+    all_geometries = edges.geometry.to_numpy()
     wanted: dict[int, dict[str, str]] = {}
     way_steps: dict[int, set[tuple[int, int]]] = {}
     claims = []  # (edge label, distance of its middle from the feature, edit number)
     for number, (feature, row) in enumerate(edits_gdf[edit_columns].iterrows()):
         way_id = int(row[EDIT_ID_COLUMN])
         line = edits_gdf.geometry.iloc[number]  # by position: parts share their feature id
-        of_way = (edges["osmid"] == way_id).to_numpy()
-        if way_id not in source.ways or not of_way.any():
+        if rows_of_way is None:
+            of_way = np.flatnonzero((edges["osmid"] == way_id).to_numpy())
+        else:
+            of_way = np.sort(rows_of_way.get(way_id, np.empty(0, dtype=int)))
+        if way_id not in source.ways or not len(of_way):
             issues.append((feature, f"OSM way {way_id} is not in this network (outside the "
                                     "area, not a street, or changed in OSM since the "
                                     "layer was made)"))
             continue
 
         # The stretches (node to node) of the way the feature lies along.
-        middles = shapely.line_interpolate_point(
-            edges.geometry.to_numpy()[of_way], 0.5, normalized=True)
+        middles = shapely.line_interpolate_point(all_geometries[of_way], 0.5, normalized=True)
         distances = shapely.distance(middles, line)
-        near = (distances <= tolerance) & _parallel(edges.geometry.to_numpy()[of_way], line)
+        near = (distances <= tolerance) & _parallel(all_geometries[of_way], line)
         covered = edges.index[of_way][near]
         if len(covered) == 0:
             issues.append((feature, f"doesn't lie along OSM way {way_id}"))
@@ -335,8 +342,12 @@ def apply_edits(
     # 3. Apply.
     changes: dict[int, dict[str, str]] = {}
     drop, rebuilt, removed = [], [], 0
+    owned: dict[int, list] = {}
+    for label, (_, number) in owner.items():
+        owned.setdefault(number, []).append(label)
+    as_objects = set()  # columns already made to hold text
     for number, change in wanted.items():
-        rows = pd.Index([label for label, (_, n) in owner.items() if n == number])
+        rows = pd.Index(owned.get(number, []))
         if rows.empty:
             continue
         if change == REMOVAL:
@@ -356,7 +367,9 @@ def apply_edits(
             if key not in edges.columns:
                 edges[key] = None
             if key != "oneway":
-                edges[key] = edges[key].astype(object)
+                if key not in as_objects:
+                    edges[key] = edges[key].astype(object)
+                    as_objects.add(key)
                 edges.loc[rows, key] = value
         edges.loc[rows, MODIFIED_COLUMN] = "yes"
         edges.loc[rows, EDIT_COLUMN] = number

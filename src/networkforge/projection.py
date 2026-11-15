@@ -26,7 +26,8 @@ def get_analysis_crs(
     longitude = centroid.x
     latitude = centroid.y
 
-    zone = int((longitude + 180) // 6) + 1
+    # Longitude 180 itself would otherwise be a zone 61, which doesn't exist.
+    zone = min(int((longitude + 180) // 6) + 1, 60)
 
     epsg = (
         32600 + zone
@@ -51,31 +52,3 @@ def _is_local(crs: CRS) -> bool:
     if area is None:
         return True  # a custom CRS: trust it
     return (area.east - area.west) < 30
-
-
-def convert_to_wgs84_and_add_xy(
-    gdf: gpd.GeoDataFrame,
-) -> gpd.GeoDataFrame:
-    """
-    Convert a GeoDataFrame to WGS84 (EPSG:4326) and add
-    x/y coordinate columns.
-
-    Args:
-        gdf: GeoDataFrame to convert.
-
-    Returns:
-        GeoDataFrame in EPSG:4326 with x and y columns.
-    """
-
-    # OSM uses WGS84 coordinates.
-    if gdf.crs is None:
-        gdf = gdf.set_crs("EPSG:4326")
-
-    elif gdf.crs.to_string() != "EPSG:4326":
-        gdf = gdf.to_crs("EPSG:4326")
-
-    # Add longitude (x) and latitude (y) columns.
-    gdf["x"] = gdf.geometry.x.round(7)
-    gdf["y"] = gdf.geometry.y.round(7)
-
-    return gdf

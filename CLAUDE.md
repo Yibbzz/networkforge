@@ -15,8 +15,9 @@ version can be uploaded to PyPI only once, so a bad release needs a new version 
 README links must be absolute GitHub URLs: the README is also the PyPI page.
 No QGIS code in this repo - a plugin will live in a separate repo and call the CLI/API.
 
-Tests: `uv run pytest` runs the offline suite (~1 min). `uv run pytest -m valhalla` routes on the
-exported PBF with Valhalla (~3 min). `uv run pytest -m network` runs the live tests (download OSM;
+Tests: `uv run pytest` runs the offline suite (~2 min). `uv run pytest -m "valhalla and not network"`
+routes on the exported PBF with Valhalla (~3 min; plain `-m valhalla` adds the tests on real
+Geofabrik extracts, which CI runs nightly only and which skip when Geofabrik is down). `uv run pytest -m network` runs the live tests (download OSM;
 ~5 min). Fast + offline is the default via `addopts` in pyproject.toml, so `-m valhalla` is needed
 even when naming a file in tests/valhalla.
 
@@ -83,7 +84,8 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
 - `points.py` - Point features with node tags (`POINT_TAG_KEYS`): split off in step 1
   (`split_points`, before turns), placed on the FINISHED network in `finish()` before turns
   (`place_points`): node within snap_tolerance gets the tags, else the nearest edge (and its
-  reverse copy) is cut with a new node (`layer` picks one at a bridge). `remove_tags` deletes node
+  reverse copy) is cut with a new node (found through one STRtree; the cut is made on the few
+  edges in reach and the table rebuilt once - never scan or copy the edge table per point) (`layer` picks one at a bridge). `remove_tags` deletes node
   tags. Changes in `edges.attrs[NODE_CHANGES_ATTR]` {node: {key: value|None}}, merged by export.
 - `topology.py` - geometry ops used by the pipeline: intersection points, splitting at buffered
   points, node dedup (`snap_tolerance`, metres), nearest-node u/v assignment (0.1 m), u/v consistency.
@@ -232,6 +234,11 @@ output columns, Python API; moved out of the README 2026-11-15). (Renamed from t
 Keep it in sync with presets.py/validation.py when tags or messages change.
 
 ## Gotchas
+- Overpass downloads are reused for 7 days (`osm.CACHE_DAYS`, `NETWORKFORGE_OSMNX_CACHE_DAYS`),
+  then fetched afresh: OSMnx's own cache never expires, so old streets came back silently.
+- OSMnx is capped `<2.2` (private functions used); the weekly `newest` CI job tests the newest
+  versions pyproject.toml allows, since PyPI users don't get uv.lock's. The QGIS plugin installs
+  the versions in uv.lock at the tag (its `scripts/lock_engine.sh` reads it), with checksums.
 - Overpass downloads retry on connection errors (`osm.DOWNLOAD_RETRY_WAITS`, zeroed in
   tests/integration/conftest.py); tests/live/conftest.py turns a final OSMDownloadError into a skip.
 - `finish()` must not set attrs on `osm_edges_gdf` itself: with no line or edit, `edges` IS the

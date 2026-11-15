@@ -7,7 +7,7 @@ It can get it two ways:
 |---|---|---|
 | What it is | A free, shared web service that returns OSM data on request | An `.osm.pbf` file you download once |
 | Area limit | **1,000 km²** (NetworkForge refuses bigger boxes) | None (your memory and patience) |
-| Speed | Download time varies with server load; repeat runs are cached | Reads locally; typically seconds for a city |
+| Speed | Download time varies with server load; a download is reused for 7 days | Reads locally; typically seconds for a city |
 | Repeatable | Data changes as OSM is edited | Same file, same result every run |
 | Internet | Needed on first run | Not needed |
 

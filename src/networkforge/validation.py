@@ -15,7 +15,7 @@ Each raises NetworkIntegrityError with a message identifying the
 offending rows/nodes, and returns None if everything is fine. They run
 at the end of build_network and are also used directly by the tests
 (see tests/live/test_structural_invariants.py). Connectivity uses a
-small in-module union-find.
+small in-module union-find (_joined).
 
 build_network doesn't run assert_all_custom_edges_are_connected: custom
 lines that don't reach the network are usually the user's data, not a
@@ -96,6 +96,27 @@ def assert_no_u_equals_v(edges_gdf: gpd.GeoDataFrame) -> None:
         )
 
 
+def _joined(edges_gdf: gpd.GeoDataFrame):
+    """
+    (find, nodes) for the edges' nodes joined through the edges, whatever
+    their direction: find(node) names the connected piece a node is in.
+    """
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for u, v in zip(edges_gdf["u"], edges_gdf["v"], strict=True):
+        root_u, root_v = find(u), find(v)
+        if root_u != root_v:
+            parent[root_u] = root_v
+    return find, parent
+
+
 def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]:
     """
     (mask of custom edges that reach no existing street: their connected
@@ -108,24 +129,8 @@ def _stranded_custom_edges(edges_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, int]
     if "custom" not in edges_gdf.columns:
         return nothing, 0
 
-    parent: dict = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for u, v in zip(edges_gdf["u"], edges_gdf["v"], strict=True):
-        union(u, v)
-
-    sizes = collections.Counter(find(node) for node in parent)
+    find, nodes = _joined(edges_gdf)
+    sizes = collections.Counter(find(node) for node in nodes)
 
     if len(sizes) <= 1:
         return nothing, len(sizes)
@@ -142,17 +147,7 @@ def network_pieces(edges_gdf: gpd.GeoDataFrame) -> pd.Series:
     For each edge, a label of the connected piece of network it is in
     (edges joined through shared nodes, whatever their direction).
     """
-    parent: dict = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for u, v in zip(edges_gdf["u"], edges_gdf["v"], strict=True):
-        parent[find(u)] = find(v)
+    find, _ = _joined(edges_gdf)
     return edges_gdf["u"].map(find)
 
 
@@ -209,19 +204,8 @@ def assert_custom_lines_unbroken(
 
     custom_rows = edges_gdf[edges_gdf["custom"] == "yes"]
 
-    parent: dict = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for u, v in zip(custom_rows["u"], custom_rows["v"], strict=True):
-        parent[find(u)] = find(v)
-
-    pieces = len({find(node) for node in parent})
+    find, nodes = _joined(custom_rows)
+    pieces = len({find(node) for node in nodes})
 
     if pieces > input_line_count:
         raise NetworkIntegrityError(
@@ -229,16 +213,6 @@ def assert_custom_lines_unbroken(
             f"{input_line_count} input line(s): some custom segments were "
             f"dropped during the build, leaving gaps."
         )
-
-
-def validate_network(
-    edges_gdf: gpd.GeoDataFrame,
-    points_gdf: gpd.GeoDataFrame,
-) -> None:
-    """Run all three structural checks together."""
-    assert_all_edges_have_valid_nodes(edges_gdf, points_gdf)
-    assert_no_u_equals_v(edges_gdf)
-    assert_all_custom_edges_are_connected(edges_gdf)
 
 
 # ---------------------------------------------------------------------
@@ -360,6 +334,13 @@ def _tag_value(value) -> str | None:
         value = int(value)
     text = str(value).strip()
     return text or None
+
+
+def listed_keys(value) -> list[str]:
+    """The tag keys an attribute such as `remove_tags` lists (separated by ; or ,)."""
+    text = _tag_value(value) or ""
+    return list(dict.fromkeys(key.strip() for key in text.replace(",", ";").split(";")
+                              if key.strip()))
 
 
 def resolve_custom_tags(

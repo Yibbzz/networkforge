@@ -15,14 +15,16 @@ classifiers = [
 ]
 
 # Lower bounds are the APIs the code relies on (e.g. shapely 2 vectorised
-# functions, geopandas 1 sjoin). OSMnx is capped below 3: modes.py parses
-# its private network filters, which a major release may change.
+# functions, geopandas 1 sjoin). OSMnx is capped below the next minor
+# release: osm.py and modes.py use its private functions (_overpass,
+# _create_graph, its network filters), which any release may change.
+# Raise the cap once the tests pass on a new one.
 dependencies = [
     "geopandas>=1.0",
     "shapely>=2.0",
     "pandas>=2.0",
     "numpy>=1.26",
-    "osmnx>=2.0,<3",
+    "osmnx>=2.0,<2.2",
     "networkx>=3.0",
     "pyproj>=3.6",
     "requests>=2.31",
