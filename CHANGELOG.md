@@ -8,6 +8,8 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-11-15
+
 ### Fixed
 - An Overpass download is reused for 7 days, then fetched afresh
   (`NETWORKFORGE_OSMNX_CACHE_DAYS` changes that; 0 never reuses one).
