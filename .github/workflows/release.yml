@@ -23,6 +23,8 @@ jobs:
       contents: write  # create the release
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # tests and the build don't need the token
 
       - uses: astral-sh/setup-uv@v6
         with:
