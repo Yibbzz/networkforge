@@ -87,7 +87,9 @@ def _forget_old_downloads(folder: Path) -> None:
     oldest = time.time() - days * 86400
     for file in folder.glob("*.json"):
         try:
-            if file.stat().st_mtime < oldest:
+            # 0 days: none is reused. Not by comparing times: Windows can
+            # stamp a file written a moment ago a little after "now".
+            if days <= 0 or file.stat().st_mtime < oldest:
                 file.unlink()
         except OSError:  # in use, or gone already
             pass
