@@ -5,7 +5,8 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "0 3 * * *"  # nightly, 03:00 UTC
+    - cron: "0 3 * * 2-7"  # nightly, 03:00 UTC
+    - cron: "0 3 * * 1"    # Mondays too, plus the `newest` job
   workflow_dispatch:     # "Run workflow" button in the Actions tab
 
 # Nothing here writes to the repository.
@@ -96,8 +97,10 @@ jobs:
       - name: Install
         run: uv sync --locked
 
+      # The tests on real extracts (also marked network) run nightly, in
+      # the live job: a push mustn't fail because Geofabrik is down.
       - name: Route on the exported PBF with Valhalla
-        run: uv run pytest -m valhalla -v
+        run: uv run pytest -m "valhalla and not network" -v
 
   r5:
     name: PBF in R5
@@ -151,6 +154,33 @@ jobs:
           docker run --rm -e QT_QPA_PLATFORM=offscreen \
             -v "$PWD:/work" -w /work "qgis/qgis:${{ matrix.qgis }}" \
             sh -c "qgis_process --version && python3 tests/qgis/check_with_qgis.py qgis-fixture"
+
+  newest:
+    name: Newest versions of the dependencies
+    # Everything above runs with the versions in uv.lock. People who
+    # `pip install networkforge` get the newest ones their day allows:
+    # this finds out, weekly, when one of those breaks something.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 1')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install the newest versions pyproject.toml allows
+        run: uv sync --upgrade
+
+      - name: What changed from uv.lock
+        run: git diff --stat uv.lock; git diff uv.lock | grep '^[-+]version' || true
+
+      - name: Offline tests
+        run: uv run pytest
+
+      - name: Route on the exported PBF with Valhalla
+        run: uv run pytest -m "valhalla and not network"
 
   live:
     name: Live OSM tests + deep property tests
