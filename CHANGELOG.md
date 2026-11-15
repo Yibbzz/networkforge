@@ -8,6 +8,18 @@ a breaking change means a new major version.
 
 ## [Unreleased]
 
+### Changed
+- Traffic: a speed table (and single streets given by OSM way id) is
+  matched to road segments through an index of each way's segments. It
+  scanned every segment for every row: 2,000 rows on a network of
+  400,000 segments took 25 seconds, and now take a fraction of one.
+- Points: cutting a street at a point compares only the edges between
+  the same two nodes, not every edge's geometry (about twice as fast per
+  point on a network of two million edges).
+- The README is shorter. Its reference parts (every command, the JSON
+  events, the output columns, the Python API) moved to
+  `docs/reference.md`.
+
 ## [1.4.1] - 2026-11-13
 
 ### Added

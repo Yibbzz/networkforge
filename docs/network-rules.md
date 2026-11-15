@@ -591,7 +591,7 @@ fix. The log names the features (or fields) each one is about.
 ## Settings by name
 
 The same settings in QGIS, on the command line and in Python (see the
-[README](../README.md) for the command line and Python):
+[reference](reference.md) for the command line and Python):
 
 | QGIS | Command line | Python (`build_network`) |
 |---|---|---|

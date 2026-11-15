@@ -225,7 +225,8 @@ Python and rebuilt it under the container (and vice versa). The host keeps its o
 Docs: `docs/network-rules.md` is the user-facing reference, written for QGIS plugin users (the
 plugin's tutorial links to it): how lines join, presets, attributes, edits, turns, points, recipes,
 errors, warnings, and a QGIS / CLI / Python settings table at the end. No code in it: Python and CLI
-examples live in README.md. (Renamed from tagging-guide.md 2026-10-14; a stub keeps old links.)
+examples live in README.md (short) and docs/reference.md (every command, JSON events,
+output columns, Python API; moved out of the README 2026-11-15). (Renamed from tagging-guide.md 2026-10-14; a stub keeps old links.)
 `docs/osm-data.md` covers Overpass vs local extracts. Error `guide=` is a network-rules anchor or
 "file.md#anchor" in docs/.
 Keep it in sync with presets.py/validation.py when tags or messages change.
