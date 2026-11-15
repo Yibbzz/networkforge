@@ -61,6 +61,7 @@ import tomllib
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -654,6 +655,18 @@ def _claim(actor, graph, GraphId, streets: list[StreetBand], segments: dict[int,
     """
     claims: dict[int, list[TrafficBand]] = defaultdict(list)
     used, unmatched = set(), []
+    # Each way's segments, looked up once: scanning every segment for every
+    # row took minutes for a speed table of a few thousand rows.
+    of_way: dict[int, list[int]] = defaultdict(list)
+    indexed = 0
+
+    def index_new_segments() -> None:
+        nonlocal indexed
+        for edge, segment in islice(segments.items(), indexed, None):
+            of_way[segment.way].append(edge)
+        indexed = len(segments)
+
+    wanted = {"both": (True, False), "forward": (True,), "backward": (False,)}
     for street in streets:
         if street.line is not None:
             # Along the line; with a way id too, only that way's stretches
@@ -661,9 +674,10 @@ def _claim(actor, graph, GraphId, streets: list[StreetBand], segments: dict[int,
             edges = [e for e in _match(actor, graph, GraphId, street, segments)
                      if street.way is None or segments[e].way == street.way]
         else:
-            wanted = {"both": (True, False), "forward": (True,), "backward": (False,)}
-            edges = [e for e, s in segments.items() if s.way == street.way
-                     and s.forward in wanted[street.direction]]
+            if indexed != len(segments):  # a drawn line added segments
+                index_new_segments()
+            edges = [e for e in of_way.get(street.way, ())
+                     if segments[e].forward in wanted[street.direction]]
         key = (street.from_table, street.feature)
         if not edges:
             unmatched.append(street)

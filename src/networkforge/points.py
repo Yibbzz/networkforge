@@ -258,9 +258,13 @@ def _cut_street(point, row, nodes, edges, tolerance, node_id):
     nearest = np.flatnonzero(under)[0]
     street = geometries[nearest]
     on_street = shapely.line_interpolate_point(street, street.project(point))
-    pair = frozenset((edges["u"].iloc[nearest], edges["v"].iloc[nearest]))
-    same = np.array([frozenset((u, v)) == pair and shapely.equals(g, street)
-                     for u, v, g in zip(edges["u"], edges["v"], geometries, strict=True)])
+    # Only edges between the same two nodes can be it: comparing every
+    # edge's geometry took a second a point on a city-sized network.
+    us, vs = edges["u"].to_numpy(), edges["v"].to_numpy()
+    u, v = us[nearest], vs[nearest]
+    same = ((us == u) & (vs == v)) | ((us == v) & (vs == u))
+    between = np.flatnonzero(same)
+    same[between] = shapely.equals(geometries[between], street)
 
     pieces = []
     for _, edge in edges[same].iterrows():
