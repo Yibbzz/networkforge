@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "0 3 * * 2-7"  # nightly, 03:00 UTC
+    - cron: "0 3 * * 0,2-6"  # nightly, 03:00 UTC (Monday is the line below)
     - cron: "0 3 * * 1"    # Mondays too, plus the `newest` job
   workflow_dispatch:     # "Run workflow" button in the Actions tab
 
